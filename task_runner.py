@@ -1,0 +1,2960 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import tomllib
+from datetime import datetime
+from dataclasses import dataclass
+from pathlib import Path
+
+from slivin_harness.app_server import CodexAppServer
+from slivin_harness.evaluator import run_evaluator
+from slivin_harness.planner import run_planner
+
+
+HARNESS_ROOT = Path(__file__).resolve().parent
+
+DEFAULT_CODEX_CMD = (
+    Path.home()
+    / "Tools"
+    / "codex-cli"
+    / "node_modules"
+    / ".bin"
+    / "codex.cmd"
+)
+
+DEFAULT_TOOLCHAIN = {
+    "node": str(
+        Path.home()
+        / "Tools"
+        / "node"
+        / "node.exe"
+    ),
+    "jest": str(
+        Path.home()
+        / "Documents"
+        / "sa_icover"
+        / "node_modules"
+        / "jest"
+        / "bin"
+        / "jest.js"
+    ),
+}
+
+
+IMPLEMENTER_INSTRUCTIONS = """
+Ты implementation agent внутри Slivin Harness.
+
+Следуй инструкциям и AGENTS.md текущего repository.
+
+Дополнительные правила Harness:
+
+- изменяй только файлы внутри переданного workspace;
+- не выполняй git add, git commit, git push, git pull, git merge,
+  git rebase, git reset, git restore, git switch, git checkout или git clean;
+- не меняй .git;
+- не расширяй scope задачи;
+- до production edits проверь ключевые факты planning artifact по реальному коду;
+- planning artifact является инженерной гипотезой, а не приказом:
+  если фактический код его опровергает, следуй доказательствам;
+- current_contract/assumptions Planner нужно перепроверять по фактическому коду и тестам;
+- не вводи новую eligibility/validity condition, сужающую compatibility behavior,
+  без доказательства или явного требования пользователя;
+- `release_obligations` из plan являются blocking verification obligations:
+  реализация должна оставить достаточно evidence для независимого Evaluator;
+- LIFE-* задают scope/lifecycle/authority state mechanisms; ACTION_LOCAL state
+  не должен переопределять target другого нового action, а frozen in-flight target
+  не должен молча ретаргетиться global intent;
+- REP-* / AUTH-* требуют downstream local readers и единого authority/precedence
+  across visibility/count/eligibility/payload/routing; backend compatibility
+  сама по себе недостаточна;
+- остальные CC-*/INT-* — characterization context; не превращай advisory observation
+  в новую обязательную semantics без причины;
+- используй предоставленный trusted toolchain для реальных project checks;
+- любые cache/temp/test-runtime артефакты создавай только внутри `.harness_tmp`;
+  для Jest используй `--no-cache` либо cache внутри `.harness_tmp`, не создавай
+  `.jest-cache*` в корне repository; не оставляй `__pycache__` в source tree;
+- не заменяй доступный behavioral test самодельным smoke-check;
+- не считай собственное сообщение PASS доказательством завершения задачи;
+- внешний Harness самостоятельно запускает acceptance checks и fresh evaluation;
+- если Harness возвращает failure или finding, самостоятельно проверь его
+  достижимость и исправляй только подтверждённую in-scope причину;
+- не ослабляй тесты ради зелёного результата;
+- после исправления закончи turn: Harness сам повторит проверки и evaluation.
+""".strip()
+
+
+@dataclass
+class CheckResult:
+    name: str
+    command: list[str]
+    returncode: int
+    output: str
+    timed_out: bool = False
+    duration_seconds: float = 0.0
+
+    @property
+    def passed(self) -> bool:
+        return self.returncode == 0 and not self.timed_out
+
+
+def load_manifest(path: Path) -> dict:
+    return tomllib.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+
+def resolve_harness_path(raw_path: str | Path) -> Path:
+    expanded = os.path.expandvars(str(raw_path))
+    path = Path(expanded).expanduser()
+
+    if not path.is_absolute():
+        path = HARNESS_ROOT / path
+
+    return path.resolve()
+
+
+def load_local_config() -> tuple[dict, Path | None]:
+    raw_override = os.environ.get("SLIVIN_HARNESS_CONFIG")
+    config_path = (
+        resolve_harness_path(raw_override)
+        if raw_override
+        else HARNESS_ROOT / "harness.local.toml"
+    )
+
+    if not config_path.exists():
+        return {}, None
+
+    return (
+        tomllib.loads(
+            config_path.read_text(encoding="utf-8")
+        ),
+        config_path,
+    )
+
+
+def resolve_codex_cmd(local_config: dict) -> Path:
+    raw = (
+        os.environ.get("SLIVIN_CODEX_CMD")
+        or local_config.get("codex", {}).get("command")
+        or str(DEFAULT_CODEX_CMD)
+    )
+    return resolve_harness_path(raw)
+
+
+def resolve_toolchain(
+    local_config: dict,
+    manifest: dict,
+) -> dict[str, str]:
+    merged: dict[str, str] = dict(DEFAULT_TOOLCHAIN)
+
+    for source in (
+        local_config.get("toolchain", {}),
+        manifest.get("toolchain", {}),
+    ):
+        for name, raw_path in source.items():
+            merged[str(name)] = str(raw_path)
+
+    return {
+        name: str(resolve_harness_path(raw_path))
+        for name, raw_path in merged.items()
+    }
+
+
+def assert_clean_git(workspace: Path) -> None:
+    probe = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=workspace,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    if probe.returncode != 0:
+        raise RuntimeError(
+            f"Workspace is not a Git repository: {workspace}"
+        )
+
+    status = subprocess.run(
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ],
+        cwd=workspace,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    ).stdout
+
+    if status.strip():
+        raise RuntimeError(
+            "Workspace is not clean.\n\n"
+            + status
+            + "\nCommit/stash/remove unrelated changes before "
+              "starting this Harness version."
+        )
+
+
+
+def _run_git(
+    workspace: Path,
+    *args: str,
+) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    )
+    return result.stdout
+
+
+def capture_preflight(
+    workspace: Path,
+) -> dict:
+    """Capture immutable task-baseline evidence before the first agent edit."""
+    head_sha = _run_git(
+        workspace,
+        "rev-parse",
+        "HEAD",
+    ).strip()
+
+    status = _run_git(
+        workspace,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+    )
+
+    tracked_paths = [
+        line
+        for line in _run_git(
+            workspace,
+            "ls-files",
+        ).splitlines()
+        if line
+    ]
+
+    return {
+        "head_sha": head_sha,
+        "working_tree_clean": not bool(status.strip()),
+        "status_porcelain": status,
+        "tracked_paths": tracked_paths,
+    }
+
+
+
+def _safe_repo_path(
+    workspace: Path,
+    raw_path: str,
+) -> tuple[str, Path]:
+    rel = Path(raw_path.replace("\\", "/"))
+
+    if rel.is_absolute() or ".." in rel.parts:
+        raise RuntimeError(
+            f"Planner candidate path must be repo-relative: {raw_path}"
+        )
+
+    target = (workspace / rel).resolve()
+    root = workspace.resolve()
+
+    if target != root and root not in target.parents:
+        raise RuntimeError(
+            f"Planner candidate path escapes workspace: {raw_path}"
+        )
+
+    return rel.as_posix(), target
+
+
+def _git_optional(
+    workspace: Path,
+    *args: str,
+) -> str | None:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    if result.returncode != 0:
+        return None
+
+    return result.stdout.strip()
+
+
+def capture_baseline_snapshot(
+    workspace: Path,
+    *,
+    preflight: dict,
+    candidate_paths: list[str],
+    existing_snapshot: dict | None = None,
+    captured_before_first_edit: bool = True,
+) -> dict:
+    """Capture baseline/object evidence and path-local filesystem evidence."""
+    head_sha = str(preflight["head_sha"])
+    files: dict[str, dict] = dict(
+        (existing_snapshot or {}).get(
+            "files",
+            {},
+        )
+    )
+
+    for raw_path in candidate_paths:
+        rel, target = _safe_repo_path(
+            workspace,
+            str(raw_path),
+        )
+
+        # Preserve the real pre-edit evidence if this path was already captured.
+        if (
+            rel in files
+            and files[rel].get(
+                "captured_before_first_edit"
+            )
+        ):
+            continue
+
+        entry: dict[str, object] = {
+            "path": rel,
+            "captured_before_first_edit": (
+                captured_before_first_edit
+            ),
+            "exists": target.exists(),
+            "is_file": target.is_file(),
+        }
+
+        if target.is_file():
+            data = target.read_bytes()
+            entry["worktree_size"] = len(data)
+            entry["worktree_sha256"] = hashlib.sha256(data).hexdigest()
+            entry["worktree_snapshot_role"] = (
+                "pre_edit"
+                if captured_before_first_edit
+                else "candidate_state_at_replan"
+            )
+
+        entry["git_eol"] = _git_optional(
+            workspace,
+            "ls-files",
+            "--eol",
+            "--",
+            rel,
+        )
+
+        entry["index_entry"] = _git_optional(
+            workspace,
+            "ls-files",
+            "-s",
+            "--",
+            rel,
+        )
+
+        blob_sha = _git_optional(
+            workspace,
+            "rev-parse",
+            f"{head_sha}:{rel}",
+        )
+        entry["baseline_blob_sha"] = blob_sha
+
+        if blob_sha:
+            size = _git_optional(
+                workspace,
+                "cat-file",
+                "-s",
+                blob_sha,
+            )
+            entry["baseline_blob_size"] = (
+                int(size)
+                if size and size.isdigit()
+                else size
+            )
+
+        files[rel] = entry
+
+    return {
+        "head_sha": head_sha,
+        "files": files,
+    }
+
+
+def validate_toolchain(toolchain: dict[str, str]) -> None:
+    for name, raw_path in toolchain.items():
+        path = Path(raw_path).expanduser()
+
+        if not path.is_absolute():
+            raise RuntimeError(
+                f"Toolchain path must be absolute: {name}={raw_path}"
+            )
+
+        if not path.exists():
+            raise RuntimeError(
+                f"Toolchain executable/file does not exist: "
+                f"{name}={path}"
+            )
+
+
+def format_toolchain(toolchain: dict[str, str]) -> str:
+    if not toolchain:
+        return "(trusted toolchain not declared)"
+
+    return "\n".join(
+        f"- {name}: {path}"
+        for name, path in toolchain.items()
+    )
+
+
+def expand_command(
+    command: list[str],
+    *,
+    workspace: Path,
+    toolchain: dict[str, str],
+) -> list[str]:
+    tokens = {
+        "workspace": str(workspace),
+        "harness_root": str(HARNESS_ROOT),
+        "python": sys.executable,
+        **toolchain,
+    }
+
+    try:
+        return [
+            item.format(**tokens)
+            for item in command
+        ]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"Unknown command placeholder {{{exc.args[0]}}}. "
+            "Declare it under [toolchain] in harness.local.toml or the task manifest."
+        ) from exc
+
+
+def run_check(
+    spec: dict,
+    *,
+    workspace: Path,
+    toolchain: dict[str, str],
+    runtime_tmp: Path | None = None,
+) -> CheckResult:
+    name = spec["name"]
+
+    command = expand_command(
+        spec["command"],
+        workspace=workspace,
+        toolchain=toolchain,
+    )
+
+    timeout = int(
+        spec.get("timeout_seconds", 600)
+    )
+
+    tmp_root = (
+        runtime_tmp
+        if runtime_tmp is not None
+        else workspace / ".harness_tmp"
+    )
+    tmp_root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    env = os.environ.copy()
+    env["SLIVIN_HARNESS_WORKSPACE"] = str(workspace)
+    env["TEMP"] = str(tmp_root)
+    env["TMP"] = str(tmp_root)
+    env["TMPDIR"] = str(tmp_root)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["XDG_CACHE_HOME"] = str(tmp_root / "cache")
+    env["NPM_CONFIG_CACHE"] = str(tmp_root / "npm")
+
+    started = time.monotonic()
+
+    try:
+        result = subprocess.run(
+            command,
+            cwd=workspace,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=env,
+        )
+
+        return CheckResult(
+            name=name,
+            command=command,
+            returncode=result.returncode,
+            output=result.stdout.strip(),
+            duration_seconds=(
+                time.monotonic() - started
+            ),
+        )
+
+    except subprocess.TimeoutExpired as exc:
+        output = ""
+
+        if exc.stdout:
+            if isinstance(exc.stdout, bytes):
+                output = exc.stdout.decode(
+                    "utf-8",
+                    errors="replace",
+                )
+            else:
+                output = exc.stdout
+
+        return CheckResult(
+            name=name,
+            command=command,
+            returncode=124,
+            output=output.strip(),
+            timed_out=True,
+            duration_seconds=(
+                time.monotonic() - started
+            ),
+        )
+
+
+def run_checks(
+    specs: list[dict],
+    *,
+    workspace: Path,
+    toolchain: dict[str, str],
+) -> list[CheckResult]:
+    results: list[CheckResult] = []
+
+    for index, spec in enumerate(specs, start=1):
+        name = spec["name"]
+
+        print(
+            f"[{index}/{len(specs)}] {name}"
+        )
+
+        result = run_check(
+            spec,
+            workspace=workspace,
+            toolchain=toolchain,
+        )
+
+        results.append(result)
+        duration = format_duration(
+            result.duration_seconds,
+            compact=True,
+        )
+
+        if result.passed:
+            print(f"  PASS ({duration})")
+        elif result.timed_out:
+            print(f"  TIMEOUT ({duration})")
+        else:
+            print(
+                f"  FAIL (exit={result.returncode}, {duration})"
+            )
+
+        if result.output:
+            print()
+            print(result.output)
+            print()
+
+    return results
+
+
+def split_checks(
+    specs: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    repair_checks: list[dict] = []
+    heldout_checks: list[dict] = []
+
+    for spec in specs:
+        feedback = str(
+            spec.get("feedback", "repair")
+        ).lower()
+
+        if feedback == "repair":
+            repair_checks.append(spec)
+        elif feedback == "heldout":
+            heldout_checks.append(spec)
+        else:
+            raise RuntimeError(
+                f"Unsupported check feedback mode: {feedback} "
+                f"for {spec.get('name', '<unnamed>')}"
+            )
+
+    return repair_checks, heldout_checks
+
+
+def collect_plan_ids(
+    plan: dict,
+    field: str,
+) -> list[str]:
+    return [
+        str(item["id"])
+        for item in plan.get(field, [])
+    ]
+
+
+def required_obligation_ids(
+    plan: dict,
+) -> list[str]:
+    return [
+        str(item_id)
+        for item_id in plan.get(
+            "release_obligations",
+            [],
+        )
+    ]
+
+
+def validate_plan_artifact(
+    plan: dict,
+) -> None:
+    all_ids: list[str] = []
+
+    fields = (
+        "current_contract",
+        "assumptions",
+        "affected_consumers",
+        "state_lifecycle_audit",
+        "representation_consumer_audit",
+        "authority_matrix",
+        "preservation_contract",
+        "interaction_matrix",
+        "test_matrix",
+    )
+
+    for field in fields:
+        for item in plan.get(field, []):
+            item_id = str(item["id"])
+            all_ids.append(item_id)
+
+    duplicates = sorted({
+        item_id
+        for item_id in all_ids
+        if all_ids.count(item_id) > 1
+    })
+
+    if duplicates:
+        raise RuntimeError(
+            "Planner returned duplicate obligation/assumption IDs: "
+            + ", ".join(duplicates)
+        )
+
+    for contract in plan.get("current_contract", []):
+        if not contract.get("evidence"):
+            raise RuntimeError(
+                "Planner current_contract item has no evidence: "
+                f"{contract.get('id')}"
+            )
+
+    for assumption in plan.get("assumptions", []):
+        if assumption.get("narrows_existing_behavior"):
+            if (
+                assumption.get("confidence") != "HIGH"
+                or not assumption.get("evidence")
+            ):
+                raise RuntimeError(
+                    "Planner proposed behavior-narrowing assumption without "
+                    "HIGH-confidence evidence: "
+                    f"{assumption.get('id')}"
+                )
+
+
+    known_obligation_ids: set[str] = set()
+    for field in (
+        "current_contract",
+        "affected_consumers",
+        "state_lifecycle_audit",
+        "representation_consumer_audit",
+        "authority_matrix",
+        "preservation_contract",
+        "interaction_matrix",
+        "test_matrix",
+    ):
+        known_obligation_ids.update(
+            collect_plan_ids(plan, field)
+        )
+
+    release_ids = [
+        str(item_id)
+        for item_id in plan.get(
+            "release_obligations",
+            [],
+        )
+    ]
+
+    if len(release_ids) != len(set(release_ids)):
+        raise RuntimeError(
+            "Planner returned duplicate release_obligations."
+        )
+
+    unknown_release_ids = sorted(
+        set(release_ids) - known_obligation_ids
+    )
+    if unknown_release_ids:
+        raise RuntimeError(
+            "Planner release_obligations reference unknown IDs: "
+            + ", ".join(unknown_release_ids)
+        )
+
+    mandatory_release_ids = set(
+        collect_plan_ids(
+            plan,
+            "preservation_contract",
+        )
+    ) | set(
+        collect_plan_ids(
+            plan,
+            "test_matrix",
+        )
+    ) | set(
+        collect_plan_ids(
+            plan,
+            "affected_consumers",
+        )
+    ) | set(
+        collect_plan_ids(
+            plan,
+            "state_lifecycle_audit",
+        )
+    ) | set(
+        collect_plan_ids(
+            plan,
+            "representation_consumer_audit",
+        )
+    ) | set(
+        collect_plan_ids(
+            plan,
+            "authority_matrix",
+        )
+    )
+
+    missing_mandatory = sorted(
+        mandatory_release_ids - set(release_ids)
+    )
+    if missing_mandatory:
+        raise RuntimeError(
+            "Planner omitted mandatory release obligations: "
+            + ", ".join(missing_mandatory)
+        )
+
+    candidate_paths = [
+        str(path)
+        for path in plan.get(
+            "candidate_paths",
+            [],
+        )
+    ]
+    if plan.get("status") == "READY" and not candidate_paths:
+        raise RuntimeError(
+            "Planner READY artifact must declare candidate_paths."
+        )
+
+
+    decision_escalations = plan.get(
+        "decision_escalations",
+        [],
+    )
+
+    if (
+        plan.get("status") == "NEEDS_USER_DECISION"
+        and not decision_escalations
+    ):
+        raise RuntimeError(
+            "Planner NEEDS_USER_DECISION must include at least one "
+            "decision_escalations entry proving why lifecycle/ownership "
+            "cannot resolve the conflict."
+        )
+
+    if (
+        plan.get("status") == "READY"
+        and decision_escalations
+    ):
+        raise RuntimeError(
+            "Planner READY artifact must not contain unresolved "
+            "decision_escalations."
+        )
+
+    for item in plan.get(
+        "state_lifecycle_audit",
+        [],
+    ):
+        if (
+            item.get("role") == "UNKNOWN"
+            and item.get("confidence") == "HIGH"
+        ):
+            raise RuntimeError(
+                "Planner lifecycle role UNKNOWN cannot have HIGH confidence: "
+                f"{item.get('id')}"
+            )
+
+
+def validate_evaluation_artifact(
+    evaluation: dict,
+    *,
+    plan: dict,
+    risk: str,
+) -> None:
+    expected_obligations = set(
+        required_obligation_ids(plan)
+    )
+    assessed = evaluation.get(
+        "obligation_assessment",
+        [],
+    )
+    assessed_ids = [
+        str(item["id"])
+        for item in assessed
+    ]
+
+    if len(assessed_ids) != len(set(assessed_ids)):
+        raise RuntimeError(
+            "Evaluator returned duplicate obligation IDs."
+        )
+
+    if set(assessed_ids) != expected_obligations:
+        missing = sorted(
+            expected_obligations - set(assessed_ids)
+        )
+        extra = sorted(
+            set(assessed_ids) - expected_obligations
+        )
+        raise RuntimeError(
+            "Evaluator obligation ledger does not match Planner obligations. "
+            f"Missing={missing}; extra={extra}"
+        )
+
+    expected_assumptions = set(
+        collect_plan_ids(plan, "assumptions")
+    )
+    audits = evaluation.get(
+        "planner_assumption_audit",
+        [],
+    )
+    audit_ids = [
+        str(item["id"])
+        for item in audits
+    ]
+
+    if len(audit_ids) != len(set(audit_ids)):
+        raise RuntimeError(
+            "Evaluator returned duplicate assumption IDs."
+        )
+
+    if set(audit_ids) != expected_assumptions:
+        missing = sorted(
+            expected_assumptions - set(audit_ids)
+        )
+        extra = sorted(
+            set(audit_ids) - expected_assumptions
+        )
+        raise RuntimeError(
+            "Evaluator assumption audit does not match Planner assumptions. "
+            f"Missing={missing}; extra={extra}"
+        )
+
+    if evaluation["status"] != "PASS":
+        return
+
+    not_passed = [
+        item
+        for item in assessed
+        if item["status"] != "PASS"
+    ]
+
+    blocking_findings = [
+        finding
+        for finding in evaluation["findings"]
+        if finding["severity"] in {
+            "BLOCKER",
+            "HIGH",
+            "MEDIUM",
+        }
+    ]
+
+
+    blocking_plan_findings = [
+        finding
+        for finding in evaluation.get(
+            "plan_findings",
+            [],
+        )
+        if finding["severity"] in {
+            "BLOCKER",
+            "HIGH",
+            "MEDIUM",
+        }
+    ]
+
+    narrowing_ids = {
+        str(item["id"])
+        for item in plan.get("assumptions", [])
+        if item.get("narrows_existing_behavior")
+    }
+    narrowing_audit_failures = [
+        item
+        for item in audits
+        if (
+            item["id"] in narrowing_ids
+            and item["status"] != "CONFIRMED"
+        )
+    ]
+
+    if (
+        not_passed
+        or blocking_findings
+        or blocking_plan_findings
+        or narrowing_audit_failures
+    ):
+        raise RuntimeError(
+            "Evaluator returned contradictory PASS: unresolved release obligation, "
+            "blocking implementation/plan finding, or unconfirmed "
+            "behavior-narrowing assumption."
+        )
+
+    if risk in {"medium", "high"} and evaluation.get(
+        "unverified_risks"
+    ):
+        raise RuntimeError(
+            "Evaluator returned PASS with unverified risks for "
+            f"{risk}-risk task: {evaluation['unverified_risks']}"
+        )
+
+def truncate_output(
+    output: str,
+    *,
+    limit: int = 12_000,
+) -> str:
+    if len(output) <= limit:
+        return output
+
+    half = limit // 2
+
+    return (
+        output[:half]
+        + "\n\n... OUTPUT TRUNCATED ...\n\n"
+        + output[-half:]
+    )
+
+
+def checks_summary(
+    results: list[CheckResult],
+) -> str:
+    parts: list[str] = []
+
+    for result in results:
+        status = (
+            "PASS"
+            if result.passed
+            else "TIMEOUT"
+            if result.timed_out
+            else f"FAIL({result.returncode})"
+        )
+
+        output = truncate_output(
+            result.output,
+            limit=6_000,
+        )
+
+        parts.append(
+            "\n".join(
+                [
+                    f"CHECK: {result.name}",
+                    f"STATUS: {status}",
+                    f"COMMAND: {result.command}",
+                    "OUTPUT:",
+                    output or "<no output>",
+                ]
+            )
+        )
+
+    return "\n\n".join(parts)
+
+
+def build_check_repair_prompt(
+    failures: list[CheckResult],
+) -> str:
+    parts = [
+        """
+Внешний Slivin Harness отклонил текущий результат.
+
+Задача НЕ завершена.
+
+Исправь причины перечисленных deterministic failures.
+Не расширяй исходный scope.
+Не изменяй или не ослабляй тесты только ради зелёного результата,
+если тест фиксирует требуемый контракт.
+
+После исправления закончи turn.
+Harness самостоятельно повторит все acceptance checks и fresh evaluation.
+""".strip()
+    ]
+
+    for failure in failures:
+        output = truncate_output(
+            failure.output
+        )
+
+        parts.append(
+            f"""
+=== CHECK: {failure.name} ===
+COMMAND:
+{failure.command}
+
+EXIT CODE:
+{failure.returncode}
+
+OUTPUT:
+{output or "<no output>"}
+""".strip()
+        )
+
+    return "\n\n".join(parts)
+
+
+def build_evaluator_repair_prompt(
+    evaluation: dict,
+) -> str:
+    evaluation_json = json.dumps(
+        evaluation,
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    return f"""
+Независимый Fresh Evaluator отклонил текущий candidate.
+
+Задача НЕ завершена.
+
+Проверь каждое замечание самостоятельно по коду и исходному требованию.
+Исправь только подтверждённые in-scope findings и напрямую связанные
+регрессии. Не превращай review finding в новое product requirement.
+Не расширяй scope и не ослабляй тесты.
+
+Если конкретный finding неверен, не делай искусственный patch только
+ради удовлетворения reviewer. Закончи turn после проверки/исправлений:
+Harness заново запустит deterministic checks и НОВЫЙ fresh evaluation.
+
+--- BEGIN EVALUATION ---
+{evaluation_json}
+--- END EVALUATION ---
+""".strip()
+
+
+def build_implementation_prompt(
+    task_prompt: str,
+    plan: dict,
+    toolchain: dict[str, str],
+    baseline_snapshot: dict,
+) -> str:
+    plan_json = json.dumps(
+        plan,
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    toolchain_text = format_toolchain(
+        toolchain
+    )
+
+    baseline_snapshot_json = json.dumps(
+        baseline_snapshot,
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    return f"""
+Исходная задача пользователя:
+
+--- BEGIN TASK ---
+{task_prompt}
+--- END TASK ---
+
+Независимый read-only Planner подготовил engineering artifact:
+
+--- BEGIN PLAN ---
+{plan_json}
+--- END PLAN ---
+
+Harness pre-edit baseline snapshot для planned candidate_paths:
+
+--- BEGIN BASELINE SNAPSHOT ---
+{baseline_snapshot_json}
+--- END BASELINE SNAPSHOT ---
+
+Planner artifact — гипотеза, подтверждённая его read-only исследованием,
+но не готовый patch. Перед изменениями перепроверь ключевые факты по
+реальному коду. Если код опровергает Planner, следуй фактическим
+доказательствам и сохраняй исходный пользовательский intent.
+
+Current contract и assumptions должны быть перепроверены до ввода новых
+validity/eligibility условий. Blocking verification obligations перечислены
+в `release_obligations`; независимый Evaluator потребует конкретное evidence
+по каждому из них.
+
+Trusted toolchain, доступный в этой среде:
+
+--- BEGIN TOOLCHAIN ---
+{toolchain_text}
+--- END TOOLCHAIN ---
+
+Выполни задачу полностью в текущем workspace.
+Используй реальные project checks, если они применимы.
+""".strip()
+
+
+
+
+def _check_result_record(result: CheckResult) -> dict:
+    return {
+        "name": result.name,
+        "command": result.command,
+        "returncode": result.returncode,
+        "timed_out": result.timed_out,
+        "duration_seconds": result.duration_seconds,
+        "output": result.output,
+    }
+
+
+def run_oracle_calibration(
+    specs: list[dict],
+    *,
+    broken_workspace: Path,
+    good_reference_workspace: Path,
+    toolchain: dict[str, str],
+    recorder: "RunRecorder",
+) -> None:
+    if not specs:
+        raise RuntimeError(
+            "Oracle calibration requested but no heldout checks are configured."
+        )
+
+    if not good_reference_workspace.exists():
+        raise RuntimeError(
+            "Oracle good reference workspace does not exist: "
+            f"{good_reference_workspace}"
+        )
+
+    if good_reference_workspace.resolve() == broken_workspace.resolve():
+        raise RuntimeError(
+            "Oracle good reference workspace must differ from broken workspace."
+        )
+
+    print("=== ORACLE CALIBRATION ===")
+    records: list[dict] = []
+    calibration_ok = True
+
+    for index, spec in enumerate(specs, start=1):
+        print(f"[{index}/{len(specs)}] {spec['name']}")
+
+        broken_result = run_check(
+            spec,
+            workspace=broken_workspace,
+            toolchain=toolchain,
+            runtime_tmp=(
+                recorder.root
+                / "oracle_calibration_tmp"
+                / f"check_{index:02d}"
+                / "broken"
+            ),
+        )
+        good_result = run_check(
+            spec,
+            workspace=good_reference_workspace,
+            toolchain=toolchain,
+            runtime_tmp=(
+                recorder.root
+                / "oracle_calibration_tmp"
+                / f"check_{index:02d}"
+                / "good"
+            ),
+        )
+
+        broken_ok = not broken_result.passed
+        good_ok = good_result.passed
+
+        print(
+            "  BROKEN_BASELINE:",
+            "FAIL as expected" if broken_ok else "UNEXPECTED PASS",
+            f"({format_duration(broken_result.duration_seconds, compact=True)})",
+        )
+        print(
+            "  GOOD_REFERENCE:",
+            "PASS" if good_ok else "UNEXPECTED FAIL",
+            f"({format_duration(good_result.duration_seconds, compact=True)})",
+        )
+
+        records.append({
+            "check": spec["name"],
+            "broken_workspace": str(broken_workspace),
+            "good_reference_workspace": str(good_reference_workspace),
+            "broken_expected_fail": broken_ok,
+            "good_expected_pass": good_ok,
+            "broken": _check_result_record(broken_result),
+            "good": _check_result_record(good_result),
+        })
+
+        calibration_ok = calibration_ok and broken_ok and good_ok
+
+    artifact = recorder.write_json(
+        "oracle_calibration.json",
+        records,
+    )
+    print("ORACLE_CALIBRATION_ARTIFACT:", artifact)
+
+    if not calibration_ok:
+        raise RuntimeError(
+            "Held-out oracle calibration failed: every held-out check must "
+            "FAIL on broken baseline and PASS on known-good reference."
+        )
+
+    print("ORACLE_CALIBRATION_PASS")
+    print()
+
+
+
+def _stable_sha256(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def verify_oracle_calibration_certificate(
+    specs: list[dict],
+    *,
+    certificate_path: Path,
+    recorder: "RunRecorder",
+) -> None:
+    if not certificate_path.exists():
+        raise RuntimeError(
+            "Oracle calibration certificate does not exist: "
+            f"{certificate_path}"
+        )
+
+    certificate = json.loads(
+        certificate_path.read_text(encoding="utf-8")
+    )
+
+    if certificate.get("schema_version") != 1:
+        raise RuntimeError(
+            "Unsupported oracle calibration certificate schema: "
+            f"{certificate.get('schema_version')}"
+        )
+
+    expected = {
+        item["name"]: item
+        for item in certificate.get("heldout_checks", [])
+    }
+
+    if len(expected) != len(specs):
+        raise RuntimeError(
+            "Oracle calibration certificate does not cover the current "
+            "held-out check set. Recalibrate the grader."
+        )
+
+    verified: list[dict] = []
+
+    for spec in specs:
+        name = spec["name"]
+        item = expected.get(name)
+        if item is None:
+            raise RuntimeError(
+                "Held-out check is missing from calibration certificate: "
+                f"{name}"
+            )
+
+        actual_spec_sha = _stable_sha256(spec)
+        if actual_spec_sha != item.get("spec_sha256"):
+            raise RuntimeError(
+                "Held-out check definition changed since calibration: "
+                f"{name}. Recalibrate before running the benchmark."
+            )
+
+        file_results: list[dict] = []
+        for file_entry in item.get("files", []):
+            path = resolve_harness_path(file_entry["path"])
+            if not path.is_file():
+                raise RuntimeError(
+                    "Calibrated held-out file is missing: "
+                    f"{path}"
+                )
+            actual_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+            if actual_sha != file_entry.get("sha256"):
+                raise RuntimeError(
+                    "Calibrated held-out file changed since calibration: "
+                    f"{file_entry['path']}. Recalibrate the grader."
+                )
+            file_results.append({
+                "path": file_entry["path"],
+                "sha256": actual_sha,
+            })
+
+        if item.get("broken_result") != "FAIL" or item.get("good_result") != "PASS":
+            raise RuntimeError(
+                "Calibration certificate does not attest broken=FAIL/good=PASS "
+                f"for: {name}"
+            )
+
+        verified.append({
+            "name": name,
+            "spec_sha256": actual_spec_sha,
+            "files": file_results,
+            "broken_result": item["broken_result"],
+            "good_result": item["good_result"],
+        })
+
+    recorder.write_json(
+        "oracle_calibration_certificate_verified.json",
+        {
+            "certificate": str(certificate_path),
+            "verified_checks": verified,
+        },
+    )
+
+    print("=== ORACLE CALIBRATION CERTIFICATE ===")
+    print("CERTIFICATE:", certificate_path)
+    for item in verified:
+        print(
+            f"  {item['name']}: "
+            "broken=FAIL good=PASS hashes=verified"
+        )
+    print("ORACLE_CALIBRATION_CERTIFICATE_PASS")
+    print()
+
+
+def format_duration(
+    seconds: float,
+    *,
+    compact: bool = False,
+) -> str:
+    seconds = max(0.0, float(seconds))
+
+    if compact and seconds < 60:
+        return f"{seconds:.2f}s"
+
+    total = int(round(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def phase_done(
+    label: str,
+    started: float,
+) -> float:
+    duration = time.monotonic() - started
+    print(
+        f"{label}_DONE: "
+        f"{format_duration(duration)}"
+    )
+    print()
+    return duration
+
+
+class RunRecorder:
+    def __init__(
+        self,
+        *,
+        task_id: str,
+    ) -> None:
+        safe_task = re.sub(
+            r"[^A-Za-z0-9_.-]+",
+            "_",
+            task_id,
+        ).strip("_") or "task"
+
+        stamp = datetime.now().astimezone().strftime(
+            "%Y%m%d-%H%M%S-%f"
+        )
+
+        self.root = (
+            HARNESS_ROOT
+            / "runs"
+            / safe_task
+            / stamp
+        )
+        self.root.mkdir(
+            parents=True,
+            exist_ok=False,
+        )
+
+    def write_json(
+        self,
+        name: str,
+        value: object,
+    ) -> Path:
+        path = self.root / name
+        path.write_text(
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def write_text(
+        self,
+        name: str,
+        value: str,
+    ) -> Path:
+        path = self.root / name
+        path.write_text(
+            value,
+            encoding="utf-8",
+        )
+        return path
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+
+
+def _skill_name_from_file(
+    skill_file: Path,
+) -> str:
+    try:
+        lines = skill_file.read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).splitlines()[:40]
+    except OSError:
+        return skill_file.parent.name
+
+    in_frontmatter = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        if stripped == "---":
+            in_frontmatter = not in_frontmatter
+            continue
+
+        if (
+            in_frontmatter
+            and stripped.startswith("name:")
+        ):
+            value = stripped.split(
+                ":",
+                1,
+            )[1].strip().strip('"').strip("'")
+
+            if value:
+                return value
+
+    return skill_file.parent.name
+
+
+def collect_repo_context(
+    codex: CodexAppServer,
+    *,
+    workspace: Path,
+    explicit_skill_names: list[str],
+) -> tuple[dict, list[dict[str, str]]]:
+    agents: list[dict] = []
+
+    for path in sorted(
+        workspace.rglob("AGENTS.md")
+    ):
+        if ".git" in path.parts:
+            continue
+
+        agents.append(
+            {
+                "path": path.relative_to(
+                    workspace
+                ).as_posix(),
+                "sha256": _sha256_file(path),
+            }
+        )
+
+    repo_skills: list[dict] = []
+
+    skills_root = workspace / ".agents" / "skills"
+
+    if skills_root.exists():
+        for skill_file in sorted(
+            skills_root.rglob("SKILL.md")
+        ):
+            repo_skills.append(
+                {
+                    "name": _skill_name_from_file(
+                        skill_file
+                    ),
+                    "path": str(
+                        skill_file.resolve()
+                    ),
+                    "repo_relative_path": (
+                        skill_file.relative_to(
+                            workspace
+                        ).as_posix()
+                    ),
+                    "sha256": _sha256_file(
+                        skill_file
+                    ),
+                }
+            )
+
+    print("=== REPO CONTEXT ===")
+    print("Discovering App Server skills...", flush=True)
+
+    skill_result = codex.list_skills(
+        workspace,
+        force_reload=True,
+    )
+
+    data = skill_result.get(
+        "data",
+        [],
+    )
+
+    skill_entry = next(
+        (
+            item
+            for item in data
+            if Path(
+                str(
+                    item.get(
+                        "cwd",
+                        workspace,
+                    )
+                )
+            ).resolve() == workspace.resolve()
+        ),
+        data[0] if data else {},
+    )
+
+    app_skills = skill_entry.get(
+        "skills",
+        [],
+    )
+    app_errors = skill_entry.get(
+        "errors",
+        [],
+    )
+
+    app_by_name: dict[str, list[dict]] = {}
+
+    for skill in app_skills:
+        app_by_name.setdefault(
+            str(skill.get("name", "")),
+            [],
+        ).append(skill)
+
+    print("AGENTS:")
+    if agents:
+        for item in agents:
+            print(
+                f"  - {item['path']} "
+                f"sha256={item['sha256'][:12]}..."
+            )
+    else:
+        print("  (none found)")
+
+    print("REPO SKILLS:")
+    if repo_skills:
+        for item in repo_skills:
+            matches = app_by_name.get(
+                item["name"],
+                [],
+            )
+            discovered = bool(matches)
+            enabled = any(
+                bool(match.get("enabled", True))
+                for match in matches
+            )
+
+            print(
+                f"  - {item['name']}: "
+                f"app_server_discovered={str(discovered).lower()} "
+                f"enabled={str(enabled).lower()} "
+                f"path={item['repo_relative_path']}"
+            )
+    else:
+        print("  (none found)")
+
+    if app_errors:
+        print("SKILL DISCOVERY ERRORS:")
+        for error in app_errors:
+            print(f"  - {error}")
+
+    repo_by_name = {
+        item["name"]: item
+        for item in repo_skills
+    }
+
+    explicit_skills: list[dict[str, str]] = []
+
+    for name in explicit_skill_names:
+        repo_item = repo_by_name.get(name)
+        app_matches = app_by_name.get(
+            name,
+            [],
+        )
+
+        enabled = any(
+            bool(match.get("enabled", True))
+            for match in app_matches
+        )
+
+        if (
+            repo_item is None
+            or not app_matches
+            or not enabled
+        ):
+            raise RuntimeError(
+                "Requested explicit skill is not an enabled "
+                f"repo skill discovered by App Server: {name}"
+            )
+
+        explicit_skills.append(
+            {
+                "name": name,
+                "path": repo_item["path"],
+            }
+        )
+
+    print(
+        "EXPLICIT_ACTIVE_SKILLS:",
+        (
+            ", ".join(
+                item["name"]
+                for item in explicit_skills
+            )
+            if explicit_skills
+            else "(none)"
+        ),
+    )
+    print(
+        "AUTO_SKILL_USAGE:",
+        "not asserted; only explicit skill input is auditable",
+    )
+    print()
+
+    context = {
+        "agents": agents,
+        "repo_skills": repo_skills,
+        "app_server_skills": app_skills,
+        "app_server_errors": app_errors,
+        "explicit_active_skills": explicit_skills,
+    }
+
+    return context, explicit_skills
+
+
+def make_thread_started_callback(
+    *,
+    phase: str,
+    recorder: RunRecorder,
+):
+    def callback(thread: dict) -> None:
+        sources = thread.get(
+            "instructionSources",
+            [],
+        )
+
+        print(
+            f"[{phase}] INSTRUCTION_SOURCES:"
+        )
+
+        if not sources:
+            print("  (not reported by App Server)")
+        else:
+            for source in sources:
+                if isinstance(source, dict):
+                    display = (
+                        source.get("path")
+                        or source.get("name")
+                        or json.dumps(
+                            source,
+                            ensure_ascii=False,
+                        )
+                    )
+                else:
+                    display = str(source)
+
+                print(f"  - {display}")
+
+        recorder.write_json(
+            f"thread_{phase.lower()}_metadata.json",
+            thread,
+        )
+
+    return callback
+
+
+def make_heartbeat(
+    phase: str,
+):
+    def callback(state: dict) -> None:
+        alive = (
+            "alive"
+            if state.get("alive")
+            else (
+                "exited:"
+                + str(
+                    state.get("returncode")
+                )
+            )
+        )
+
+        last_activity = float(
+            state.get(
+                "last_activity_seconds",
+                0.0,
+            )
+        )
+
+        print(
+            f"[{phase}] working... "
+            f"elapsed={format_duration(state['turn_elapsed_seconds'])} "
+            f"app-server={alive} "
+            f"last-event={format_duration(last_activity)}",
+            flush=True,
+        )
+
+    return callback
+
+
+def stream_agent_delta(
+    text: str,
+) -> None:
+    print(
+        text,
+        end="",
+        flush=True,
+    )
+
+
+def stream_agent_message_end() -> None:
+    # One visible separator per completed agent message. We intentionally
+    # do not put a newline after every token/delta.
+    print(
+        "\n",
+        flush=True,
+    )
+
+
+def assert_harness_tmp_ignored(
+    workspace: Path,
+) -> None:
+    probe = subprocess.run(
+        [
+            "git",
+            "check-ignore",
+            "-q",
+            ".harness_tmp/",
+        ],
+        cwd=workspace,
+    )
+
+    if probe.returncode != 0:
+        raise RuntimeError(
+            ".harness_tmp/ must be ignored before running Harness. "
+            "Add it to .git/info/exclude or repository ignore policy."
+        )
+
+
+def _plan_validation_error(
+    plan: dict,
+) -> str | None:
+    try:
+        validate_plan_artifact(plan)
+    except RuntimeError as exc:
+        return str(exc)
+
+    return None
+
+
+def run_validated_planner(
+    codex: CodexAppServer,
+    *,
+    workspace: Path,
+    task_prompt: str,
+    toolchain: dict[str, str],
+    preflight: dict,
+    baseline_snapshot: dict | None,
+    revision_context: dict | None,
+    explicit_skills: list[dict[str, str]],
+    max_validation_retries: int,
+    phase_label: str,
+    artifact_prefix: str,
+    recorder: RunRecorder,
+) -> dict | None:
+    current_revision = revision_context
+
+    for attempt in range(
+        max_validation_retries + 1
+    ):
+        started = time.monotonic()
+
+        plan = run_planner(
+            codex,
+            workspace=workspace,
+            task_prompt=task_prompt,
+            toolchain=toolchain,
+            preflight=preflight,
+            baseline_snapshot=baseline_snapshot,
+            revision_context=current_revision,
+            explicit_skills=explicit_skills,
+            on_heartbeat=make_heartbeat(
+                phase_label
+            ),
+            on_thread_started=(
+                make_thread_started_callback(
+                    phase=(
+                        phase_label
+                        + f"_A{attempt + 1}"
+                    ),
+                    recorder=recorder,
+                )
+            ),
+        )
+
+        recorder.write_json(
+            f"{artifact_prefix}_attempt_{attempt + 1}.json",
+            plan,
+        )
+
+        phase_done(
+            phase_label,
+            started,
+        )
+
+        error = _plan_validation_error(
+            plan
+        )
+
+        if error is None:
+            print_structured(
+                (
+                    "PLAN RESULT"
+                    if artifact_prefix == "plan"
+                    else "REVISED PLAN RESULT"
+                ),
+                plan,
+            )
+            return plan
+
+        print_structured(
+            "INVALID PLAN ARTIFACT",
+            plan,
+        )
+        print(
+            "PLAN_VALIDATION_FAIL:",
+            error,
+        )
+        print()
+
+        recorder.write_text(
+            f"{artifact_prefix}_attempt_{attempt + 1}_validation_error.txt",
+            error + "\n",
+        )
+
+        if attempt >= max_validation_retries:
+            return None
+
+        print(
+            f"=== {phase_label} VALIDATION RETRY "
+            f"{attempt + 1}/{max_validation_retries} ==="
+        )
+
+        current_revision = {
+            "previous_revision_context": (
+                current_revision
+            ),
+            "validator_feedback": error,
+            "invalid_plan": plan,
+        }
+
+    return None
+
+
+def print_structured(
+    title: str,
+    value: dict,
+) -> None:
+    print(f"=== {title} ===")
+    print(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    print()
+
+
+def evaluator_machine_guard(
+    evaluation: dict,
+    *,
+    plan: dict,
+    risk: str,
+) -> None:
+    validate_evaluation_artifact(
+        evaluation,
+        plan=plan,
+        risk=risk,
+    )
+
+
+def main() -> int:
+    task_started = time.monotonic()
+    task_started_wall = datetime.now().astimezone()
+
+    try:
+        parser = argparse.ArgumentParser()
+
+        parser.add_argument(
+            "manifest",
+            type=Path,
+        )
+
+        args = parser.parse_args()
+
+        manifest_path = resolve_harness_path(
+            args.manifest
+        )
+        manifest = load_manifest(
+            manifest_path
+        )
+
+        local_config, local_config_path = load_local_config()
+
+        workspace = resolve_harness_path(
+            manifest["workspace"]
+        )
+
+        task_id = str(
+            manifest.get(
+                "task_id",
+                manifest_path.stem,
+            )
+        )
+
+        prompt = manifest["prompt"]
+
+        checks = manifest.get(
+            "checks",
+            [],
+        )
+        repair_checks, heldout_checks = (
+            split_checks(checks)
+        )
+
+        max_fix_cycles = int(
+            manifest.get(
+                "max_fix_cycles",
+                3,
+            )
+        )
+
+        max_replan_cycles = int(
+            manifest.get(
+                "max_replan_cycles",
+                2,
+            )
+        )
+
+        max_plan_validation_retries = int(
+            manifest.get(
+                "max_plan_validation_retries",
+                2,
+            )
+        )
+
+        require_clean_git = bool(
+            manifest.get(
+                "require_clean_git",
+                True,
+            )
+        )
+
+        risk = str(
+            manifest.get(
+                "risk",
+                "medium",
+            )
+        ).lower()
+
+        if risk not in {
+            "low",
+            "medium",
+            "high",
+        }:
+            raise RuntimeError(
+                f"Unsupported risk level: {risk}"
+            )
+
+        toolchain = resolve_toolchain(
+            local_config,
+            manifest,
+        )
+
+        validate_toolchain(
+            toolchain
+        )
+
+        codex_cmd = resolve_codex_cmd(
+            local_config
+        )
+
+        if not codex_cmd.exists():
+            raise RuntimeError(
+                "Codex CLI not found: "
+                f"{codex_cmd}. Copy harness.local.example.toml to "
+                "harness.local.toml and set [codex].command if needed."
+            )
+
+        explicit_skill_names = [
+            str(name)
+            for name in manifest.get(
+                "skills",
+                [],
+            )
+        ]
+
+        benchmark = manifest.get("benchmark", {})
+        calibrate_heldout = bool(
+            benchmark.get("calibrate_heldout", False)
+        )
+        raw_certificate = benchmark.get(
+            "calibration_certificate"
+        )
+        calibration_certificate = (
+            resolve_harness_path(raw_certificate)
+            if raw_certificate
+            else None
+        )
+        good_reference_workspace = None
+
+        if calibrate_heldout and calibration_certificate is not None:
+            raise RuntimeError(
+                "Use either live oracle calibration or a calibration certificate, "
+                "not both."
+            )
+
+        if calibrate_heldout:
+            raw_good_reference = benchmark.get(
+                "good_reference_workspace"
+            )
+            if not raw_good_reference:
+                raise RuntimeError(
+                    "benchmark.calibrate_heldout=true requires "
+                    "benchmark.good_reference_workspace."
+                )
+            good_reference_workspace = resolve_harness_path(
+                str(raw_good_reference)
+            )
+
+        if not workspace.exists():
+            raise RuntimeError(
+                f"Workspace does not exist: {workspace}"
+            )
+
+        if require_clean_git:
+            assert_clean_git(
+                workspace
+            )
+
+        assert_harness_tmp_ignored(
+            workspace
+        )
+
+        recorder = RunRecorder(
+            task_id=task_id,
+        )
+
+        recorder.write_json(
+            "manifest_snapshot.json",
+            manifest,
+        )
+
+        print(
+            "TASK_STARTED:",
+            task_started_wall.isoformat(),
+        )
+        print(f"TASK: {task_id}")
+        print(f"WORKSPACE: {workspace}")
+        print(f"RUN_DIR: {recorder.root}")
+        print(f"RISK: {risk}")
+        print(
+            "LOCAL_CONFIG:",
+            local_config_path or "(defaults)",
+        )
+        print("CODEX_CMD:", codex_cmd)
+        print(
+            "TOOLCHAIN:",
+            ", ".join(
+                f"{name}={path}"
+                for name, path in sorted(toolchain.items())
+            ),
+        )
+        print(
+            f"CHECKS: {len(checks)} "
+            f"(repair={len(repair_checks)}, "
+            f"heldout={len(heldout_checks)})"
+        )
+        print(
+            f"MAX_FIX_CYCLES: "
+            f"{max_fix_cycles}"
+        )
+        print(
+            f"MAX_REPLAN_CYCLES: "
+            f"{max_replan_cycles}"
+        )
+        print(
+            "MAX_PLAN_VALIDATION_RETRIES:",
+            max_plan_validation_retries,
+        )
+        calibration_mode = (
+            "live"
+            if calibrate_heldout
+            else (
+                "certificate"
+                if calibration_certificate is not None
+                else "disabled"
+            )
+        )
+        print("ORACLE_CALIBRATION:", calibration_mode)
+        if calibrate_heldout:
+            print(
+                "GOOD_REFERENCE_WORKSPACE:",
+                good_reference_workspace,
+            )
+        if calibration_certificate is not None:
+            print(
+                "CALIBRATION_CERTIFICATE:",
+                calibration_certificate,
+            )
+        print()
+
+        if calibrate_heldout:
+            calibration_started = time.monotonic()
+
+            run_oracle_calibration(
+                heldout_checks,
+                broken_workspace=workspace,
+                good_reference_workspace=good_reference_workspace,
+                toolchain=toolchain,
+                recorder=recorder,
+            )
+
+            phase_done(
+                "ORACLE_CALIBRATION",
+                calibration_started,
+            )
+
+            if require_clean_git:
+                assert_clean_git(workspace)
+        elif calibration_certificate is not None:
+            calibration_started = time.monotonic()
+            verify_oracle_calibration_certificate(
+                heldout_checks,
+                certificate_path=calibration_certificate,
+                recorder=recorder,
+            )
+            phase_done(
+                "ORACLE_CALIBRATION_CERTIFICATE",
+                calibration_started,
+            )
+
+        preflight = capture_preflight(
+            workspace
+        )
+        recorder.write_json(
+            "preflight.json",
+            preflight,
+        )
+
+        runtime_tmp = (
+            workspace
+            / ".harness_tmp"
+            / "agent_runtime"
+        )
+
+        with CodexAppServer(
+            codex_cmd,
+            client_version="0.4.6",
+            runtime_tmp=runtime_tmp,
+        ) as codex:
+            context_started = (
+                time.monotonic()
+            )
+
+            repo_context, explicit_skills = (
+                collect_repo_context(
+                    codex,
+                    workspace=workspace,
+                    explicit_skill_names=(
+                        explicit_skill_names
+                    ),
+                )
+            )
+
+            recorder.write_json(
+                "repo_context.json",
+                repo_context,
+            )
+
+            phase_done(
+                "REPO_CONTEXT",
+                context_started,
+            )
+
+            if risk == "low":
+                plan = {
+                    "status": "READY",
+                    "summary": (
+                        "Planner skipped for "
+                        "low-risk task."
+                    ),
+                    "current_contract": [],
+                    "assumptions": [],
+                    "affected_consumers": [],
+                    "state_lifecycle_audit": [],
+                    "decision_escalations": [],
+                    "representation_consumer_audit": [],
+                    "authority_matrix": [],
+                    "preservation_contract": [],
+                    "interaction_matrix": [],
+                    "test_matrix": [],
+                    "candidate_paths": [],
+                    "release_obligations": [],
+                }
+            else:
+                print(
+                    "=== PLANNING ==="
+                )
+
+                plan = run_validated_planner(
+                    codex,
+                    workspace=workspace,
+                    task_prompt=prompt,
+                    toolchain=toolchain,
+                    preflight=preflight,
+                    baseline_snapshot=None,
+                    revision_context=None,
+                    explicit_skills=explicit_skills,
+                    max_validation_retries=(
+                        max_plan_validation_retries
+                    ),
+                    phase_label="PLANNING",
+                    artifact_prefix="plan",
+                    recorder=recorder,
+                )
+
+                if plan is None:
+                    print(
+                        "HARNESS_TASK_BLOCKED: "
+                        "planner_artifact_invalid"
+                    )
+                    return 2
+
+                if plan["status"] == "BLOCKED":
+                    print(
+                        "HARNESS_TASK_BLOCKED: "
+                        "planner"
+                    )
+                    return 2
+
+                if (
+                    plan["status"]
+                    == "NEEDS_USER_DECISION"
+                ):
+                    print(
+                        "HARNESS_TASK_NEEDS_USER_DECISION: "
+                        "planner"
+                    )
+                    return 3
+
+                if plan["status"] != "READY":
+                    print(
+                        "HARNESS_TASK_BLOCKED: "
+                        "unexpected_planner_status="
+                        + str(
+                            plan["status"]
+                        )
+                    )
+                    return 2
+
+            snapshot_started = (
+                time.monotonic()
+            )
+
+            baseline_snapshot = (
+                capture_baseline_snapshot(
+                    workspace,
+                    preflight=preflight,
+                    candidate_paths=[
+                        str(path)
+                        for path in plan.get(
+                            "candidate_paths",
+                            [],
+                        )
+                    ],
+                    captured_before_first_edit=True,
+                )
+            )
+
+            recorder.write_json(
+                "baseline_snapshot.json",
+                baseline_snapshot,
+            )
+
+            print_structured(
+                "BASELINE SNAPSHOT",
+                baseline_snapshot,
+            )
+
+            phase_done(
+                "BASELINE_SNAPSHOT",
+                snapshot_started,
+            )
+
+            thread_id = codex.start_thread(
+                cwd=workspace,
+                sandbox="workspace-write",
+                developer_instructions=(
+                    IMPLEMENTER_INSTRUCTIONS
+                ),
+                on_started=(
+                    make_thread_started_callback(
+                        phase="IMPLEMENTER",
+                        recorder=recorder,
+                    )
+                ),
+            )
+
+            print(
+                "IMPLEMENTER_THREAD:",
+                thread_id,
+            )
+            print()
+            print(
+                "=== IMPLEMENTATION ==="
+            )
+
+            implementation_prompt = (
+                build_implementation_prompt(
+                    prompt,
+                    plan,
+                    toolchain,
+                    baseline_snapshot,
+                )
+            )
+
+            implementation_started = (
+                time.monotonic()
+            )
+
+            codex.run_turn(
+                thread_id=thread_id,
+                prompt=implementation_prompt,
+                on_delta=stream_agent_delta,
+                on_message_end=(
+                    stream_agent_message_end
+                ),
+                skills=explicit_skills,
+            )
+
+            phase_done(
+                "IMPLEMENTATION",
+                implementation_started,
+            )
+
+            repair_cycles = 0
+            replan_cycles = 0
+            evaluation_index = 0
+
+            while True:
+                print(
+                    f"=== DETERMINISTIC CHECKS "
+                    f"(repair_cycles={repair_cycles}) ==="
+                )
+
+                checks_started = (
+                    time.monotonic()
+                )
+
+                results = run_checks(
+                    repair_checks,
+                    workspace=workspace,
+                    toolchain=toolchain,
+                )
+
+                phase_done(
+                    "DETERMINISTIC_CHECKS",
+                    checks_started,
+                )
+
+                recorder.write_json(
+                    (
+                        "checks_"
+                        f"{repair_cycles:02d}_"
+                        f"{evaluation_index:02d}.json"
+                    ),
+                    [
+                        {
+                            "name": item.name,
+                            "command": item.command,
+                            "returncode": (
+                                item.returncode
+                            ),
+                            "timed_out": (
+                                item.timed_out
+                            ),
+                            "duration_seconds": (
+                                item.duration_seconds
+                            ),
+                            "output": item.output,
+                        }
+                        for item in results
+                    ],
+                )
+
+                failures = [
+                    result
+                    for result in results
+                    if not result.passed
+                ]
+
+                if failures:
+                    if (
+                        repair_cycles
+                        >= max_fix_cycles
+                    ):
+                        print()
+                        print(
+                            "HARNESS_TASK_FAIL: "
+                            "maximum fix cycles "
+                            "reached"
+                        )
+                        return 1
+
+                    repair_cycles += 1
+
+                    print()
+                    print(
+                        f"=== REPAIR CYCLE "
+                        f"{repair_cycles}: "
+                        "CHECK FAILURES ==="
+                    )
+
+                    repair_prompt = (
+                        build_check_repair_prompt(
+                            failures
+                        )
+                    )
+
+                    repair_started = (
+                        time.monotonic()
+                    )
+
+                    codex.run_turn(
+                        thread_id=thread_id,
+                        prompt=repair_prompt,
+                        on_delta=(
+                            stream_agent_delta
+                        ),
+                        on_message_end=(
+                            stream_agent_message_end
+                        ),
+                        skills=explicit_skills,
+                    )
+
+                    phase_done(
+                        (
+                            "REPAIR_CHECKS_"
+                            f"{repair_cycles}"
+                        ),
+                        repair_started,
+                    )
+                    continue
+
+                if risk == "low":
+                    if heldout_checks:
+                        print()
+                        print(
+                            "=== HELD-OUT "
+                            "EVALUATION ==="
+                        )
+                        heldout_started = (
+                            time.monotonic()
+                        )
+                        heldout_results = (
+                            run_checks(
+                                heldout_checks,
+                                workspace=workspace,
+                                toolchain=toolchain,
+                            )
+                        )
+                        phase_done(
+                            "HELDOUT",
+                            heldout_started,
+                        )
+
+                        if any(
+                            not item.passed
+                            for item
+                            in heldout_results
+                        ):
+                            print()
+                            print(
+                                "HARNESS_HELDOUT_FAIL"
+                            )
+                            return 4
+
+                    print()
+                    print(
+                        "HARNESS_TASK_PASS"
+                    )
+                    return 0
+
+                print()
+                print(
+                    "=== FRESH EVALUATION ==="
+                )
+
+                evaluation_index += 1
+                evaluation_started = (
+                    time.monotonic()
+                )
+
+                evaluation = run_evaluator(
+                    codex,
+                    workspace=workspace,
+                    task_prompt=prompt,
+                    plan=plan,
+                    checks_summary=(
+                        checks_summary(
+                            results
+                        )
+                    ),
+                    required_obligation_ids=(
+                        required_obligation_ids(
+                            plan
+                        )
+                    ),
+                    preflight=preflight,
+                    baseline_snapshot=(
+                        baseline_snapshot
+                    ),
+                    explicit_skills=(
+                        explicit_skills
+                    ),
+                    on_heartbeat=make_heartbeat(
+                        (
+                            "EVALUATION_"
+                            f"{evaluation_index}"
+                        )
+                    ),
+                    on_thread_started=(
+                        make_thread_started_callback(
+                            phase=(
+                                "EVALUATOR_"
+                                f"{evaluation_index}"
+                            ),
+                            recorder=recorder,
+                        )
+                    ),
+                )
+
+                phase_done(
+                    (
+                        "EVALUATION_"
+                        f"{evaluation_index}"
+                    ),
+                    evaluation_started,
+                )
+
+                recorder.write_json(
+                    (
+                        "evaluation_"
+                        f"{evaluation_index:02d}.json"
+                    ),
+                    evaluation,
+                )
+
+                print_structured(
+                    "EVALUATION RESULT",
+                    evaluation,
+                )
+
+                try:
+                    evaluator_machine_guard(
+                        evaluation,
+                        plan=plan,
+                        risk=risk,
+                    )
+                except RuntimeError as exc:
+                    recorder.write_text(
+                        (
+                            "evaluation_"
+                            f"{evaluation_index:02d}_"
+                            "validation_error.txt"
+                        ),
+                        str(exc) + "\n",
+                    )
+                    print(
+                        "HARNESS_TASK_BLOCKED: "
+                        "evaluator_artifact_invalid"
+                    )
+                    print(
+                        "EVALUATOR_VALIDATION_FAIL:",
+                        exc,
+                    )
+                    return 2
+
+                status = evaluation[
+                    "status"
+                ]
+
+                if status == "PASS":
+                    if heldout_checks:
+                        print(
+                            "=== HELD-OUT "
+                            "EVALUATION ==="
+                        )
+                        heldout_started = (
+                            time.monotonic()
+                        )
+                        heldout_results = (
+                            run_checks(
+                                heldout_checks,
+                                workspace=workspace,
+                                toolchain=toolchain,
+                            )
+                        )
+                        phase_done(
+                            "HELDOUT",
+                            heldout_started,
+                        )
+
+                        recorder.write_json(
+                            "heldout_results.json",
+                            [
+                                {
+                                    "name": item.name,
+                                    "returncode": (
+                                        item.returncode
+                                    ),
+                                    "timed_out": (
+                                        item.timed_out
+                                    ),
+                                    "duration_seconds": (
+                                        item.duration_seconds
+                                    ),
+                                }
+                                for item
+                                in heldout_results
+                            ],
+                        )
+
+                        heldout_failures = [
+                            item
+                            for item
+                            in heldout_results
+                            if not item.passed
+                        ]
+
+                        if heldout_failures:
+                            print()
+                            print(
+                                "HARNESS_HELDOUT_FAIL: "
+                                "held-out evidence "
+                                "failed; no repair "
+                                "feedback was sent "
+                                "to the agent"
+                            )
+                            return 4
+
+                        print()
+                        print(
+                            "HELDOUT_PASS"
+                        )
+
+                    print(
+                        "HARNESS_TASK_PASS"
+                    )
+                    return 0
+
+                if (
+                    status
+                    == "REPLAN_REQUIRED"
+                ):
+                    if (
+                        replan_cycles
+                        >= max_replan_cycles
+                    ):
+                        print(
+                            "HARNESS_TASK_FAIL: "
+                            "maximum replan cycles "
+                            "reached"
+                        )
+                        return 1
+
+                    replan_cycles += 1
+
+                    print()
+                    print(
+                        f"=== REPLAN CYCLE "
+                        f"{replan_cycles}: "
+                        "EVALUATOR REJECTED "
+                        "PLAN ==="
+                    )
+
+                    revised_plan = (
+                        run_validated_planner(
+                            codex,
+                            workspace=workspace,
+                            task_prompt=prompt,
+                            toolchain=toolchain,
+                            preflight=preflight,
+                            baseline_snapshot=(
+                                baseline_snapshot
+                            ),
+                            revision_context=(
+                                evaluation
+                            ),
+                            explicit_skills=(
+                                explicit_skills
+                            ),
+                            max_validation_retries=(
+                                max_plan_validation_retries
+                            ),
+                            phase_label=(
+                                "REPLAN_"
+                                f"{replan_cycles}"
+                            ),
+                            artifact_prefix=(
+                                "replan_"
+                                f"{replan_cycles:02d}"
+                            ),
+                            recorder=recorder,
+                        )
+                    )
+
+                    if revised_plan is None:
+                        print(
+                            "HARNESS_TASK_BLOCKED: "
+                            "replanner_artifact_invalid"
+                        )
+                        return 2
+
+                    plan = revised_plan
+
+                    if (
+                        plan["status"]
+                        == "BLOCKED"
+                    ):
+                        print(
+                            "HARNESS_TASK_BLOCKED: "
+                            "replanner"
+                        )
+                        return 2
+
+                    if (
+                        plan["status"]
+                        == "NEEDS_USER_DECISION"
+                    ):
+                        print(
+                            "HARNESS_TASK_NEEDS_USER_DECISION: "
+                            "replanner"
+                        )
+                        return 3
+
+                    if (
+                        plan["status"]
+                        != "READY"
+                    ):
+                        print(
+                            "HARNESS_TASK_BLOCKED: "
+                            "unexpected_replanner_status="
+                            + str(
+                                plan["status"]
+                            )
+                        )
+                        return 2
+
+                    # If replan expands the candidate surface after implementation,
+                    # preserve original pre-edit snapshots for known paths and mark
+                    # newly seen paths as candidate-state-at-replan.
+                    baseline_snapshot = (
+                        capture_baseline_snapshot(
+                            workspace,
+                            preflight=preflight,
+                            candidate_paths=[
+                                str(path)
+                                for path
+                                in plan.get(
+                                    "candidate_paths",
+                                    [],
+                                )
+                            ],
+                            existing_snapshot=(
+                                baseline_snapshot
+                            ),
+                            captured_before_first_edit=False,
+                        )
+                    )
+
+                    recorder.write_json(
+                        (
+                            "baseline_snapshot_"
+                            f"replan_{replan_cycles:02d}.json"
+                        ),
+                        baseline_snapshot,
+                    )
+
+                    print_structured(
+                        "UPDATED BASELINE SNAPSHOT",
+                        baseline_snapshot,
+                    )
+
+                    # First ask a fresh evaluator whether the already-built
+                    # candidate satisfies the corrected plan. If not, normal
+                    # FINDINGS routing will return concrete candidate work
+                    # to the implementer.
+                    continue
+
+                if status == "BLOCKED":
+                    print(
+                        "HARNESS_TASK_BLOCKED: "
+                        "evaluator"
+                    )
+                    return 2
+
+                if (
+                    status
+                    == "NEEDS_USER_DECISION"
+                ):
+                    print(
+                        "HARNESS_TASK_NEEDS_USER_DECISION: "
+                        "evaluator"
+                    )
+                    return 3
+
+                if status != "FINDINGS":
+                    print(
+                        "HARNESS_TASK_BLOCKED: "
+                        "unexpected_evaluator_status="
+                        + str(status)
+                    )
+                    return 2
+
+                if (
+                    repair_cycles
+                    >= max_fix_cycles
+                ):
+                    print(
+                        "HARNESS_TASK_FAIL: "
+                        "maximum fix cycles "
+                        "reached"
+                    )
+                    return 1
+
+                repair_cycles += 1
+
+                print(
+                    f"=== REPAIR CYCLE "
+                    f"{repair_cycles}: "
+                    "EVALUATOR FINDINGS ==="
+                )
+
+                repair_prompt = (
+                    build_evaluator_repair_prompt(
+                        evaluation
+                    )
+                )
+
+                repair_started = (
+                    time.monotonic()
+                )
+
+                codex.run_turn(
+                    thread_id=thread_id,
+                    prompt=repair_prompt,
+                    on_delta=(
+                        stream_agent_delta
+                    ),
+                    on_message_end=(
+                        stream_agent_message_end
+                    ),
+                    skills=explicit_skills,
+                )
+
+                phase_done(
+                    (
+                        "REPAIR_EVALUATOR_"
+                        f"{repair_cycles}"
+                    ),
+                    repair_started,
+                )
+
+    finally:
+        print()
+        print(
+            "TOTAL_ELAPSED:",
+            format_duration(
+                time.monotonic()
+                - task_started
+            ),
+        )
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(
+            main()
+        )
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print()
+        print(
+            "HARNESS_INTERNAL_ERROR:",
+            f"{type(exc).__name__}: {exc}",
+        )
+
+        if (
+            os.environ.get(
+                "SLIVIN_HARNESS_DEBUG"
+            )
+            == "1"
+        ):
+            raise
+
+        raise SystemExit(99)

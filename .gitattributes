@@ -1,0 +1,8 @@
+* text=auto
+*.py text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.cjs text eol=lf
+run text eol=lf
+py text eol=lf
+*.cmd text eol=crlf

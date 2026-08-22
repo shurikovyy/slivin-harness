@@ -1,0 +1,118 @@
+version = 1
+
+task_id = "MATRIX_DATATABLE_ALL_MATCHING_BULK_ACTION_SCOPE_BENCHMARK"
+workspace = "cases/matrix-all-matching/workspace"
+
+risk = "medium"
+max_fix_cycles = 3
+max_replan_cycles = 2
+max_plan_validation_retries = 2
+require_clean_git = true
+
+prompt = """
+На вкладке «Товарная матрица» есть дефект выбора строк.
+
+Сценарий:
+1. Пользователь применяет фильтры.
+2. Чекбокс в заголовке таблицы выбирает строки текущей страницы.
+3. Появляется действие «Выбрать все N найденных».
+4. Пользователь нажимает «Выбрать все N найденных».
+
+Фактическое поведение:
+кнопка «Подтвердить распред» после этого исчезает.
+
+При обычном ручном выборе строк чекбоксами кнопка
+«Подтвердить распред» остаётся доступной.
+
+Ожидаемое поведение:
+selection через «Выбрать все N найденных» должен считаться
+явным selection scope, а не обычным filter-only scope.
+Поэтому normal bulk actions, включая «Подтвердить распред»,
+не должны исчезать только потому, что selectedRows пуст,
+если активен актуальный all-matching selection token.
+
+При этом сохрани существующее поведение:
+- обычный filter-only scope без явного выбора не должен
+  получить запрещённые actions;
+- ручной checkbox selection должен продолжить работать;
+- server-side all-matching selection должен продолжить
+  передаваться через selection_token/excluded_ids;
+- stale all-matching state от другого filter scope не должен
+  использоваться как текущий selection;
+- не меняй unrelated behavior.
+
+Найди root cause, внеси минимальное исправление и добавь регрессионное покрытие.
+
+Используй только код данного workspace как источник реализации.
+Не ищи другие копии проекта, архивы или готовые исправления за пределами workspace.
+Git write-команды не выполняй.
+"""
+
+[benchmark]
+calibration_certificate = "hidden_checks/matrix_all_matching.calibration.json"
+
+[[checks]]
+name = "Existing DataTable selection regressions"
+feedback = "repair"
+command = [
+    "{node}",
+    "{jest}",
+    "--config",
+    "{workspace}/jest.config.cjs",
+    "--runTestsByPath",
+    "{workspace}/static/js/components/datatable/__tests__/selection-across-pages.test.cjs",
+    "{workspace}/static/js/components/datatable/__tests__/bulk-edit-filter-scope.test.cjs",
+    "--runInBand",
+    "--no-cache",
+]
+timeout_seconds = 180
+
+[[checks]]
+name = "Bulk edit syntax"
+feedback = "repair"
+command = [
+    "{node}",
+    "--check",
+    "{workspace}/static/js/components/datatable/selection/bulk_edit.js",
+]
+timeout_seconds = 30
+
+[[checks]]
+name = "Distribution syntax"
+feedback = "repair"
+command = [
+    "{node}",
+    "--check",
+    "{workspace}/static/js/distribution/index.js",
+]
+timeout_seconds = 30
+
+[[checks]]
+name = "Git diff check"
+feedback = "repair"
+command = ["git", "diff", "--check"]
+timeout_seconds = 30
+
+[[checks]]
+name = "EOL contract"
+feedback = "repair"
+command = [
+    "{python}",
+    "tools/check_changed_eol.py",
+]
+timeout_seconds = 120
+
+[[checks]]
+name = "Historical held-out regression oracle"
+feedback = "heldout"
+command = [
+    "{node}",
+    "{jest}",
+    "--config",
+    "{harness_root}/hidden_checks/jest.config.cjs",
+    "--runTestsByPath",
+    "{harness_root}/hidden_checks/matrix_all_matching.test.cjs",
+    "--runInBand",
+    "--no-cache",
+]
+timeout_seconds = 120

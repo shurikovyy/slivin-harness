@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON="${SLIVIN_HARNESS_PYTHON:-$HOME/Documents/sa_icover/.venv/Scripts/python.exe}"
+exec "$PYTHON" "$ROOT/task_runner.py" "$@"

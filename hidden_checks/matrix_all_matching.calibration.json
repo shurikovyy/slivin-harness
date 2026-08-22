@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "calibrated_at": "2026-08-22",
+  "evidence_note": "Historical grader was observed to FAIL on broken _90 and PASS on known-good _92 before this repository baseline was created.",
+  "heldout_checks": [
+    {
+      "name": "Historical held-out regression oracle",
+      "spec_sha256": "ad8f7646a46b54061b4e5b21402bda4b8a3e751878ad6372f2378bb5378ca5b3",
+      "files": [
+        {
+          "path": "hidden_checks/jest.config.cjs",
+          "sha256": "7c2ac2d50175744d8c7cfd7f4ec21acec7abb67d4526363026ea60442e84d3c1"
+        },
+        {
+          "path": "hidden_checks/matrix_all_matching.test.cjs",
+          "sha256": "c6f85379d60bea2461a65712a2972379030afa7718da841e029a866748370031"
+        }
+      ],
+      "broken_result": "FAIL",
+      "good_result": "PASS"
+    }
+  ]
+}

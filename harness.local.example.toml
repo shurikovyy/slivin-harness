@@ -1,0 +1,9 @@
+# Copy to harness.local.toml only if your paths differ from the defaults.
+# harness.local.toml is intentionally ignored by Git.
+
+[codex]
+command = "~/Tools/codex-cli/node_modules/.bin/codex.cmd"
+
+[toolchain]
+node = "~/Tools/node/node.exe"
+jest = "~/Documents/sa_icover/node_modules/jest/bin/jest.js"
