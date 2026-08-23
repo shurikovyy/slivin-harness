@@ -8,6 +8,7 @@
 
 | Файл | Назначение |
 |---|---|
+| [CURRENT_STATE.md](CURRENT_STATE.md) | Оперативный handoff: текущий milestone, известные gaps и следующий шаг |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Текущая архитектура Harness, роли, state machine и границы ответственности |
 | [QUALITY_MODEL.md](QUALITY_MODEL.md) | Модель качества: current contract, assumptions, LIFE/REP/AUTH, obligations, Evaluator, held-out |
 | [DECISIONS.md](DECISIONS.md) | Принятые, отклонённые и отложенные архитектурные решения с причинами |
@@ -49,3 +50,17 @@
 но и:
 
 > «Почему это появилось, какой failure это предотвращает и почему мы не выбрали более простой/другой путь?»
+
+
+## Перед продолжением в новой сессии
+
+Если история предыдущего чата недоступна, начинать с:
+
+```text
+CURRENT_STATE.md
+→ ARCHITECTURE.md
+→ QUALITY_MODEL.md
+→ DECISIONS.md
+```
+
+`CURRENT_STATE.md` специально хранит временные ограничения/known gaps, которые ещё не стали стабильным architecture contract.

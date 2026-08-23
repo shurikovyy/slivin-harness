@@ -1753,3 +1753,94 @@ observable failure
 ещё один case-specific prompt/test
 → ещё одна копия source file
 ```
+
+
+---
+
+# 40. Повторный запуск historical case
+
+После task workspace содержит candidate changes.
+
+Перед новым **независимым** trial вернуть inner repo к baseline:
+
+```bash
+cd ~/Tools/slivin-harness/cases/matrix-all-matching/workspace
+
+git reset --hard HEAD
+git clean -fd
+rm -rf .harness_tmp
+
+git status --short
+```
+
+Status должен быть пустым.
+
+Затем:
+
+```bash
+cd ~/Tools/slivin-harness
+./run cases/matrix-all-matching/task.toml
+```
+
+Не создавать новый baseline commit из результата прошлого trial.
+
+---
+
+# 41. Текущий Git permission contract
+
+Task-agent работает в disposable workspace, но по умолчанию **не владеет Git history/publication**.
+
+Без отдельного orchestration решения не поручать Agent автоматически:
+
+```text
+git switch / checkout branch
+git branch
+git commit
+git push
+PR creation
+```
+
+Будущий GitHub Issues/task layer должен вводить это как отдельную capability/trust boundary, а не как побочный эффект `workspace-write`.
+
+---
+
+# 42. Harness Python и project Python
+
+Placeholder:
+
+```text
+{python}
+```
+
+означает Python, которым запущен Harness (`sys.executable`).
+
+Он не гарантирует наличие dependencies target project.
+
+Например Django backend task может требовать отдельный:
+
+```text
+project_python
+project_pytest
+```
+
+toolchain entry.
+
+В текущем Matrix historical run backend token test не запускался именно потому, что usable Django runtime не был доступен из workspace/system Python; backend code при этом не менялся.
+
+---
+
+# 43. Current continuation state
+
+Перед продолжением архитектурной разработки в новой сессии прочитать:
+
+```text
+docs/CURRENT_STATE.md
+```
+
+Там зафиксированы:
+
+- текущий milestone;
+- open hardening gaps;
+- Git trust boundary;
+- target-project runtime gap;
+- следующий рекомендуемый шаг.

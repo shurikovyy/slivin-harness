@@ -341,3 +341,30 @@ runtime caches
 ```
 
 Если архив нужен для human audit, предпочтительно создавать его из explicit allowlist/diff либо отдельным packaging script, а не архивировать project root «как есть».
+
+
+---
+
+## 16. Повторный historical trial: reset к baseline
+
+После успешного/неуспешного Agent run inner workspace обычно dirty.
+
+Перед новым независимым trial:
+
+```bash
+cd cases/matrix-all-matching/workspace
+
+git reset --hard HEAD
+git clean -fd
+rm -rf .harness_tmp
+
+git status --short
+```
+
+Ожидается пустой status.
+
+`HEAD` здесь — inner baseline commit, созданный `prepare_workspace.py`.
+
+Не использовать final candidate предыдущего trial как следующий baseline.
+
+Не делать новый baseline commit поверх candidate: это разрушит historical comparison.

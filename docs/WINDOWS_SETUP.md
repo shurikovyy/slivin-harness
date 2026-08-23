@@ -397,3 +397,59 @@ App Server при этом оставался жив, heartbeat продолжа
 Пока это считается transient Windows/MSYS subprocess failure, а не архитектурным blocker.
 
 Если станет повторяемым — предпочтительное направление: использовать native `git.exe`/native process boundary вместо дополнительного bash subprocess.
+
+
+---
+
+## 15. Project `core.autocrlf` и project-specific EOL gate
+
+В `sa_icover` historical workspaces наблюдалось:
+
+```text
+core.autocrlf=true
+```
+
+Поэтому Git index и physical worktree могут выглядеть:
+
+```text
+i/lf
+w/crlf
+attr/text=auto
+```
+
+Это допустимо само по себе.
+
+Для project changes authoritative EOL policy лучше проверять существующим project checker:
+
+```text
+tools/check_changed_eol.py
+```
+
+а не делать вывод только из raw worktree bytes.
+
+Отдельно помнить про UTF-8 BOM: line-ending checker и BOM preservation — не одно и то же.
+
+---
+
+## 16. Codex CLI upgrade contract
+
+Tested App Server version:
+
+```text
+0.148.0
+```
+
+Protocol/schema и Windows sandbox behavior считаются version-sensitive.
+
+После upgrade:
+
+1. сгенерировать/прочитать новые App Server protocol schemas;
+2. проверить initialize;
+3. read-only turn;
+4. workspace-write probe;
+5. temp/Python probe;
+6. structured output;
+7. skill discovery;
+8. process death/heartbeat behavior.
+
+Не переносить старые protocol assumptions на новую версию без smoke.

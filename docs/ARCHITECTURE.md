@@ -337,3 +337,41 @@ Confidence строится через:
 Причина: сначала требовалось доказать quality-core на реальном historical escape.
 
 Эта цель достигнута на Matrix all-matching benchmark, но одного case недостаточно для универсальной надёжности.
+
+
+---
+
+## 12. Current evidence-integrity limitation: planned vs actual change surface
+
+Текущий Controller снимает pre-edit snapshot по `Planner.candidate_paths`.
+
+Но на successful Matrix historical run Implementer после собственного consumer discovery изменил дополнительные Distribution paths, которых не было в initial `candidate_paths`.
+
+Controller пока не делает mechanical:
+
+```text
+final changed paths
+vs
+planned candidate_paths
+```
+
+reconciliation.
+
+Следствие:
+
+- product candidate может быть корректным;
+- Fresh Evaluator может принять расширение;
+- но trusted pre-edit evidence для поздно добавленного path отсутствует.
+
+Это зафиксированный hardening gap.
+
+Целевой contract:
+
+```text
+actual path outside planned candidate surface
+→ explicit expansion/replan/evidence downgrade
+```
+
+а не молчаливое принятие.
+
+До реализации этого guard `candidate_paths` нужно считать planning/evidence declaration, а не жёстким filesystem allowlist.

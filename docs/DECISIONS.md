@@ -488,3 +488,111 @@ CI рассматривается как clean/repeatable enforcement, а не �
 Known-good implementation не должен быть доступен agent'у как источник готового fix.
 
 Для historical calibration достаточно controlled reference/certificate.
+
+
+---
+
+## D-031 — Task agents не владеют Git history/publication по умолчанию
+
+**Status:** ACCEPTED
+
+### Решение
+
+Текущий task-agent может изменять disposable workspace, но без отдельного explicit orchestration contract не должен самостоятельно:
+
+```text
+switch/create branches
+commit
+push
+create PR
+```
+
+### Почему
+
+`workspace-write` — filesystem capability, а не authority над team Git history.
+
+Это также соответствует текущему разделению:
+
+```text
+quality core
+vs
+publication/orchestration layer
+```
+
+### Revisit when
+
+При проектировании GitHub Issues/task supervisor и PR publisher.
+
+---
+
+## D-032 — Actual diff должен reconciled с planned change surface
+
+**Status:** ACCEPTED AS PRINCIPLE / NOT YET ENFORCED
+
+### Решение
+
+Final changed paths должны механически сопоставляться с `Planner.candidate_paths`.
+
+Новый required path не должен появляться незаметно после pre-edit snapshot.
+
+### Origin
+
+В successful Matrix trial Planner не включил Distribution paths в `candidate_paths`, но Implementer корректно обнаружил consumer и изменил:
+
+```text
+static/js/distribution/index.js
+static/js/distribution/__tests__/selection-stage.test.cjs
+```
+
+Pre-edit snapshot существовал только для original planned paths.
+
+### Consequence
+
+До реализации guard evidence layer имеет известный hardening gap.
+
+### Preferred behavior
+
+Если новый path обнаружен до edit:
+
+```text
+explicit change-surface expansion
+→ trusted snapshot
+→ continue
+```
+
+Если path уже изменён:
+
+```text
+replan/evidence downgrade
+→ не маркировать snapshot как pre-edit
+```
+
+---
+
+## D-033 — Harness runtime Python и target-project runtime — разные capabilities
+
+**Status:** ACCEPTED AS MODEL / IMPLEMENTATION DEFERRED
+
+### Решение
+
+Не считать `{python}` универсальным Python target project.
+
+Текущий `{python}` — `sys.executable` Harness process.
+
+Backend tasks при необходимости должны получать отдельный trusted project runtime, например:
+
+```text
+project_python
+project_pytest
+project_test_env
+```
+
+### Origin
+
+В successful Matrix run backend token test нельзя было выполнить из workspace/system Python из-за отсутствия Django.
+
+Для той задачи backend code не менялся, поэтому это не было release blocker.
+
+### Revisit when
+
+Первая реальная backend/Django task требует этот capability.

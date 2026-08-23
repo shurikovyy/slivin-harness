@@ -11,6 +11,20 @@
   through the successful Matrix historical benchmark.
 - Added a maintenance policy so future Harness changes retain their rationale.
 
+
+### Continuation-context audit
+
+- Added `docs/CURRENT_STATE.md` as the canonical cross-session handoff.
+- Documented the current Git/publication trust boundary for task agents.
+- Documented the target-project Python/Django runtime gap.
+- Documented repeated historical-workspace reset procedure.
+- Recorded the successful Matrix trial's planned-vs-actual path mismatch:
+  Distribution was correctly added by the Implementer but was outside the
+  initial `candidate_paths`, so its pre-edit evidence was not captured.
+- Accepted a future mechanical final-diff-to-plan reconciliation contract.
+- Recorded the README newline oracle incident as a second example of semantic
+  grader over-specification.
+
 ## v0.4.6
 
 Quality-core milestone.

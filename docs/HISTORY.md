@@ -446,3 +446,103 @@ docs
 - PR/CI orchestration.
 
 Следующий рост качества должен быть driven реальными tasks/evals, а не добавлением scaffolding «на всякий случай».
+
+
+---
+
+# 16. v0.4.6 smoke: второй пример over-specified oracle
+
+Простой smoke contract требовал:
+
+```text
+README.txt содержит единственную строку READY
+```
+
+Planner/Implementer создал семантически допустимое representation, но ранний held-out был привязан к exact bytes:
+
+```text
+READY\n
+```
+
+Этот case усилил вывод Matrix `excluded_ids` incident:
+
+> Grader может быть слишком узким даже после `broken → FAIL / one known-good → PASS`.
+
+Corrected semantic grader принимал:
+
+```text
+READY
+READY\n
+READY\r\n
+```
+
+и отклонял:
+
+```text
+BASE
+missing
+empty
+partial
+extra line
+BOM/extra content
+```
+
+---
+
+# 17. Successful Matrix run: target-project runtime gap
+
+Implementer отдельно пытался проверить backend token unit-test.
+
+Run не имел usable Django environment внутри workspace/system Python:
+
+```text
+backend token test → not executed
+```
+
+Backend code/wire contract не менялись, поэтому конкретный task сохранил PASS.
+
+Это выявило будущий capability:
+
+```text
+Harness runtime Python
+!=
+target project Python
+```
+
+для backend tasks.
+
+---
+
+# 18. Post-milestone documentation audit: candidate-path evidence gap
+
+При повторном разборе final successful run обнаружено:
+
+Planner initial `candidate_paths` не включал Distribution files, хотя `affected_consumers` и `TEST-008` уже указывали на Distribution risk.
+
+Implementer позже самостоятельно обнаружил необходимость change и изменил Distribution.
+
+Product result был правильным.
+
+Но Controller не:
+
+- расширил planned path set до edit;
+- снял trusted pre-edit snapshot Distribution path;
+- потребовал replan;
+- mechanically reconciled final diff with planned paths.
+
+Это **не отменяет successful product benchmark**, но уточняет состояние Harness:
+
+```text
+quality reasoning milestone → достигнут
+change-surface evidence hardening → ещё нужен
+```
+
+Следующий core hardening должен решить общий класс:
+
+```text
+planned change surface
+vs
+actual final diff
+```
+
+до масштабирования orchestration.
