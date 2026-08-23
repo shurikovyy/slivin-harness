@@ -382,6 +382,41 @@ baseline blob size
 
 Если replan позже добавил новый path, нельзя задним числом называть его snapshot «pre-edit».
 
+### 16.1. D-032 path-local evidence reconciliation
+
+Текущий Controller решает late-discovered consumer механически.
+
+Если Agent уже изменил path вне `candidate_paths`, Controller не принимает это как готовое расширение. Он:
+
+```text
+rollback unexpected path к baseline
+→ replan
+→ required path входит в candidate_paths
+→ snapshot ДО повторной edit этого path
+```
+
+Snapshot различает:
+
+```text
+captured_before_first_edit
+captured_before_path_edit
+```
+
+Поэтому поздний path может быть:
+
+```text
+first_edit=false
+path_edit=true
+```
+
+что является корректным evidence statement.
+
+Machine invariant перед evaluation/final PASS:
+
+```text
+actual changed paths ⊆ candidate_paths
+```
+
 ---
 
 ## 17. Deterministic checks

@@ -206,19 +206,26 @@ EVALUATOR_INSTRUCTIONS = """
    Проверь reachable combinations и consistency across surfaces.
    UI state A + executable payload B без подтверждённого contract → material finding.
 
-7. TEST VALIDITY.
+7. CHANGE-SURFACE INTEGRITY.
+   Независимо сравни final changed paths с `plan.candidate_paths`. Каждый реально
+   изменённый non-ignored path должен быть в planned surface. Для поздно добавленного
+   path baseline snapshot должен честно содержать `captured_before_path_edit=true`;
+   не принимай candidate-state-after-edit за pre-edit evidence. Несогласованность
+   planned vs actual surface → REPLAN_REQUIRED/BLOCKED в зависимости от ownership.
+
+8. TEST VALIDITY.
    Regression evidence должен различать broken contract и candidate.
 
-8. CONS-* / INT-* / PRES-*.
+9. CONS-* / INT-* / PRES-*.
    Проверяй каждого consumer и preservation independently.
 
-9. ROUTING.
+10. ROUTING.
    FINDINGS — candidate defect.
    REPLAN_REQUIRED — plan пропустил/неверно классифицировал material LIFE/REP/AUTH.
    BLOCKED — нет mandatory technical capability/evidence.
    NEEDS_USER_DECISION — только реальная unresolved product semantics между peer states.
 
-10. PASS допустим только если:
+11. PASS допустим только если:
     - blocking findings отсутствуют;
     - все release obligations PASS;
     - narrowing assumptions подтверждены;

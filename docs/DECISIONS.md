@@ -527,7 +527,7 @@ publication/orchestration layer
 
 ## D-032 — Actual diff должен reconciled с planned change surface
 
-**Status:** ACCEPTED AS PRINCIPLE / NOT YET ENFORCED
+**Status:** ACCEPTED / ENFORCED
 
 ### Решение
 
@@ -546,32 +546,30 @@ static/js/distribution/__tests__/selection-stage.test.cjs
 
 Pre-edit snapshot существовал только для original planned paths.
 
-### Consequence
+### Implemented behavior
 
-До реализации guard evidence layer имеет известный hardening gap.
+После каждого write turn Controller сравнивает actual changed paths с planned surface.
 
-### Preferred behavior
-
-Если новый path обнаружен до edit:
+Если path незапланирован:
 
 ```text
-explicit change-surface expansion
-→ trusted snapshot
-→ continue
+record violation
+→ rollback unexpected path к baseline
+→ read-only replan
+→ required path явно входит в candidate_paths
+→ trusted pre-path-edit snapshot
+→ Implementer повторяет изменение
 ```
 
-Если path уже изменён:
+Если revised plan исключает старый changed path, Controller откатывает его.
 
-```text
-replan/evidence downgrade
-→ не маркировать snapshot как pre-edit
-```
+Финальный PASS также имеет machine guard actual diff ⊆ candidate_paths.
 
 ---
 
 ## D-033 — Harness runtime Python и target-project runtime — разные capabilities
 
-**Status:** ACCEPTED AS MODEL / IMPLEMENTATION DEFERRED
+**Status:** ACCEPTED / PARTIALLY IMPLEMENTED
 
 ### Решение
 
@@ -593,6 +591,156 @@ project_test_env
 
 Для той задачи backend code не менялся, поэтому это не было release blocker.
 
-### Revisit when
+### Current implementation
 
-Первая реальная backend/Django task требует этот capability.
+Project profile может объявить отдельные:
+
+```toml
+[projects.my_project.toolchain]
+project_python = "{project_root}/.venv/Scripts/python.exe"
+project_pytest = "..."
+```
+
+Harness bootstrap Python больше не зависит от target-project `.venv`.
+
+Автоматическое discovery project runtimes сознательно не добавлялось: explicit trusted toolchain остаётся более предсказуемым.
+
+
+---
+
+## D-034 — Machine/project paths живут в `harness.local.toml`, не в source/manifests
+
+**Status:** ACCEPTED / ENFORCED
+
+### Решение
+
+Committed Harness не содержит project-specific defaults для:
+
+```text
+Codex path
+project repo path
+project Python
+Node
+Jest
+```
+
+Machine-local configuration:
+
+```text
+harness.local.toml
+```
+
+Project profiles:
+
+```toml
+[projects.<name>]
+repo = "..."
+
+[projects.<name>.toolchain]
+project_python = "{project_root}/..."
+```
+
+Bare executable names могут разрешаться через PATH.
+
+### Почему не root `.env`
+
+`.env` удобен для плоских environment variables, но плохо описывает:
+
+- несколько проектов;
+- nested toolchains;
+- workspace/result policies;
+- typed lists вроде `copy_untracked`.
+
+TOML уже является существующим configuration layer Harness и не смешивает machine configuration с application secrets.
+
+Bootstrap Python остаётся отдельным environment override `SLIVIN_HARNESS_PYTHON`, потому что TOML нельзя прочитать до запуска Python.
+
+---
+
+## D-035 — Обычные project tasks используют managed Git worktree
+
+**Status:** ACCEPTED / ENFORCED
+
+### Решение
+
+Для manifest:
+
+```toml
+project = "my_project"
+workspace_mode = "git_worktree"
+```
+
+Controller создаёт isolated detached worktree из configured source repository.
+
+### Почему
+
+Устраняется ручной lifecycle:
+
+```text
+копировать repo
+чистить dependencies
+запускать Harness
+копировать candidate обратно
+```
+
+При этом сохраняются clean baseline и independent diff.
+
+### Historical exception
+
+Static `workspace = "cases/.../workspace"` сохраняется для frozen historical fixtures (`_90`).
+
+---
+
+## D-036 — `.env` visibility является explicit opt-in, а не абсолютным запретом
+
+**Status:** ACCEPTED / ENFORCED
+
+### Решение
+
+Managed project profile может объявить:
+
+```toml
+[projects.my_project.workspace]
+copy_untracked = [".env"]
+```
+
+Файл копируется в disposable worktree, ignored task Git и исключён из candidate patch.
+
+Static `prepare_workspace.py` по умолчанию остаётся fail-closed, но поддерживает:
+
+```text
+--allow-env
+```
+
+### Security semantics
+
+Opt-in означает, что Agent/model **может прочитать содержимое** файла.
+
+Это не утверждение, что `.env` безопасен; это explicit user-controlled trust decision.
+
+---
+
+## D-037 — Accepted worktree candidate может автоматически применяться в source working tree
+
+**Status:** ACCEPTED / ENFORCED
+
+### Решение
+
+Project `result_mode`:
+
+```text
+keep_worktree
+apply_to_source
+```
+
+Для `apply_to_source` Controller после полного Harness PASS:
+
+1. создаёт binary Git patch candidate;
+2. повторно проверяет source HEAD;
+3. проверяет source working tree на concurrent product changes (кроме явно exposed local paths);
+4. применяет patch;
+5. не commit/push/branch/PR.
+
+### Почему
+
+Убирает ручное копирование результата, но не смешивает quality layer с Git publication authority.

@@ -1,353 +1,449 @@
-# Workspace model, Git boundaries и security hygiene
+# Workspace model, Git boundaries и local files
 
-## 1. Два разных Git repository
+## 1. Два разных режима workspace
 
-Slivin Harness использует вложенную модель:
+Slivin Harness теперь разделяет:
 
 ```text
-~/Tools/slivin-harness/.git
-    Outer repository:
-    source самого Harness.
+A. Managed project task
+   → Git worktree из реального configured project repository
 
-~/Tools/slivin-harness/cases/.../workspace/.git
-    Inner disposable repository:
-    baseline конкретного project/eval task.
+B. Static historical/fixture task
+   → cases/.../workspace с отдельным inner Git baseline
 ```
 
-Это осознанная архитектура.
+Для обычной разработки использовать **A**.
 
-Outer repo не должен version-control'ить project snapshot.
-
-Inner repo нужен для:
-
-- known clean baseline;
-- task-local `git diff`;
-- EOL checks;
-- pre-edit snapshots;
-- reproducible historical eval.
+Static mode сохраняется для frozen historical eval cases вроде `_90`.
 
 ---
 
-## 2. Почему project workspace не является submodule
+# 2. Managed project task — основной production-development mode
 
-Historical `_90` — disposable input, а не dependency Harness.
+Machine-local project регистрируется в ignored:
 
-Он:
+```toml
+# harness.local.toml
 
-- может содержать большой/private project;
-- меняется между cases;
-- не должен попадать в Harness history;
-- на другой машине может быть получен отдельно.
-
-Поэтому:
-
-```text
-cases/**/workspace/
+[projects.my_project]
+repo = "~/Documents/my-project"
+base_ref = "HEAD"
+require_clean_source = true
+result_mode = "apply_to_source"
 ```
 
-игнорируется outer `.gitignore`.
+Task manifest хранит только logical name:
+
+```toml
+project = "my_project"
+workspace_mode = "git_worktree"
+base_ref = "HEAD"
+```
+
+Committed manifest не знает путь `C:/Users/...` и переносим между машинами.
 
 ---
 
-## 3. Подготовка workspace
+## 2.1. Что создаёт Controller
 
-После копирования содержимого historical/project snapshot:
-
-```bash
-./py tools/prepare_workspace.py \
-  cases/matrix-all-matching/workspace
+```text
+source repo HEAD
+      ↓
+git worktree add --detach
+      ↓
+<workspace-root>/<project>/<task>/<timestamp-id>/
 ```
 
-Скрипт:
+Default workspace root:
 
-1. удаляет generated caches;
-2. ищет опасные `.env*`;
-3. создаёт inner `git init`, если его нет;
-4. задаёт локального baseline author;
-5. обновляет `.git/info/exclude`;
-6. создаёт первый baseline commit;
-7. если baseline уже есть — требует clean status;
-8. проверяет `.harness_tmp` ignore.
+```text
+<harness>/.workspaces/
+```
+
+Рекомендуется machine-local override:
+
+```toml
+[workspace]
+root = "~/.slivin-harness/workspaces"
+```
+
+`.workspaces/` ignored Harness Git.
 
 ---
 
-## 4. Почему `.env` — hard stop
+## 2.2. Что НЕ копируется
 
-`.gitignore` защищает только от случайного commit.
+Worktree содержит tracked Git files.
 
-Он **не мешает агенту прочитать файл**.
-
-Поэтому:
+Автоматически не копируются:
 
 ```text
-workspace/.env
-```
-
-даже если ignored, остаётся secret exposure.
-
-`prepare_workspace.py` разрешает только шаблоны:
-
-```text
-.env.example
-.env.sample
-.env.template
-```
-
-и блокирует реальные `.env*`.
-
-Оригинальный project `.env` удалять не нужно — удаляется только копия в agent workspace.
-
----
-
-## 5. `.gitignore` vs `.git/info/exclude`
-
-### Outer `.gitignore`
-
-Repository-wide policy Harness:
-
-```text
-runs/
-workspaces/
-archives
+.venv
 node_modules
-__pycache__
-machine-local config
-.env*
+.env
+IDE/runtime caches
+любые другие untracked local files
 ```
 
-Коммитится.
+Это решает прежнюю проблему тяжёлого ручного repository copy.
 
-### Inner `.git/info/exclude`
+`.venv`/`node_modules` обычно вообще не нужны внутри worktree: trusted project toolchain может ссылаться на source repository paths.
 
-Локальные правила disposable project baseline:
+---
+
+# 3. Project toolchain не является частью workspace
+
+Пример:
+
+```toml
+[projects.my_project.toolchain]
+project_python = "{project_root}/.venv/Scripts/python.exe"
+node = "node"
+jest = "{project_root}/node_modules/jest/bin/jest.js"
+```
+
+При выполнении command:
+
+```text
+cwd = disposable worktree
+executable/dependency runtime = configured trusted source installation
+```
+
+Это позволяет тестировать candidate из worktree без копирования virtualenv/dependencies.
+
+Ключевое различие:
+
+```text
+Controller Python
+!=
+project_python
+```
+
+`{python}` остаётся Python Harness process.
+
+Backend task, требующая Django project environment, должна использовать explicit `{project_python}` либо другой declared project tool.
+
+---
+
+# 4. Opt-in exposure local/untracked files
+
+Иногда Agent действительно нужен local file, например `.env`.
+
+Это теперь не абсолютный запрет, а explicit trust decision:
+
+```toml
+[projects.my_project.workspace]
+copy_untracked = [".env"]
+```
+
+Controller:
+
+1. берёт указанный path из source repo;
+2. копирует его в disposable worktree;
+3. добавляет его в worktree-specific Git exclude policy;
+4. не включает его в candidate patch;
+5. не применяет его обратно в source.
+
+### Security semantics
+
+Если path указан в `copy_untracked`, его содержимое доступно:
+
+```text
+Planner
+Implementer
+Evaluator
+model/tool process
+```
+
+Это сознательное разрешение пользователя.
+
+Default — список пустой.
+
+Не рекомендуется добавлять сюда большие directories вроде `.venv`/`node_modules`: это снова превратит worktree в тяжёлую копию.
+
+---
+
+# 5. Worktree-specific ignore policy
+
+Git linked worktree использует `.git` file, а не собственный normal `.git/info/exclude` directory.
+
+Harness поэтому создаёт внутри worktree:
+
+```text
+.harness_git_excludes
+```
+
+и устанавливает worktree-local:
+
+```text
+core.excludesFile = <workspace>/.harness_git_excludes
+```
+
+Для этого shared repository включает Git:
+
+```text
+extensions.worktreeConfig = true
+```
+
+В excludes входят как минимум:
 
 ```text
 .harness_tmp/
-generated runtime artifacts
+.harness_git_excludes
+__pycache__/
+.pytest_cache/
+.jest-cache*
+coverage/
 ```
 
-Не меняют historical baseline source files.
+а также configured copied local paths.
+
+В результате Agent и Controller видят clean task Git status без изменения project `.gitignore`.
 
 ---
 
-## 6. Clean baseline
+# 6. Source repository clean contract
 
-Перед implementation:
+Managed worktree должен иметь известный committed baseline.
 
-```text
-known HEAD
-clean status
-known tracked paths
-no secrets
-temp ignored
+По default:
+
+```toml
+require_clean_source = true
 ```
 
-Если existing inner repo dirty:
+Tracked/staged source changes блокируют task creation.
 
-```text
-prepare_workspace.py → RuntimeError
-```
+Configured `copy_untracked` paths являются исключением: они могут быть untracked даже если project `.gitignore` их не скрывает.
 
-Harness не должен гадать, кому принадлежат уже существующие changes.
+Почему:
+
+> Если source содержит неизвестные product changes, Harness не знает, должны ли они входить в task baseline.
 
 ---
 
-## 7. Preflight
+# 7. Result modes
 
-До Planner/Implementer Controller фиксирует:
+## `keep_worktree`
+
+После full PASS source working tree не меняется.
+
+Harness сохраняет:
 
 ```text
-head_sha
-working_tree_clean
-status_porcelain
-tracked_paths
+runs/<task>/<run>/candidate.patch
 ```
 
-Это trusted independent evidence.
+и оставляет disposable worktree для inspection.
 
 ---
 
-## 8. Candidate paths и baseline snapshot
+## `apply_to_source`
 
-Planner объявляет:
+После full Harness PASS Controller:
+
+1. собирает binary Git patch относительно immutable worktree HEAD;
+2. временно включает новые untracked candidate files через intent-to-add только в worktree index;
+3. исключает ignored/exposed local files;
+4. проверяет source HEAD against start HEAD;
+5. проверяет отсутствие concurrent tracked source changes;
+6. применяет patch в исходный source working tree.
+
+Результат:
+
+```text
+source working tree получает accepted code/test/docs changes
+```
+
+Harness не делает:
+
+```text
+git commit
+git push
+branch switch
+PR creation
+```
+
+Это будущий publication/orchestration layer.
+
+Если source изменился во время task, candidate не применяется и task publication становится `BLOCKED`; patch остаётся в run artifacts.
+
+---
+
+# 8. D-032: candidate paths и actual diff
+
+Planner объявляет exact repo-relative:
 
 ```text
 candidate_paths
 ```
 
-После plan, но до first edit Harness снимает по каждому path:
+После original plan Controller снимает pre-edit evidence.
+
+После каждого write turn Controller вычисляет actual candidate paths через Git:
 
 ```text
-exists
-is_file
-worktree size
-worktree SHA-256
-git EOL
-index entry
-baseline blob SHA
-baseline blob size
+tracked diff vs HEAD
++
+untracked non-ignored files
 ```
 
-Это нужно для доказательства pre-edit state.
-
-### Replan nuance
-
-Если после first edit revised plan добавил новый candidate path:
+Invariant:
 
 ```text
-его уже нельзя честно назвать pre-edit snapshot.
+actual changed paths ⊆ planned candidate_paths
 ```
 
-Поэтому такой snapshot должен быть отмечен как candidate-state-at-replan, а original pre-edit evidence не перезаписывается.
+Если нарушен:
+
+```text
+unexpected path
+→ record run artifact
+→ rollback только unexpected path к baseline
+→ read-only replan
+→ updated candidate surface
+→ trusted pre-path-edit snapshot
+→ Implementer redoes required edit
+```
+
+### Snapshot fields
+
+```text
+captured_before_first_edit
+captured_before_path_edit
+worktree_snapshot_role
+```
+
+Late-added path после controlled rollback:
+
+```text
+captured_before_first_edit = false
+captured_before_path_edit  = true
+worktree_snapshot_role     = pre_path_edit_after_surface_reconciliation
+```
+
+Это честнее, чем либо:
+
+- silently accepting unplanned edit;
+- либо делать вид, что snapshot снят до первого edit всей задачи.
 
 ---
 
-## 9. `.harness_tmp`
+# 9. Task-local temp
 
-Runtime-only directory:
+Runtime temp:
 
 ```text
-workspace/.harness_tmp/
+<worktree>/.harness_tmp/
 ```
 
-Используется для:
+Harness child env использует:
 
-- temp;
-- caches;
-- test runtime;
-- agent runtime temp.
+```text
+TEMP
+TMP
+TMPDIR
+XDG_CACHE_HOME
+NPM_CONFIG_CACHE
+PYTHONDONTWRITEBYTECODE
+```
 
-Не должна попадать в inner diff.
+внутри task workspace.
+
+Это одновременно поддерживает Windows sandbox и чистый Git diff.
 
 ---
 
-## 10. `runs/`
+# 10. Run artifacts
 
-Outer Harness сохраняет audit artifacts:
+Outer Harness сохраняет:
 
 ```text
 runs/<task_id>/<timestamp>/
 ```
 
-Возможные файлы:
+Включая:
 
 ```text
 manifest snapshot
 preflight
-repo context
-plan attempts
-validation errors
+plan/replans
 baseline snapshot
-deterministic check results
-evaluator artifacts
+change-surface violations
+checks
+evaluation
 held-out result
-calibration verification
+candidate.patch (managed project mode)
+workspace session metadata
 ```
 
-`runs/` не входит в Git.
+`runs/` ignored Git.
 
 ---
 
-## 11. Historical `_92`
+# 11. Static historical/fixture mode
 
-Полная `_92` больше не требуется на каждой машине для Matrix benchmark.
+Historical case может по-прежнему использовать:
 
-Held-out grader был вручную проверен:
-
-```text
-_90 → FAIL
-_92 → PASS
+```toml
+workspace = "cases/matrix-all-matching/workspace"
 ```
 
-и текущий repository хранит hash-bound calibration certificate.
+Здесь Harness **не создаёт Git worktree автоматически**.
 
-Certificate привязан к grader/check definition.
-
-Если grader меняется:
-
-```text
-certificate invalid
-→ требуется explicit recalibration
-```
-
-Это снижает риск держать known-good implementation рядом с agent workspace.
+Это полезно, когда broken state существует только как frozen archive/snapshot, а не как удобный source repo commit.
 
 ---
 
-## 12. Benchmark certificate не является production dependency
+## 11.1. `prepare_workspace.py`
 
-Calibration certificate нужен только historical eval.
-
-Для production task known-good reference обычно отсутствует и не нужен.
-
----
-
-## 13. Local tool paths
-
-Task manifests не должны содержать пользовательские абсолютные пути.
-
-Machine-local override:
-
-```text
-harness.local.toml
-```
-
-Этот файл ignored.
-
-Default paths могут работать на текущей Windows layout, но не являются архитектурным contract.
-
----
-
-## 14. CWD-independent launch
-
-Надёжный запуск:
+Для copied frozen snapshot:
 
 ```bash
-./run cases/.../task.toml
+./py tools/prepare_workspace.py cases/.../workspace
 ```
 
-или:
+Он:
 
-```bash
-~/Tools/slivin-harness/run cases/.../task.toml
-```
+1. удаляет generated runtime caches;
+2. создаёт inner Git baseline, если его нет;
+3. добавляет local `.git/info/exclude` policy;
+4. проверяет clean status.
 
-Launcher сам определяет root.
-
-Не использовать:
-
-```bash
-python task_runner.py ...
-```
-
-из произвольного project subdirectory, потому что Python сначала ищет `task_runner.py` относительно current working directory.
-
----
-
-## 15. Archive/review hygiene
-
-В review/benchmark archive не должны попадать:
+Он больше **не удаляет**:
 
 ```text
-.env*
-.git/
-.harness_tmp/
-__pycache__/
-*.pyc
-.pytest_cache/
-.jest-cache*
-node_modules/
-runtime caches
+.venv
+venv
+env
+node_modules
 ```
 
-Если архив нужен для human audit, предпочтительно создавать его из explicit allowlist/diff либо отдельным packaging script, а не архивировать project root «как есть».
-
+Они лишь ignored baseline Git.
 
 ---
 
-## 16. Повторный historical trial: reset к baseline
+## 11.2. `.env` в static mode
 
-После успешного/неуспешного Agent run inner workspace обычно dirty.
+Default:
+
+```text
+real .env* → fail-fast
+```
+
+Opt-in:
+
+```bash
+./py tools/prepare_workspace.py WORKSPACE --allow-env
+```
+
+Файл останется доступен Agent и ignored Git.
+
+Это специально отличается от старого absolute ban.
+
+---
+
+# 12. Historical baseline reset
 
 Перед новым независимым trial:
 
@@ -361,10 +457,51 @@ rm -rf .harness_tmp
 git status --short
 ```
 
-Ожидается пустой status.
+Не делать новый baseline commit из candidate прошлого trial.
 
-`HEAD` здесь — inner baseline commit, созданный `prepare_workspace.py`.
+---
 
-Не использовать final candidate предыдущего trial как следующий baseline.
+# 13. Outer Harness Git
 
-Не делать новый baseline commit поверх candidate: это разрушит historical comparison.
+Harness repository version-controls только:
+
+```text
+Controller source
+docs
+manifests
+graders
+unit tests
+examples
+```
+
+Ignored:
+
+```text
+.workspaces/
+cases/**/workspace/
+runs/
+harness.local.toml
+```
+
+---
+
+# 14. CWD-independent launch
+
+Использовать:
+
+```bash
+./run task.toml
+```
+
+или absolute launcher path.
+
+Launchers больше не завязаны на `.venv` какого-либо project.
+
+Bootstrap order:
+
+```text
+SLIVIN_HARNESS_PYTHON
+→ python3
+→ python
+→ py -3
+```

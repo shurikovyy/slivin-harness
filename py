@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
-PYTHON="${SLIVIN_HARNESS_PYTHON:-$HOME/Documents/sa_icover/.venv/Scripts/python.exe}"
-exec "$PYTHON" "$@"
+
+if [[ -n "${SLIVIN_HARNESS_PYTHON:-}" ]]; then
+  exec "$SLIVIN_HARNESS_PYTHON" "$@"
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+  exec python3 "$@"
+fi
+
+if command -v python >/dev/null 2>&1; then
+  exec python "$@"
+fi
+
+if command -v py >/dev/null 2>&1; then
+  exec py -3 "$@"
+fi
+
+echo "Slivin Harness requires Python 3.11+. Set SLIVIN_HARNESS_PYTHON or put Python on PATH." >&2
+exit 127

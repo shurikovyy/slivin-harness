@@ -546,3 +546,80 @@ actual final diff
 ```
 
 до масштабирования orchestration.
+
+---
+
+# 19. D-032 и workspace usability redesign
+
+После documentation audit были объединены три связанных improvement:
+
+```text
+A. planned-vs-actual change surface
+B. machine/project path portability
+C. неудобный manual repository copy lifecycle
+```
+
+## D-032 implementation
+
+Controller теперь после каждого write turn сравнивает:
+
+```text
+actual Git diff paths
+vs
+Planner.candidate_paths
+```
+
+Unexpected path:
+
+```text
+record
+→ rollback только unexpected path
+→ read-only replan
+→ explicit revised candidate surface
+→ per-path trusted snapshot
+→ Implementer redo
+```
+
+Добавлены stdlib tests на tracked/untracked rollback и late pre-path-edit evidence.
+
+## Portable configuration
+
+Удалены hardcoded defaults на `sa_icover/.venv`, portable Node и Jest.
+
+Принято:
+
+```text
+Harness bootstrap Python → PATH/env
+harness.local.toml        → machine config
+projects.<name>            → source repo + toolchain
+```
+
+## Managed Git worktree
+
+Для ordinary project task repository больше не копируется в Harness `cases/`.
+
+Controller создаёт detached Git worktree из source HEAD.
+
+Heavy local dependencies остаются в source location, а executable paths задаются через project toolchain.
+
+## `.env`
+
+Absolute ban заменён explicit opt-in policy.
+
+Managed worktree:
+
+```toml
+copy_untracked = [".env"]
+```
+
+Static historical preparation:
+
+```text
+--allow-env
+```
+
+## Accepted result
+
+`result_mode=apply_to_source` позволяет после полного quality PASS применить binary candidate patch обратно в исходный working tree без commit/push.
+
+На момент записи source/unit self-check этого increment проходит в development environment. Windows + real App Server regression должен быть выполнен перед новым validated tag.

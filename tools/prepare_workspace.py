@@ -15,6 +15,9 @@ HARNESS_EXCLUDES = [
     ".mypy_cache/",
     ".ruff_cache/",
     "node_modules/",
+    ".venv/",
+    "venv/",
+    "env/",
     ".jest-cache*",
     "coverage/",
     "*.zip",
@@ -28,7 +31,6 @@ GENERATED_DIR_NAMES = {
     ".mypy_cache",
     ".ruff_cache",
     ".harness_tmp",
-    "node_modules",
     "coverage",
 }
 
@@ -101,6 +103,14 @@ def main() -> int:
         "--commit-message",
         default="harness benchmark baseline",
     )
+    parser.add_argument(
+        "--allow-env",
+        action="store_true",
+        help=(
+            "Allow real .env* files to remain visible to the agent. "
+            "They stay ignored and are not committed to the baseline."
+        ),
+    )
     args = parser.parse_args()
 
     workspace = args.workspace.expanduser().resolve()
@@ -110,14 +120,21 @@ def main() -> int:
     remove_generated(workspace)
 
     sensitive = find_sensitive_env_files(workspace)
-    if sensitive:
+    if sensitive and not args.allow_env:
         joined = "\n".join(
             f"  - {path.relative_to(workspace)}" for path in sensitive
         )
         raise RuntimeError(
-            "Refusing to prepare workspace while .env files are present. "
-            "Remove them from the benchmark copy first:\n" + joined
+            "Refusing to prepare workspace while .env files are present by default. "
+            "Remove them or rerun with --allow-env if you intentionally want the "
+            "agent to see them:\n" + joined
         )
+    if sensitive and args.allow_env:
+        for path in sensitive:
+            print(
+                "ENV_VISIBLE_TO_AGENT:",
+                path.relative_to(workspace),
+            )
 
     git_dir = workspace / ".git"
     if not git_dir.exists():

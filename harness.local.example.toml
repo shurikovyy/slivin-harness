@@ -1,9 +1,49 @@
-# Copy to harness.local.toml only if your paths differ from the defaults.
+# Copy this file to harness.local.toml and edit only machine-local values.
 # harness.local.toml is intentionally ignored by Git.
+#
+# Paths may use:
+#   ~
+#   environment variables such as %USERPROFILE% / $HOME
+#   {home}
+#   {harness_root}
+#   {project_root} inside a project profile/toolchain
+#
+# Bare executable names such as "node" or "codex" are resolved through PATH.
 
 [codex]
-command = "~/Tools/codex-cli/node_modules/.bin/codex.cmd"
+# Use a bare executable if Codex is on PATH, otherwise an absolute/user-local path.
+command = "codex"
 
+[workspace]
+# Managed project worktrees are created here. They contain only tracked project
+# files plus explicitly exposed local files; .venv/node_modules do not need copying.
+root = "~/.slivin-harness/workspaces"
+
+# Global tools can be shared by historical/static cases.
 [toolchain]
-node = "~/Tools/node/node.exe"
-jest = "~/Documents/sa_icover/node_modules/jest/bin/jest.js"
+node = "node"
+# Example if a historical case needs Jest from a particular installation:
+# jest = "C:/path/to/project/node_modules/jest/bin/jest.js"
+
+# Example reusable project profile.
+[projects.example]
+repo = "~/Documents/example-project"
+base_ref = "HEAD"
+require_clean_source = true
+# keep_worktree      -> source working tree is not touched; candidate.patch is saved.
+# apply_to_source    -> after full Harness PASS, apply candidate diff to the source
+#                       working tree if it is still clean and on the same HEAD.
+result_mode = "apply_to_source"
+
+[projects.example.toolchain]
+# Target-project runtime is intentionally separate from the Python running Harness.
+project_python = "{project_root}/.venv/Scripts/python.exe"
+# A bare executable is PATH-resolved; use an absolute path if needed.
+node = "node"
+jest = "{project_root}/node_modules/jest/bin/jest.js"
+
+[projects.example.workspace]
+# Optional opt-in visibility of untracked/ignored local files in the disposable
+# worktree. They are copied and ignored, never included in candidate.patch.
+# The agent can read their contents, so only list files you intentionally expose.
+copy_untracked = [".env"]

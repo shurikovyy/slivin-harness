@@ -1,0 +1,36 @@
+version = 1
+
+task_id = "EXAMPLE_PROJECT_TASK"
+
+# Resolves through [projects.example] in harness.local.toml.
+project = "example"
+workspace_mode = "git_worktree"
+base_ref = "HEAD"
+# Optional manifest override. Usually keep this in the project profile.
+# result_mode = "apply_to_source"
+
+risk = "medium"
+max_fix_cycles = 3
+max_replan_cycles = 2
+max_change_surface_cycles = 2
+max_plan_validation_retries = 2
+require_clean_git = true
+
+prompt = """
+Describe the observable engineering task here.
+State required preservation behavior and important scope constraints.
+Do not encode a known implementation answer.
+"""
+
+[[checks]]
+name = "Git diff check"
+feedback = "repair"
+command = ["git", "diff", "--check"]
+timeout_seconds = 30
+
+# Example target-project Python check:
+# [[checks]]
+# name = "Focused backend tests"
+# feedback = "repair"
+# command = ["{project_python}", "-m", "pytest", "path/to/test.py", "-q"]
+# timeout_seconds = 180

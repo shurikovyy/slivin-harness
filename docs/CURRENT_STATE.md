@@ -78,45 +78,50 @@ Matrix
 
 ---
 
-# 3. Текущий tested environment
+# 3. Текущий validation status и environment
 
-Проверено на:
+Последний **полностью подтверждённый Agent historical run**:
 
 ```text
 Windows 10 build 19045
 Git Bash / MINGW64
 Codex CLI 0.148.0
-Slivin Harness runtime lineage 0.4.6
-Python 3.11-compatible runtime
-portable Node
-project-external Jest
+Slivin Harness 0.4.6 lineage
 ```
 
-Основные default paths исходной Windows-машины:
+Текущая source revision после этого milestone содержит следующий development increment:
 
 ```text
-Codex:
-~/Tools/codex-cli/node_modules/.bin/codex.cmd
-
-Node:
-~/Tools/node/node.exe
-
-Harness/project Python launcher default:
-~/Documents/sa_icover/.venv/Scripts/python.exe
-
-Jest:
-~/Documents/sa_icover/node_modules/jest/bin/jest.js
+D-032 machine-enforced change-surface reconciliation
+portable project profiles/toolchain
+managed Git worktrees
+opt-in .env exposure
+apply_to_source result mode
 ```
 
-Machine-local differences должны идти через:
+Для этих новых механизмов stdlib `self_check`/unit tests проходят в development environment, но перед новым tag нужны локальные Windows checks:
+
+1. `./py tools/self_check.py`;
+2. historical Matrix regression run;
+3. managed-worktree smoke на реальном project profile;
+4. проверка `apply_to_source` на безопасной test task.
+
+После этого CURRENT_STATE нужно перевести с «development increment» на новый validated milestone.
+
+Machine-specific paths больше не являются Harness contract. Они живут в:
 
 ```text
 harness.local.toml
-SLIVIN_HARNESS_PYTHON
+SLIVIN_HARNESS_PYTHON   # только bootstrap Controller Python
 SLIVIN_CODEX_CMD
 ```
 
-а не через committed task manifests.
+Project-specific dependencies задаются через:
+
+```text
+[projects.<name>]
+[projects.<name>.toolchain]
+```
 
 ---
 
@@ -152,130 +157,78 @@ Production writes также не являются частью текущего
 
 ---
 
-# 5. Самый важный текущий незакрытый hardening gap
+# 5. D-032 hardening — implemented, awaiting Windows/full regression
 
-## Planned candidate paths не reconciled с actual final diff
+Historical origin остаётся тем же: successful Matrix Implementer корректно нашёл Distribution consumer, но изменил files вне initial `candidate_paths`, поэтому trusted pre-edit evidence для них отсутствовал.
 
-В успешном Matrix plan были объявлены:
-
-```text
-static/js/components/datatable/selection/core.js
-static/js/components/datatable/selection/bulk_edit.js
-static/js/components/datatable/__tests__/selection-across-pages.test.cjs
-static/js/components/datatable/__tests__/bulk-edit-filter-scope.test.cjs
-```
-
-Pre-edit baseline snapshot был снят только для них.
-
-Во время implementation Agent самостоятельно обнаружил Distribution consumer и дополнительно изменил:
+Текущий Controller теперь механически enforce'ит:
 
 ```text
-static/js/distribution/index.js
-static/js/distribution/__tests__/selection-stage.test.cjs
+actual changed paths ⊆ plan.candidate_paths
 ```
 
-Это было правильное product изменение, но Controller:
-
-- не потребовал replan до edit;
-- не потребовал расширить `candidate_paths`;
-- не имел pre-edit snapshot для этих поздно добавленных paths;
-- не сравнил final changed paths с planned candidate surface.
-
-### Почему это важно
-
-Сейчас `candidate_paths` — evidence/planning declaration, но не mechanical scope boundary.
-
-То есть возможно:
+Если Agent/repair создаёт незапланированный path:
 
 ```text
-Planner planned A/B
-Implementer changed A/B/C
-Evaluator accepted C
+record
+→ rollback только unexpected path к baseline
+→ read-only replan
+→ required path явно добавляется в candidate_paths
+→ trusted pre-path-edit snapshot
+→ Implementer повторяет изменение
 ```
 
-без trusted evidence о pre-edit C.
+Если revised plan исключает ранее changed path, он возвращается к baseline.
 
-### Требуемое общее решение
+Gate повторяется после deterministic checks и перед финальным PASS.
 
-Перед тем как считать evidence layer полностью hardened, нужен controller-level reconciliation.
-
-Минимальный contract:
+Snapshot различает:
 
 ```text
-actual changed path ∉ planned candidate_paths
-→ нельзя молча продолжать
+captured_before_first_edit
+captured_before_path_edit
 ```
 
-Возможные корректные routing:
+То есть late consumer может иметь честное per-path pre-edit evidence без ложного утверждения, что task целиком всё ещё pre-edit.
 
-```text
-1. Implementer обнаруживает новый required path ДО edit
-   → explicit change-surface expansion
-   → Controller records/snapshots path while still pre-edit
-   → continue
+Local unit tests покрывают:
 
-или
+- detection tracked/untracked unexpected paths;
+- rollback только unplanned paths;
+- preservation planned edits;
+- late per-path baseline snapshot.
 
-2. path уже изменён
-   → REPLAN_REQUIRED / evidence downgrade
-   → snapshot честно маркируется candidate-state-at-discovery,
-     но не "pre-edit"
-   → Evaluator обязан учитывать потерю pre-edit evidence
-```
-
-Не решать это простым prompt:
-
-```text
-"не меняй другие файлы"
-```
-
-Нужен mechanical diff-to-plan reconciliation.
-
-### Priority
-
-```text
-HIGH для evidence integrity
-не material defect финального Matrix product candidate
-```
-
-Перед масштабированием на Git task supervisor это желательно закрыть.
+**Status:** implementation complete, user Windows/historical validation pending.
 
 ---
 
 # 6. Другие известные незакрытые capability gaps
 
-## 6.1. Target-project Python environment
+## 6.1. Target-project runtime
 
-В успешном Matrix trial Implementer хотел проверить backend token test, но:
-
-```text
-workspace не содержал .venv
-system Python не содержал Django
-```
-
-Backend code при этом не менялся, поэтому это не заблокировало конкретный task.
-
-Но для будущих backend/Django задач нужен explicit concept:
+Архитектурное разделение теперь реализовано:
 
 ```text
-Harness controller Python
+Controller Python
 !=
-target-project Python/runtime
+target-project Python/toolchain
 ```
 
-Текущий `{python}` — `sys.executable` Harness process.
+Harness bootstrap Python берётся из environment/PATH и нужен только для Controller.
 
-Желательное развитие:
+Project profile может объявить:
 
-```text
-project_python
-project_pytest
-project_env / test-only env
+```toml
+[projects.my_project.toolchain]
+project_python = "{project_root}/.venv/Scripts/python.exe"
+project_pytest = "..."
+node = "..."
+jest = "{project_root}/node_modules/jest/bin/jest.js"
 ```
 
-как trusted toolchain capabilities.
+Это устраняет прежнюю привязку Harness к `.venv` конкретного repository.
 
-Не добавлять их до реальной backend task без необходимости, но новый чат должен знать, что gap существует.
+Открытый вопрос остаётся только capability-level: конкретная backend task должна явно включить нужный `project_python`/checks; Harness не пытается автоматически угадать project runtime.
 
 ---
 
@@ -541,20 +494,19 @@ calibration certificate invalid
 Состояние на момент этой записи:
 
 ```text
-1. Quality-core historical milestone           DONE
-2. Knowledge-base guide                        DONE
-3. Architecture/decision/history docs          DONE
-4. Operational README                          DONE
-5. Context gap audit                           THIS FILE
-6. Planned-vs-actual change-surface hardening  RECOMMENDED NEXT CORE FIX
-7. GitHub Issues / task orchestration           NEXT USABILITY LAYER
-8. Additional historical eval corpus            IMPORTANT
-9. Browser/runtime capability                   AS TASKS REQUIRE
-10. External typed observation/MCP              LATER
-11. PR/CI publication                           AFTER task orchestration/quality evidence
+1. Quality-core historical milestone                DONE (0.4.6 lineage)
+2. Knowledge-base / architecture / operational docs DONE
+3. Context gap audit                                DONE
+4. D-032 change-surface reconciliation              IMPLEMENTED; WINDOWS REGRESSION PENDING
+5. Portable project profiles / managed worktree     IMPLEMENTED; WINDOWS SMOKE PENDING
+6. GitHub Issues / task orchestration                NEXT USABILITY LAYER AFTER VALIDATION
+7. Additional historical eval corpus                 IMPORTANT
+8. Browser/runtime capability                        AS TASKS REQUIRE
+9. External typed observation/MCP                    LATER
+10. PR/CI publication                                AFTER task orchestration/quality evidence
 ```
 
-Если GitHub Issues design обсуждается до пункта 6, не позволять tracker layer менять Definition of Done или Git trust boundary.
+Не начинать GitHub task supervisor до выполнения локальной validation текущего increment: tracker не должен строиться поверх непроверенного workspace/publication foundation.
 
 ---
 

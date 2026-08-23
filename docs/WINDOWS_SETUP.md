@@ -15,25 +15,19 @@ portable Node
 project-local Python venv
 ```
 
-Типичные локальные пути исходной машины:
+Исторически на первой машине Codex/Node/project venv были user-local installations,
+но их конкретные filesystem paths **не являются Harness contract**.
+
+Текущая конфигурация:
 
 ```text
-Codex:
-~/Tools/codex-cli/node_modules/.bin/codex.cmd
-
-Node:
-~/Tools/node/node.exe
-
-Project Python:
-~/Documents/sa_icover/.venv/Scripts/python.exe
-
-Jest:
-~/Documents/sa_icover/node_modules/jest/bin/jest.js
+Harness bootstrap Python → environment/PATH
+Codex                  → local config/environment/PATH
+project repository     → [projects.<name>].repo
+project Python/Node/Jest → [projects.<name>.toolchain]
 ```
 
-Harness не должен требовать изменения global `PATH`.
-
-Machine-specific пути на новой машине задаются через `harness.local.toml`.
+Harness не требует изменения global `PATH`: absolute user-local paths можно хранить в ignored `harness.local.toml`.
 
 ---
 
@@ -138,21 +132,20 @@ PYTHONDONTWRITEBYTECODE=1
 
 Outer Harness repo игнорирует task workspaces целиком.
 
-Inner disposable project Git repo получает локальное правило:
-
-```text
-.harness_tmp/
-```
-
-через:
+Для static historical inner repo `.harness_tmp/` добавляется через:
 
 ```text
 .git/info/exclude
 ```
 
-Это не меняет historical project baseline.
+Для managed linked Git worktree используется worktree-specific:
 
-`prepare_workspace.py` делает это автоматически.
+```text
+.harness_git_excludes
+core.excludesFile=<workspace>/.harness_git_excludes
+```
+
+Это позволяет не менять project `.gitignore`.
 
 ---
 
@@ -360,19 +353,21 @@ commit.
 ./py tools/self_check.py
 ```
 
-Проверить local config:
+Создать local config:
 
 ```bash
 cp harness.local.example.toml harness.local.toml
-# только если default paths не подходят
+# заполнить Codex/project/toolchain paths этой машины
 ```
 
-Проверить Codex:
+Проверить Codex тем executable, который указан в config, либо через PATH:
 
 ```bash
-~/Tools/codex-cli/node_modules/.bin/codex.cmd --version
-~/Tools/codex-cli/node_modules/.bin/codex.cmd login status
+codex --version
+codex login status
 ```
+
+Если Codex не в PATH — вызвать configured absolute path напрямую.
 
 Перед использованием новой версии Codex рекомендуется повторить:
 
@@ -453,3 +448,28 @@ Protocol/schema и Windows sandbox behavior считаются version-sensitive
 8. process death/heartbeat behavior.
 
 Не переносить старые protocol assumptions на новую версию без smoke.
+
+
+---
+
+## 17. Managed Git worktree на Windows
+
+Обычные project tasks теперь создают linked Git worktree автоматически.
+
+Git metadata остаётся в source repository, а task directory содержит `.git` file.
+
+Чтобы иметь worktree-local ignore policy, Harness один раз включает:
+
+```text
+extensions.worktreeConfig=true
+```
+
+и задаёт:
+
+```text
+core.excludesFile=<task-worktree>/.harness_git_excludes
+```
+
+Это проверяется `tools/self_check.py` на temporary Git repository без зависимости от `sa_icover`.
+
+Перед новым release/tag всё равно нужен smoke на реальной Windows-машине, потому что файловые locks, path syntax и Codex sandbox остаются platform-sensitive.

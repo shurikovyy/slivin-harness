@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+
+### D-032 and managed-project workspace increment
+
+- Enforced `actual changed paths ⊆ Planner.candidate_paths` for medium/high-risk tasks.
+- Unexpected changed paths are recorded, rolled back to task baseline, replanned and
+  snapshotted before the Implementer may re-apply a required change.
+- Added per-path evidence (`captured_before_path_edit`) for late discovered consumers.
+- Added final change-surface guard before task PASS.
+- Removed project-specific hardcoded Python/Node/Jest defaults from Harness source.
+- Added portable machine/project profiles in ignored `harness.local.toml` with
+  `{project_root}` toolchain expansion.
+- Decoupled Harness bootstrap Python from target-project virtualenv.
+- Added managed detached Git-worktree mode for ordinary project tasks.
+- Added opt-in `copy_untracked` local file exposure (including `.env` when explicitly
+  allowed) without including those files in candidate patches.
+- Added `keep_worktree` and `apply_to_source` result modes; `apply_to_source` applies
+  the accepted binary candidate diff to the original clean source working tree without
+  commit/push/branch changes.
+- `prepare_workspace.py` no longer deletes `.venv`/`node_modules`; static historical
+  `.env` visibility can be opted into with `--allow-env`.
+- Added stdlib tests for D-032 rollback/evidence semantics and managed worktree/apply.
+
+Validation status: local `tools/self_check.py` passes in the development environment;
+Windows/App Server historical regression is required before tagging this increment as a
+new validated milestone.
+
 ### Documentation baseline
 
 - Added architecture documentation under `docs/`.

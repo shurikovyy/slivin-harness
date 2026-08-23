@@ -26,7 +26,7 @@ DONE
 
 Главный принцип:
 
-> Сообщение агента `PASS` не является Definition of Done.  
+> Сообщение агента `PASS` не является Definition of Done.
 > Задача считается завершённой только после внешних checks/evidence и независимой evaluation.
 
 ---
@@ -147,9 +147,7 @@ Repository **не хранит**:
 
 # 4. Требования
 
-## Обязательно
-
-### Git
+## Git
 
 Должен быть доступен из shell:
 
@@ -157,14 +155,17 @@ Repository **не хранит**:
 git --version
 ```
 
-### Python 3.11+
+## Python 3.11+
 
-Harness использует стандартный `tomllib`, поэтому Python должен быть не старше 3.11.
+Harness core не зависит от Python target project и использует только stdlib.
 
-На текущей Windows-машине launcher по умолчанию использует:
+Launchers `run` / `py` выбирают Python так:
 
 ```text
-~/Documents/sa_icover/.venv/Scripts/python.exe
+SLIVIN_HARNESS_PYTHON
+→ python3 из PATH
+→ python из PATH
+→ py -3
 ```
 
 Проверка:
@@ -173,42 +174,54 @@ Harness использует стандартный `tomllib`, поэтому Py
 ./py --version
 ```
 
-### Codex CLI
-
-Текущий default:
-
-```text
-~/Tools/codex-cli/node_modules/.bin/codex.cmd
-```
-
-Проверка:
+Если Python не находится автоматически:
 
 ```bash
-~/Tools/codex-cli/node_modules/.bin/codex.cmd --version
-~/Tools/codex-cli/node_modules/.bin/codex.cmd login status
+export SLIVIN_HARNESS_PYTHON="C:/path/to/python.exe"
 ```
 
-### Node
-
-Default:
+Важно:
 
 ```text
-~/Tools/node/node.exe
+Python Harness Controller
+!=
+Python target project
 ```
 
-### Jest
+Project runtime задаётся отдельно через project profile/toolchain.
 
-Default:
+## Codex CLI
+
+Harness больше не содержит machine-specific default path к Codex.
+
+Разрешение:
 
 ```text
-~/Documents/sa_icover/node_modules/jest/bin/jest.js
+SLIVIN_CODEX_CMD
+→ [codex].command в harness.local.toml
+→ codex.cmd / codex из PATH
 ```
+
+## Node / Jest / project Python
+
+Глобальных hardcoded путей нет.
+
+Tools задаются:
+
+```text
+[toolchain]                         # общие/static benchmark tools
+[projects.<name>.toolchain]        # tools конкретного project
+[toolchain] task manifest          # task-specific override
+```
+
+Bare executable names (`node`, `python`) ищутся через PATH.
+Paths могут использовать `{project_root}`.
 
 ---
 
 # 5. Windows setup
 
-Подробная история и troubleshooting:
+Подробности и история sandbox troubleshooting:
 
 ```text
 docs/WINDOWS_SETUP.md
@@ -217,20 +230,19 @@ docs/WINDOWS_SETUP.md
 Ключевые моменты:
 
 - administrator access не требуется;
-- Codex CLI может быть user-local;
 - global `PATH` менять не обязательно;
 - Harness использует unelevated Windows sandbox;
-- task temp направляется внутрь `.harness_tmp`;
+- writable temp остаётся внутри task workspace;
 - Git Bash/MSYS имеет отдельные нюансы;
-- Windows file mode и EOL — разные проблемы.
+- EOL и executable file mode — разные Git properties.
 
-## Рекомендуемая локальная настройка Git на Windows
+Рекомендуемая локальная настройка Git на Windows:
 
 ```bash
 git config core.filemode false
 ```
 
-При этом committed shell launchers `run` и `py` должны оставаться executable в Git index (`100755`), чтобы Linux/macOS clones получали правильный mode.
+Committed shell launchers `run` и `py` при этом остаются `100755` в Git index.
 
 ---
 
@@ -241,54 +253,81 @@ git clone <repository-url> ~/Tools/slivin-harness
 cd ~/Tools/slivin-harness
 ```
 
-## 6.1. Проверить Python launcher
-
-```bash
-./py --version
-```
-
-Если default Python не существует, временно:
-
-```bash
-export SLIVIN_HARNESS_PYTHON="/path/to/python"
-```
-
-или в Git Bash на Windows:
-
-```bash
-export SLIVIN_HARNESS_PYTHON="$HOME/Documents/sa_icover/.venv/Scripts/python.exe"
-```
-
-`SLIVIN_HARNESS_PYTHON` используется только launchers `run` / `py`.
-
----
-
-## 6.2. Настроить machine-local Codex/Node/Jest paths
-
-Если default paths подходят — ничего делать не нужно.
-
-Если отличаются:
+## 6.1. Создать machine-local configuration
 
 ```bash
 cp harness.local.example.toml harness.local.toml
 ```
 
-Пример:
+`harness.local.toml` ignored Git и является **единственным основным местом для machine/project-specific paths**.
+
+Пример общей части:
 
 ```toml
 [codex]
-command = "~/Tools/codex-cli/node_modules/.bin/codex.cmd"
+command = "codex" # либо абсолютный user-local path
+
+[workspace]
+root = "~/.slivin-harness/workspaces"
 
 [toolchain]
-node = "~/Tools/node/node.exe"
-jest = "~/Documents/sa_icover/node_modules/jest/bin/jest.js"
+node = "node"
 ```
 
-`harness.local.toml` не коммитится.
+Пути поддерживают:
 
----
+```text
+~
+$HOME / %USERPROFILE%
+{home}
+{harness_root}
+{project_root}    # внутри project profile/toolchain
+```
 
-## 6.3. Запустить self-check
+## 6.2. Добавить project profile
+
+Например:
+
+```toml
+[projects.my_project]
+repo = "~/Documents/my-project"
+base_ref = "HEAD"
+require_clean_source = true
+result_mode = "apply_to_source"
+
+[projects.my_project.toolchain]
+project_python = "{project_root}/.venv/Scripts/python.exe"
+node = "C:/path/to/node.exe" # или "node", если он в PATH
+jest = "{project_root}/node_modules/jest/bin/jest.js"
+
+[projects.my_project.workspace]
+copy_untracked = [".env"]
+```
+
+Это заменяет hardcoded project paths в Harness source/manifests.
+
+### `copy_untracked`
+
+Opt-in список local/ignored paths, которые копируются в disposable worktree и доступны Agent.
+
+Например:
+
+```toml
+copy_untracked = [".env"]
+```
+
+Они:
+
+- не попадают в candidate diff/patch;
+- не копируются обратно в source repo;
+- не требуют добавления в project `.gitignore`;
+- **доступны для чтения Agent/model**.
+
+Harness исключает их из Git candidate/patch, но не может обещать, что Agent никогда не выведет содержимое в собственный tool output/transcript. Поэтому список должен быть осознанным. По умолчанию `.env` не экспонируется.
+
+`.venv` и `node_modules` обычно сюда добавлять не нужно: project toolchain может ссылаться на них прямо в source repository.
+
+## 6.3. Проверить Harness
 
 ```bash
 ./py tools/self_check.py
@@ -300,20 +339,159 @@ jest = "~/Documents/sa_icover/node_modules/jest/bin/jest.js"
 HARNESS_SELF_CHECK_PASS
 ```
 
-`self_check.py`:
+Self-check:
 
-- компилирует `task_runner.py`;
-- компилирует App Server adapter;
-- компилирует Planner;
-- компилирует Evaluator;
-- парсит committed Matrix manifest;
-- проверяет calibration certificate path.
-
-Это **не полный integration test Harness**, а быстрый source/config sanity check.
+- компилирует Controller/App Server/Planner/Evaluator/workspace manager;
+- парсит historical Matrix manifest;
+- проверяет calibration certificate;
+- запускает stdlib unit tests D-032 и managed Git-worktree lifecycle.
 
 ---
 
-# 7. Первый historical Matrix benchmark
+# 7. Работа с реальным проектом без копирования repository
+
+Для обычной разработки **не нужно** копировать repository в `cases/.../workspace` и не нужно запускать `prepare_workspace.py`.
+
+Используется Git worktree.
+
+## 7.1. Task manifest
+
+Пример:
+
+```toml
+version = 1
+
+task_id = "MY_PROJECT_TASK"
+project = "my_project"
+workspace_mode = "git_worktree"
+base_ref = "HEAD"
+
+risk = "medium"
+max_fix_cycles = 3
+max_replan_cycles = 2
+max_change_surface_cycles = 2
+max_plan_validation_retries = 2
+require_clean_git = true
+
+prompt = """
+Описание observable engineering task.
+"""
+
+[[checks]]
+name = "Git diff check"
+feedback = "repair"
+command = ["git", "diff", "--check"]
+```
+
+Готовый template:
+
+```text
+examples/project-task.example.toml
+```
+
+## 7.2. Что делает Harness автоматически
+
+Для `project = "..."`:
+
+```text
+source repository
+      │
+      ├── .venv / node_modules / .env остаются на месте
+      │
+      └── Git tracked HEAD
+              ↓
+      disposable detached Git worktree
+              ↓
+      Planner / Implementer / checks / Evaluator
+```
+
+Worktree создаётся в:
+
+```text
+[workspace].root
+```
+
+и содержит:
+
+- tracked project files;
+- только явно перечисленные `copy_untracked` files;
+- task-local `.harness_tmp`.
+
+Нет этапа:
+
+```text
+copy repo
+→ delete .venv/node_modules
+→ run
+→ copy result back вручную
+```
+
+## 7.3. Result modes
+
+### `keep_worktree`
+
+Source working tree не меняется.
+
+Harness сохраняет:
+
+```text
+runs/.../candidate.patch
+```
+
+и печатает путь к retained worktree.
+
+### `apply_to_source`
+
+После полного:
+
+```text
+checks PASS
+Fresh Evaluator PASS
+held-out/runtime PASS (если есть)
+```
+
+Controller автоматически применяет candidate patch к исходному working tree.
+
+Перед apply он повторно проверяет:
+
+```text
+source HEAD не изменился
+source tracked working tree не стал dirty
+```
+
+Configured `copy_untracked` paths (например `.env`) не блокируют apply и никогда не входят в patch.
+
+Результат:
+
+```text
+Agent changes появляются в исходном project working tree
+```
+
+но Harness **не делает**:
+
+```text
+git commit
+git push
+branch switch
+PR
+```
+
+Это отдельный future publication/orchestration layer.
+
+## 7.4. Почему worktree лучше direct-edit source repo
+
+Сохраняются одновременно:
+
+- clean immutable task baseline;
+- isolation от случайного user edit;
+- нормальный `git diff`;
+- возможность безопасного rejected candidate;
+- отсутствие тяжёлого копирования `.venv/node_modules`;
+- автоматическое возвращение accepted diff в source tree.
+
+---
+
+# 8. Первый historical Matrix benchmark
 
 Текущий repository содержит один основной historical case:
 
@@ -323,7 +501,7 @@ cases/matrix-all-matching/
 
 Полный project snapshot намеренно не коммитится.
 
-## 7.1. Скопировать broken baseline
+## 8.1. Скопировать broken baseline
 
 Содержимое исторического `_90` поместить непосредственно в:
 
@@ -346,7 +524,7 @@ workspace/
 
 ```text
 workspace/
-└── sa_icover_90/
+└── project_snapshot_90/
     ├── static/
     └── ...
 ```
@@ -355,33 +533,30 @@ workspace/
 
 ---
 
-## 7.2. Удалить реальные secrets
+## 8.2. Решить, должен ли Agent видеть `.env`
 
-Agent workspace не должен содержать:
+Для historical/static preparation безопасный default остаётся fail-closed:
 
-```text
-.env
-.env.local
-.env.prod
-private keys
-credentials
+```bash
+./py tools/prepare_workspace.py WORKSPACE
+# real .env* → stop
 ```
 
-Важно:
+Если для конкретного benchmark вы осознанно разрешаете Agent читать `.env`:
 
-> `.gitignore` не защищает secret от чтения агентом.
-
-Разрешённые template-файлы:
-
-```text
-.env.example
-.env.sample
-.env.template
+```bash
+./py tools/prepare_workspace.py WORKSPACE --allow-env
 ```
+
+Файл будет ignored baseline Git и не попадёт в candidate diff, но его содержимое
+будет доступно Agent/model.
+
+Для обычного managed-project режима предпочтительнее не копировать весь repository,
+а использовать `[projects.<name>.workspace].copy_untracked = [".env"]`.
 
 ---
 
-## 7.3. Подготовить inner baseline repository
+## 8.3. Подготовить inner baseline repository
 
 ```bash
 ./py tools/prepare_workspace.py \
@@ -390,8 +565,8 @@ credentials
 
 Скрипт:
 
-1. удаляет generated caches;
-2. блокирует реальные `.env*`;
+1. удаляет только generated caches/runtime temp;
+2. по умолчанию блокирует реальные `.env*`, либо разрешает их через `--allow-env`;
 3. создаёт inner Git repo, если `.git` отсутствует;
 4. задаёт local baseline author;
 5. добавляет Harness runtime patterns в inner `.git/info/exclude`;
@@ -419,6 +594,7 @@ cases/matrix-all-matching/workspace/.git
 
 ```bash
 --commit-message "..."
+--allow-env
 ```
 
 Default:
@@ -437,7 +613,7 @@ harness benchmark baseline
 
 ### Важная особенность
 
-`prepare_workspace.py` удаляет generated/runtime directories, включая:
+`prepare_workspace.py` удаляет только generated/runtime cache directories, например:
 
 ```text
 __pycache__
@@ -445,18 +621,19 @@ __pycache__
 .mypy_cache
 .ruff_cache
 .harness_tmp
-node_modules
 coverage
 .jest-cache*
 ```
 
-Это сделано для disposable historical workspace.
+`.venv`, `venv`, `env` и `node_modules` больше не удаляются этим script. Они
+добавляются в inner exclude policy и не попадают в historical baseline commit.
 
-Если конкретная реальная задача требует **workspace-local `node_modules`**, не применять preparation script механически без понимания последствий. Текущий Matrix benchmark использует внешний trusted Node/Jest toolchain.
+Для обычной разработки этот script вообще не нужен: managed Git-worktree mode
+создаёт isolated workspace напрямую из source Git repository.
 
 ---
 
-## 7.4. Проверить baseline вручную
+## 8.4. Проверить baseline вручную
 
 ```bash
 cd cases/matrix-all-matching/workspace
@@ -477,7 +654,7 @@ cd ~/Tools/slivin-harness
 
 ---
 
-## 7.5. Запустить benchmark
+## 8.5. Запустить benchmark
 
 Из Harness root:
 
@@ -496,7 +673,7 @@ cd ~/Tools/slivin-harness
 
 ---
 
-# 8. Почему нужно использовать `run`
+# 9. Почему нужно использовать `run`
 
 Ненадёжный запуск:
 
@@ -534,7 +711,7 @@ can't open file ... task_runner.py
 
 ---
 
-# 9. Launchers
+# 10. Launchers
 
 ## `run`
 
@@ -550,16 +727,19 @@ Git Bash / Linux/macOS-style launcher.
 <python> <harness-root>/task_runner.py <args>
 ```
 
-Default Python:
+Python bootstrap order:
 
 ```text
-~/Documents/sa_icover/.venv/Scripts/python.exe
+SLIVIN_HARNESS_PYTHON
+→ python3
+→ python
+→ py -3
 ```
 
-Override:
+Explicit override:
 
 ```bash
-export SLIVIN_HARNESS_PYTHON="/path/to/python"
+export SLIVIN_HARNESS_PYTHON="C:/path/to/python.exe"
 ```
 
 ---
@@ -576,13 +756,11 @@ run.cmd cases\matrix-all-matching\task.toml
 
 ```text
 %SLIVIN_HARNESS_PYTHON%
+→ py -3
+→ python
 ```
 
-или default:
-
-```text
-%USERPROFILE%\Documents\sa_icover\.venv\Scripts\python.exe
-```
+Project `.venv` не является bootstrap dependency Harness.
 
 ---
 
@@ -609,7 +787,7 @@ Windows `cmd.exe` equivalent `py`.
 
 ---
 
-# 10. `task_runner.py`
+# 11. `task_runner.py`
 
 Главный Controller.
 
@@ -630,20 +808,24 @@ task_runner.py MANIFEST
 
 ---
 
-# 11. Task manifest
+# 12. Task manifest
 
-Минимальная структура:
+Есть два workspace mode.
+
+### Managed project task — рекомендуемый для обычной разработки
 
 ```toml
 version = 1
 
 task_id = "MY_TASK"
-workspace = "cases/my-task/workspace"
+project = "my_project"
+workspace_mode = "git_worktree"
+base_ref = "HEAD"
 
 risk = "medium"
-
 max_fix_cycles = 3
 max_replan_cycles = 2
+max_change_surface_cycles = 2
 max_plan_validation_retries = 2
 require_clean_git = true
 
@@ -654,17 +836,21 @@ prompt = """
 [[checks]]
 name = "Git diff check"
 feedback = "repair"
-command = [
-    "git",
-    "diff",
-    "--check",
-]
+command = ["git", "diff", "--check"]
 timeout_seconds = 30
 ```
 
+### Static workspace — historical/fixture mode
+
+```toml
+workspace = "cases/my-task/workspace"
+```
+
+Static mode не создаёт worktree автоматически и сохраняется для historical eval cases.
+
 ---
 
-# 12. Основные manifest-поля
+# 13. Основные manifest-поля
 
 ## `version`
 
@@ -692,19 +878,64 @@ runs/<task_id>/<timestamp>/
 
 ---
 
+## `project`
+
+Имя machine-local project profile из `harness.local.toml`.
+
+```toml
+project = "my_project"
+```
+
+При наличии `project` и отсутствии `workspace` Harness создаёт managed Git worktree.
+
+---
+
+## `workspace_mode`
+
+Для project mode сейчас поддерживается:
+
+```toml
+workspace_mode = "git_worktree"
+```
+
+Это default при `project = "..."`.
+
+---
+
+## `base_ref`
+
+Git ref, из которого создаётся detached worktree. Default:
+
+```toml
+base_ref = "HEAD"
+```
+
+Для `result_mode = "apply_to_source"` ref должен разрешаться в текущий source `HEAD`.
+
+---
+
+## `result_mode`
+
+Можно задать в task manifest либо в `[projects.<name>]` local profile:
+
+```text
+keep_worktree
+apply_to_source
+```
+
+`apply_to_source` применяется только после полного Harness PASS и не делает commit.
+
+---
+
 ## `workspace`
 
-Путь к task workspace.
-
-Относительный путь вычисляется от Harness root.
-
-Пример:
+Legacy/static workspace path для historical/fixture mode.
 
 ```toml
 workspace = "cases/matrix-all-matching/workspace"
 ```
 
-Можно использовать абсолютный путь.
+Если задан `workspace`, managed project worktree не создаётся.
 
 ---
 
@@ -769,6 +1000,22 @@ Default:
 
 ---
 
+## `max_change_surface_cycles`
+
+Максимум циклов machine-enforced reconciliation:
+
+```text
+actual changed paths outside candidate_paths
+→ rollback unexpected paths
+→ Planner replan
+→ path-local baseline snapshot
+→ Implementer reapply
+```
+
+По умолчанию равен `max_replan_cycles`, но счётчик отдельный: обнаружение нового material consumer не расходует budget Fresh Evaluator → `REPLAN_REQUIRED`.
+
+---
+
 ## `max_plan_validation_retries`
 
 Сколько раз Planner может пересобрать invalid structured artifact после Controller validation failure.
@@ -808,7 +1055,7 @@ true
 
 ---
 
-# 13. Explicit skills
+# 14. Explicit skills
 
 Manifest может содержать:
 
@@ -836,7 +1083,7 @@ skill definitely auto-used by model
 
 ---
 
-# 14. Checks
+# 15. Checks
 
 Каждый check:
 
@@ -881,7 +1128,7 @@ HARNESS_HELDOUT_FAIL
 
 ---
 
-# 15. Command placeholders
+# 16. Command placeholders
 
 В `command` доступны:
 
@@ -930,25 +1177,26 @@ some_tool = "/absolute/path/to/tool"
 
 ---
 
-# 16. Toolchain precedence
+# 17. Toolchain precedence
 
 Итоговый toolchain строится:
 
 ```text
-built-in defaults
+[toolchain] global local config
     ↓
-harness.local.toml
+[projects.<name>.toolchain]
     ↓
 task manifest [toolchain]
 ```
 
-То есть task manifest имеет наивысший приоритет для конкретной задачи.
+Hardcoded project defaults в source отсутствуют. Task manifest имеет наивысший
+приоритет для конкретной задачи.
 
 Все итоговые paths должны существовать.
 
 ---
 
-# 17. Local config
+# 18. Local config
 
 Default file:
 
@@ -966,16 +1214,24 @@ export SLIVIN_HARNESS_CONFIG="/path/to/another-config.toml"
 
 ```toml
 [codex]
-command = "~/Tools/codex-cli/node_modules/.bin/codex.cmd"
+command = "codex" # либо absolute user-local path
 
-[toolchain]
-node = "~/Tools/node/node.exe"
-jest = "~/Documents/sa_icover/node_modules/jest/bin/jest.js"
+[workspace]
+root = "~/.slivin-harness/workspaces"
+
+[projects.my_project]
+repo = "~/Documents/my-project"
+result_mode = "apply_to_source"
+
+[projects.my_project.toolchain]
+project_python = "{project_root}/.venv/Scripts/python.exe"
+node = "node"
+jest = "{project_root}/node_modules/jest/bin/jest.js"
 ```
 
 ---
 
-# 18. Codex path precedence
+# 19. Codex path precedence
 
 Codex command выбирается:
 
@@ -984,7 +1240,7 @@ SLIVIN_CODEX_CMD
     ↓
 [codex].command в harness.local.toml
     ↓
-built-in default
+codex.cmd / codex из PATH
 ```
 
 Override:
@@ -995,7 +1251,7 @@ export SLIVIN_CODEX_CMD="/path/to/codex.cmd"
 
 ---
 
-# 19. Oracle calibration
+# 20. Oracle calibration
 
 Historical benchmark может использовать один из двух режимов.
 
@@ -1045,7 +1301,7 @@ held-out(good reference)   → должен PASS
 
 ---
 
-# 20. Что происходит при запуске medium-risk task
+# 21. Что происходит при запуске medium-risk task
 
 Типичный console lifecycle:
 
@@ -1081,7 +1337,7 @@ TOTAL_ELAPSED
 
 ---
 
-# 21. Planner validation retry
+# 22. Planner validation retry
 
 Planner structured artifact дополнительно проверяется Controller.
 
@@ -1109,7 +1365,7 @@ max_plan_validation_retries
 
 ---
 
-# 22. Repair loop
+# 23. Repair loop
 
 Если deterministic repair-check упал:
 
@@ -1127,7 +1383,7 @@ Implementer получает exact failure evidence.
 
 ---
 
-# 23. Evaluator routing
+# 24. Evaluator routing
 
 Evaluator может вернуть:
 
@@ -1165,7 +1421,7 @@ Planner
 
 ---
 
-# 24. Exit codes
+# 25. Exit codes
 
 Текущая реализация использует:
 
@@ -1182,7 +1438,7 @@ Planner
 
 ---
 
-# 25. Debug mode
+# 26. Debug mode
 
 По умолчанию unexpected internal exception печатается как:
 
@@ -1201,7 +1457,7 @@ export SLIVIN_HARNESS_DEBUG=1
 
 ---
 
-# 26. Run artifacts
+# 27. Run artifacts
 
 Каждый запуск создаёт:
 
@@ -1227,7 +1483,7 @@ runs/<task_id>/<timestamp>/
 
 ---
 
-# 27. Heartbeat
+# 28. Heartbeat
 
 Planner/Evaluator могут долго не иметь user-facing output.
 
@@ -1250,7 +1506,7 @@ last-event=00:03
 
 ---
 
-# 28. Repo instructions и skills
+# 29. Repo instructions и skills
 
 При старте Harness печатает:
 
@@ -1283,7 +1539,7 @@ AUTO_SKILL_USAGE: not asserted
 
 ---
 
-# 29. Sandbox и temp
+# 30. Sandbox и temp
 
 Implementer работает с `workspace-write`.
 
@@ -1318,7 +1574,7 @@ docs/WINDOWS_SETUP.md
 
 ---
 
-# 30. Типовые ошибки
+# 31. Типовые ошибки
 
 ## `.env files are present`
 
@@ -1470,59 +1726,76 @@ Committed launchers должны храниться executable в index.
 
 ---
 
-# 31. Создание нового task case
+# 32. Создание нового project task
 
-Минимальная схема:
+Для обычной разработки достаточно manifest-файла. Project repository вручную не копируется.
+
+Например:
 
 ```text
-cases/my-task/
-├── task.toml
-├── README.md
-└── workspace/   # ignored
+tasks/
+└── my-task.toml
 ```
 
-## Шаг 1. Создать manifest
+Можно хранить task manifests и в другом committed/ignored каталоге — Controllerу нужен только путь к TOML.
 
-Не копировать исторический Matrix prompt бездумно.
+## Шаг 1. Убедиться, что project profile есть локально
+
+```toml
+[projects.my_project]
+repo = "~/Documents/my-project"
+result_mode = "apply_to_source"
+
+[projects.my_project.toolchain]
+project_python = "{project_root}/.venv/Scripts/python.exe"
+```
+
+## Шаг 2. Создать manifest
+
+Начать можно с:
+
+```text
+examples/project-task.example.toml
+```
 
 Определить:
 
+- `project`;
 - task intent;
-- workspace;
-- risk;
+- `risk`;
 - preservation requirements;
 - deterministic checks;
 - repair vs held-out checks;
-- toolchain requirements.
-
----
-
-## Шаг 2. Подготовить workspace
-
-Для disposable snapshot:
-
-```bash
-./py tools/prepare_workspace.py \
-    cases/my-task/workspace
-```
-
-Для другого execution model сначала свериться с:
-
-```text
-docs/WORKSPACE_MODEL.md
-```
-
----
+- target-project toolchain requirements.
 
 ## Шаг 3. Запустить
 
 ```bash
-./run cases/my-task/task.toml
+./run path/to/my-task.toml
+```
+
+Harness сам создаст isolated Git worktree.
+
+## Historical/fixture case
+
+Если нужен frozen historical snapshot вроде Matrix `_90`, используется старый static layout:
+
+```text
+cases/my-case/
+├── task.toml
+├── README.md
+└── workspace/
+```
+
+и при необходимости:
+
+```bash
+./py tools/prepare_workspace.py cases/my-case/workspace
 ```
 
 ---
 
-# 32. Production task без `_92`
+# 33. Production task без `_92`
 
 Known-good reference нужен только historical eval/calibration.
 
@@ -1543,7 +1816,7 @@ current contract
 
 ---
 
-# 33. Historical benchmark без full good reference
+# 34. Historical benchmark без full good reference
 
 Текущий Matrix case использует calibration certificate.
 
@@ -1563,7 +1836,7 @@ certificate
 
 ---
 
-# 34. Разработка самого Harness
+# 35. Разработка самого Harness
 
 Перед изменением:
 
@@ -1599,7 +1872,7 @@ slivin-harness-v0.4.6.2.zip
 
 ---
 
-# 35. Документация
+# 36. Документация
 
 Если нужно понять **как пользоваться**:
 
@@ -1651,7 +1924,7 @@ docs/MAINTAINING_HARNESS.md
 
 ---
 
-# 36. Что пока сознательно не включено
+# 37. Что пока сознательно не включено
 
 Текущий repository ещё не является полной autonomous engineering platform.
 
@@ -1672,61 +1945,61 @@ docs/MAINTAINING_HARNESS.md
 
 ---
 
-# 37. Quick start — текущая машина
-
-Если repository и `_90` уже находятся на месте:
+# 38. Quick start — реальный project
 
 ```bash
 cd ~/Tools/slivin-harness
 
-./py tools/self_check.py
-
-./py tools/prepare_workspace.py \
-    cases/matrix-all-matching/workspace
-
-./run cases/matrix-all-matching/task.toml
-```
-
-Если inner workspace baseline уже существует, `prepare_workspace.py` не создаёт новый commit — он только требует clean state и подтверждает готовность.
-
----
-
-# 38. Quick start — новая машина
-
-```bash
-# 1. Clone
-git clone <repo> ~/Tools/slivin-harness
-cd ~/Tools/slivin-harness
-
-# 2. Windows local Git behavior
-git config core.filemode false
-
-# 3. При необходимости настроить Python
-export SLIVIN_HARNESS_PYTHON="/path/to/python"
-
-# 4. При необходимости настроить Codex / Node / Jest
+# 1. One-time machine config
 cp harness.local.example.toml harness.local.toml
-# edit harness.local.toml
+# edit [codex], [workspace], [projects.<name>], project toolchain
 
-# 5. Sanity check
+# 2. Sanity check
 ./py tools/self_check.py
 
-# 6. Скопировать содержимое _90
-# → cases/matrix-all-matching/workspace/
+# 3. Create/copy a project task manifest
+cp examples/project-task.example.toml my-task.toml
+# edit project=..., prompt, checks
 
-# 7. Убедиться, что в copy нет .env/secrets
+# 4. Run
+./run my-task.toml
+```
 
-# 8. Создать disposable baseline
+При `result_mode = "apply_to_source"` accepted diff появится в исходном project working tree автоматически.
+
+Никакого manual repository copy/cleanup/copy-back нет.
+
+---
+
+# 39. Quick start — historical Matrix benchmark
+
+Historical case остаётся специальным frozen-fixture workflow:
+
+```bash
+cd ~/Tools/slivin-harness
+
+./py tools/self_check.py
+
+# Один раз положить _90 в:
+# cases/matrix-all-matching/workspace/
+
 ./py tools/prepare_workspace.py \
     cases/matrix-all-matching/workspace
 
-# 9. Run
 ./run cases/matrix-all-matching/task.toml
+```
+
+Если в historical copy `.env` должен быть доступен Agent:
+
+```bash
+./py tools/prepare_workspace.py \
+    cases/matrix-all-matching/workspace \
+    --allow-env
 ```
 
 ---
 
-# 39. Куда смотреть при следующем изменении
+# 40. Куда смотреть при следующем изменении
 
 Перед изменением architecture/quality layer:
 
@@ -1757,7 +2030,7 @@ observable failure
 
 ---
 
-# 40. Повторный запуск historical case
+# 41. Повторный запуск historical case
 
 После task workspace содержит candidate changes.
 
@@ -1786,7 +2059,7 @@ cd ~/Tools/slivin-harness
 
 ---
 
-# 41. Текущий Git permission contract
+# 42. Текущий Git permission contract
 
 Task-agent работает в disposable workspace, но по умолчанию **не владеет Git history/publication**.
 
@@ -1804,7 +2077,7 @@ PR creation
 
 ---
 
-# 42. Harness Python и project Python
+# 43. Harness Python и project Python
 
 Placeholder:
 
@@ -1829,7 +2102,7 @@ toolchain entry.
 
 ---
 
-# 43. Current continuation state
+# 44. Current continuation state
 
 Перед продолжением архитектурной разработки в новой сессии прочитать:
 

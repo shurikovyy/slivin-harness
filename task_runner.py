@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -16,36 +17,21 @@ from pathlib import Path
 from slivin_harness.app_server import CodexAppServer
 from slivin_harness.evaluator import run_evaluator
 from slivin_harness.planner import run_planner
+from slivin_harness.workspace import (
+    WorkspaceSession,
+    apply_candidate_to_source,
+    build_candidate_patch,
+    prepare_workspace_session,
+)
 
 
 HARNESS_ROOT = Path(__file__).resolve().parent
 
-DEFAULT_CODEX_CMD = (
-    Path.home()
-    / "Tools"
-    / "codex-cli"
-    / "node_modules"
-    / ".bin"
-    / "codex.cmd"
+DEFAULT_CODEX_NAMES = (
+    "codex.cmd",
+    "codex",
 )
 
-DEFAULT_TOOLCHAIN = {
-    "node": str(
-        Path.home()
-        / "Tools"
-        / "node"
-        / "node.exe"
-    ),
-    "jest": str(
-        Path.home()
-        / "Documents"
-        / "sa_icover"
-        / "node_modules"
-        / "jest"
-        / "bin"
-        / "jest.js"
-    ),
-}
 
 
 IMPLEMENTER_INSTRUCTIONS = """
@@ -59,7 +45,10 @@ IMPLEMENTER_INSTRUCTIONS = """
 - не выполняй git add, git commit, git push, git pull, git merge,
   git rebase, git reset, git restore, git switch, git checkout или git clean;
 - не меняй .git;
-- не расширяй scope задачи;
+- не меняй unrelated scope; `candidate_paths` задают planned change surface;
+  если material consumer требует дополнительный path, изменение допустимо только
+  как часть исходного intent: Controller механически обнаружит расширение, откатит
+  незапланированный path к baseline и проведёт replan/snapshot перед принятием;
 - до production edits проверь ключевые факты planning artifact по реальному коду;
 - planning artifact является инженерной гипотезой, а не приказом:
   если фактический код его опровергает, следуй доказательствам;
@@ -110,14 +99,28 @@ def load_manifest(path: Path) -> dict:
     )
 
 
-def resolve_harness_path(raw_path: str | Path) -> Path:
-    expanded = os.path.expandvars(str(raw_path))
-    path = Path(expanded).expanduser()
+def resolve_runtime_path(
+    raw_path: str | Path,
+    *,
+    base: Path = HARNESS_ROOT,
+    project_root: Path | None = None,
+) -> Path:
+    value = os.path.expandvars(str(raw_path))
+    value = value.format(
+        home=str(Path.home()),
+        harness_root=str(HARNESS_ROOT),
+        project_root=str(project_root) if project_root else "",
+    )
+    path = Path(value).expanduser()
 
     if not path.is_absolute():
-        path = HARNESS_ROOT / path
+        path = base / path
 
     return path.resolve()
+
+
+def resolve_harness_path(raw_path: str | Path) -> Path:
+    return resolve_runtime_path(raw_path)
 
 
 def load_local_config() -> tuple[dict, Path | None]:
@@ -139,30 +142,96 @@ def load_local_config() -> tuple[dict, Path | None]:
     )
 
 
+def _resolve_tool_path(
+    raw: str | Path,
+    *,
+    project_root: Path | None = None,
+) -> Path:
+    value = os.path.expandvars(str(raw))
+    formatted = value.format(
+        home=str(Path.home()),
+        harness_root=str(HARNESS_ROOT),
+        project_root=str(project_root) if project_root else "",
+    )
+
+    # A bare executable name is intentionally PATH-resolved. This makes the
+    # committed task/project configuration portable across machines.
+    if not any(sep in formatted for sep in ("/", "\\")) and not formatted.startswith("~"):
+        found = shutil.which(formatted)
+        if found:
+            return Path(found).resolve()
+        raise RuntimeError(
+            f"Configured executable '{formatted}' was not found on PATH. "
+            "Use an absolute/user-local path in harness.local.toml if needed."
+        )
+
+    return resolve_runtime_path(
+        formatted,
+        project_root=project_root,
+    )
+
+
 def resolve_codex_cmd(local_config: dict) -> Path:
     raw = (
         os.environ.get("SLIVIN_CODEX_CMD")
         or local_config.get("codex", {}).get("command")
-        or str(DEFAULT_CODEX_CMD)
     )
-    return resolve_harness_path(raw)
+    if raw:
+        return _resolve_tool_path(str(raw))
+
+    for name in DEFAULT_CODEX_NAMES:
+        found = shutil.which(name)
+        if found:
+            return Path(found).resolve()
+
+    raise RuntimeError(
+        "Codex CLI is not configured and was not found on PATH. "
+        "Set [codex].command in harness.local.toml or SLIVIN_CODEX_CMD."
+    )
 
 
 def resolve_toolchain(
     local_config: dict,
     manifest: dict,
+    *,
+    project_name: str | None = None,
+    project_root: Path | None = None,
 ) -> dict[str, str]:
-    merged: dict[str, str] = dict(DEFAULT_TOOLCHAIN)
+    merged: dict[str, str] = {}
 
-    for source in (
-        local_config.get("toolchain", {}),
-        manifest.get("toolchain", {}),
-    ):
+    sources: list[dict] = []
+    global_toolchain = local_config.get("toolchain", {})
+    if isinstance(global_toolchain, dict):
+        sources.append(global_toolchain)
+
+    if project_name:
+        project_cfg = (
+            local_config.get("projects", {})
+            .get(project_name, {})
+        )
+        project_toolchain = (
+            project_cfg.get("toolchain", {})
+            if isinstance(project_cfg, dict)
+            else {}
+        )
+        if isinstance(project_toolchain, dict):
+            sources.append(project_toolchain)
+
+    manifest_toolchain = manifest.get("toolchain", {})
+    if isinstance(manifest_toolchain, dict):
+        sources.append(manifest_toolchain)
+
+    for source in sources:
         for name, raw_path in source.items():
             merged[str(name)] = str(raw_path)
 
     return {
-        name: str(resolve_harness_path(raw_path))
+        name: str(
+            _resolve_tool_path(
+                raw_path,
+                project_root=project_root,
+            )
+        )
         for name, raw_path in merged.items()
     }
 
@@ -310,6 +379,8 @@ def capture_baseline_snapshot(
     candidate_paths: list[str],
     existing_snapshot: dict | None = None,
     captured_before_first_edit: bool = True,
+    captured_before_path_edit: bool | None = None,
+    snapshot_role: str | None = None,
 ) -> dict:
     """Capture baseline/object evidence and path-local filesystem evidence."""
     head_sha = str(preflight["head_sha"])
@@ -326,20 +397,23 @@ def capture_baseline_snapshot(
             str(raw_path),
         )
 
-        # Preserve the real pre-edit evidence if this path was already captured.
+        # Preserve the strongest already-captured per-path pre-edit evidence.
         if (
             rel in files
-            and files[rel].get(
-                "captured_before_first_edit"
-            )
+            and files[rel].get("captured_before_path_edit")
         ):
             continue
 
+        before_path_edit = (
+            captured_before_first_edit
+            if captured_before_path_edit is None
+            else captured_before_path_edit
+        )
+
         entry: dict[str, object] = {
             "path": rel,
-            "captured_before_first_edit": (
-                captured_before_first_edit
-            ),
+            "captured_before_first_edit": captured_before_first_edit,
+            "captured_before_path_edit": before_path_edit,
             "exists": target.exists(),
             "is_file": target.is_file(),
         }
@@ -349,9 +423,12 @@ def capture_baseline_snapshot(
             entry["worktree_size"] = len(data)
             entry["worktree_sha256"] = hashlib.sha256(data).hexdigest()
             entry["worktree_snapshot_role"] = (
-                "pre_edit"
-                if captured_before_first_edit
-                else "candidate_state_at_replan"
+                snapshot_role
+                or (
+                    "pre_edit"
+                    if captured_before_first_edit
+                    else "candidate_state_at_replan"
+                )
             )
 
         entry["git_eol"] = _git_optional(
@@ -396,6 +473,144 @@ def capture_baseline_snapshot(
         "head_sha": head_sha,
         "files": files,
     }
+
+
+
+def planned_candidate_paths(
+    workspace: Path,
+    plan: dict,
+) -> set[str]:
+    result: set[str] = set()
+    for raw_path in plan.get("candidate_paths", []):
+        rel, _ = _safe_repo_path(workspace, str(raw_path))
+        result.add(rel)
+    return result
+
+
+def collect_changed_paths(workspace: Path) -> set[str]:
+    """Return tracked + untracked non-ignored candidate paths relative to repo."""
+    tracked = _run_git(
+        workspace,
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "HEAD",
+        "--",
+    )
+    untracked = _run_git(
+        workspace,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+    )
+    return {
+        item.replace("\\", "/")
+        for item in [*tracked.splitlines(), *untracked.splitlines()]
+        if item.strip()
+    }
+
+
+def find_unplanned_changed_paths(
+    workspace: Path,
+    plan: dict,
+) -> list[str]:
+    planned = planned_candidate_paths(workspace, plan)
+    return sorted(
+        path
+        for path in collect_changed_paths(workspace)
+        if path not in planned
+    )
+
+
+def restore_unplanned_paths_to_baseline(
+    workspace: Path,
+    *,
+    preflight: dict,
+    paths: list[str],
+) -> None:
+    """Rollback only unplanned paths so they can be replanned and snapshotted.
+
+    Controller-owned Git mutation is intentional here. Implementer remains forbidden
+    from Git history/worktree control. Tracked paths are restored from the immutable
+    task baseline HEAD; untracked files introduced by the agent are removed.
+    """
+    tracked_baseline = set(preflight.get("tracked_paths", []))
+    head_sha = str(preflight["head_sha"])
+
+    tracked = [path for path in paths if path in tracked_baseline]
+    untracked = [path for path in paths if path not in tracked_baseline]
+
+    if tracked:
+        subprocess.run(
+            [
+                "git",
+                "restore",
+                f"--source={head_sha}",
+                "--staged",
+                "--worktree",
+                "--",
+                *tracked,
+            ],
+            cwd=workspace,
+            check=True,
+        )
+
+    root = workspace.resolve()
+    for raw_path in untracked:
+        _, target = _safe_repo_path(workspace, raw_path)
+        if not target.exists() and not target.is_symlink():
+            continue
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        else:
+            target.unlink(missing_ok=True)
+
+        parent = target.parent
+        while parent != root and parent.exists():
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+
+
+def change_surface_revision_context(
+    *,
+    unexpected_paths: list[str],
+    current_plan: dict,
+) -> dict:
+    return {
+        "status": "REPLAN_REQUIRED",
+        "reason": "UNPLANNED_CHANGE_SURFACE",
+        "summary": (
+            "Controller detected candidate changes outside Planner.candidate_paths. "
+            "Those paths were restored to the trusted baseline before acceptance. "
+            "Re-evaluate whether they are truly required and explicitly include every "
+            "required changed path in candidate_paths."
+        ),
+        "unexpected_changed_paths": unexpected_paths,
+        "previous_candidate_paths": [
+            str(path)
+            for path in current_plan.get("candidate_paths", [])
+        ],
+        "controller_action": (
+            "Unexpected paths were rolled back to baseline. Existing in-plan changes "
+            "were preserved. If an unexpected path is required, add it explicitly to "
+            "candidate_paths so Harness can capture trusted pre-path-edit evidence."
+        ),
+    }
+
+
+def validate_actual_surface_against_plan(
+    workspace: Path,
+    plan: dict,
+) -> None:
+    unexpected = find_unplanned_changed_paths(workspace, plan)
+    if unexpected:
+        raise RuntimeError(
+            "Current candidate still contains changed paths outside revised "
+            "candidate_paths:\n  - " + "\n  - ".join(unexpected)
+        )
 
 
 def validate_toolchain(toolchain: dict[str, str]) -> None:
@@ -1001,7 +1216,8 @@ def build_check_repair_prompt(
 Задача НЕ завершена.
 
 Исправь причины перечисленных deterministic failures.
-Не расширяй исходный scope.
+Не меняй unrelated scope. Если repair объективно требует новый path,
+Harness отдельно reconciles actual diff с planned candidate surface.
 Не изменяй или не ослабляй тесты только ради зелёного результата,
 если тест фиксирует требуемый контракт.
 
@@ -1049,7 +1265,8 @@ def build_evaluator_repair_prompt(
 Проверь каждое замечание самостоятельно по коду и исходному требованию.
 Исправь только подтверждённые in-scope findings и напрямую связанные
 регрессии. Не превращай review finding в новое product requirement.
-Не расширяй scope и не ослабляй тесты.
+Не меняй unrelated scope и не ослабляй тесты. Новый действительно required path
+будет отдельно reconciled Controller с planned candidate surface.
 
 Если конкретный finding неверен, не делай искусственный patch только
 ради удовлетворения reviewer. Закончи turn после проверки/исправлений:
@@ -1058,6 +1275,52 @@ Harness заново запустит deterministic checks и НОВЫЙ fresh e
 --- BEGIN EVALUATION ---
 {evaluation_json}
 --- END EVALUATION ---
+""".strip()
+
+
+
+def build_change_surface_repair_prompt(
+    *,
+    unexpected_paths: list[str],
+    revised_plan: dict,
+    baseline_snapshot: dict,
+) -> str:
+    plan_json = json.dumps(
+        revised_plan,
+        ensure_ascii=False,
+        indent=2,
+    )
+    snapshot_json = json.dumps(
+        baseline_snapshot,
+        ensure_ascii=False,
+        indent=2,
+    )
+    paths = "\n".join(f"- {path}" for path in unexpected_paths)
+
+    return f"""
+Slivin Harness обнаружил изменения вне planned `candidate_paths`:
+
+{paths}
+
+Controller уже откатил ТОЛЬКО эти незапланированные paths к trusted task baseline.
+Изменения внутри прежнего planned surface сохранены.
+
+Fresh read-only Planner пересобрал change surface:
+
+--- BEGIN REVISED PLAN ---
+{plan_json}
+--- END REVISED PLAN ---
+
+Harness также обновил path-local baseline evidence:
+
+--- BEGIN UPDATED BASELINE SNAPSHOT ---
+{snapshot_json}
+--- END UPDATED BASELINE SNAPSHOT ---
+
+Продолжи implementation по revised plan.
+Если откатанный path действительно нужен, внеси изменение заново только если он
+теперь явно присутствует в `candidate_paths`. Не восстанавливай unrelated change.
+После turn внешний Harness снова механически сравнит actual diff с planned surface.
 """.strip()
 
 
@@ -1433,6 +1696,15 @@ class RunRecorder:
             value,
             encoding="utf-8",
         )
+        return path
+
+    def write_bytes(
+        self,
+        name: str,
+        value: bytes,
+    ) -> Path:
+        path = self.root / name
+        path.write_bytes(value)
         return path
 
 
@@ -1917,6 +2189,72 @@ def print_structured(
     print()
 
 
+
+def finalize_success(
+    *,
+    workspace_session: WorkspaceSession,
+    recorder: RunRecorder,
+) -> None:
+    if not workspace_session.managed:
+        return
+
+    patch = build_candidate_patch(workspace_session)
+    patch_path = recorder.write_bytes("candidate.patch", patch)
+
+    recorder.write_json(
+        "workspace_session.json",
+        {
+            "mode": workspace_session.mode,
+            "workspace": str(workspace_session.workspace),
+            "project_name": workspace_session.project_name,
+            "source_repo": (
+                str(workspace_session.source_repo)
+                if workspace_session.source_repo
+                else None
+            ),
+            "source_head": workspace_session.source_head,
+            "base_sha": workspace_session.base_sha,
+            "result_mode": workspace_session.result_mode,
+            "exposed_paths": list(workspace_session.exposed_paths),
+            "candidate_patch": str(patch_path),
+        },
+    )
+
+    if workspace_session.result_mode == "apply_to_source":
+        apply_candidate_to_source(
+            workspace_session,
+            patch=patch,
+        )
+    else:
+        print(
+            "RESULT_WORKTREE_RETAINED:",
+            workspace_session.workspace,
+        )
+        print("RESULT_PATCH:", patch_path)
+
+
+
+def finalize_success_guarded(
+    *,
+    workspace_session: WorkspaceSession,
+    recorder: RunRecorder,
+) -> bool:
+    try:
+        finalize_success(
+            workspace_session=workspace_session,
+            recorder=recorder,
+        )
+        return True
+    except RuntimeError as exc:
+        recorder.write_text(
+            "result_publication_error.txt",
+            str(exc) + "\n",
+        )
+        print("HARNESS_TASK_BLOCKED: result_publication")
+        print("RESULT_PUBLICATION_FAIL:", exc)
+        return False
+
+
 def evaluator_machine_guard(
     evaluation: dict,
     *,
@@ -1953,10 +2291,6 @@ def main() -> int:
 
         local_config, local_config_path = load_local_config()
 
-        workspace = resolve_harness_path(
-            manifest["workspace"]
-        )
-
         task_id = str(
             manifest.get(
                 "task_id",
@@ -1985,6 +2319,13 @@ def main() -> int:
             manifest.get(
                 "max_replan_cycles",
                 2,
+            )
+        )
+
+        max_change_surface_cycles = int(
+            manifest.get(
+                "max_change_surface_cycles",
+                max_replan_cycles,
             )
         )
 
@@ -2018,9 +2359,19 @@ def main() -> int:
                 f"Unsupported risk level: {risk}"
             )
 
+        workspace_session = prepare_workspace_session(
+            manifest=manifest,
+            local_config=local_config,
+            harness_root=HARNESS_ROOT,
+            task_id=task_id,
+        )
+        workspace = workspace_session.workspace
+
         toolchain = resolve_toolchain(
             local_config,
             manifest,
+            project_name=workspace_session.project_name,
+            project_root=workspace_session.source_repo,
         )
 
         validate_toolchain(
@@ -2034,8 +2385,8 @@ def main() -> int:
         if not codex_cmd.exists():
             raise RuntimeError(
                 "Codex CLI not found: "
-                f"{codex_cmd}. Copy harness.local.example.toml to "
-                "harness.local.toml and set [codex].command if needed."
+                f"{codex_cmd}. Set [codex].command in harness.local.toml "
+                "or SLIVIN_CODEX_CMD."
             )
 
         explicit_skill_names = [
@@ -2108,6 +2459,18 @@ def main() -> int:
         )
         print(f"TASK: {task_id}")
         print(f"WORKSPACE: {workspace}")
+        print(f"WORKSPACE_MODE: {workspace_session.mode}")
+        if workspace_session.project_name:
+            print(f"PROJECT: {workspace_session.project_name}")
+        if workspace_session.source_repo:
+            print(f"SOURCE_REPO: {workspace_session.source_repo}")
+        if workspace_session.managed:
+            print(f"RESULT_MODE: {workspace_session.result_mode}")
+        if workspace_session.exposed_paths:
+            print(
+                "EXPOSED_LOCAL_PATHS:",
+                ", ".join(workspace_session.exposed_paths),
+            )
         print(f"RUN_DIR: {recorder.root}")
         print(f"RISK: {risk}")
         print(
@@ -2134,6 +2497,10 @@ def main() -> int:
         print(
             f"MAX_REPLAN_CYCLES: "
             f"{max_replan_cycles}"
+        )
+        print(
+            f"MAX_CHANGE_SURFACE_CYCLES: "
+            f"{max_change_surface_cycles}"
         )
         print(
             "MAX_PLAN_VALIDATION_RETRIES:",
@@ -2207,7 +2574,7 @@ def main() -> int:
 
         with CodexAppServer(
             codex_cmd,
-            client_version="0.4.6",
+            client_version="0.5.0",
             runtime_tmp=runtime_tmp,
         ) as codex:
             context_started = (
@@ -2397,9 +2764,181 @@ def main() -> int:
 
             repair_cycles = 0
             replan_cycles = 0
+            change_surface_cycles = 0
             evaluation_index = 0
 
             while True:
+                if risk != "low":
+                    unexpected_paths = find_unplanned_changed_paths(
+                        workspace,
+                        plan,
+                    )
+
+                    if unexpected_paths:
+                        if change_surface_cycles >= max_change_surface_cycles:
+                            print(
+                                "HARNESS_TASK_FAIL: maximum change-surface cycles "
+                                "reached while reconciling actual changed paths"
+                            )
+                            return 1
+
+                        change_surface_cycles += 1
+                        print()
+                        print(
+                            "=== CHANGE SURFACE RECONCILIATION "
+                            f"{change_surface_cycles} ==="
+                        )
+                        print(
+                            "UNPLANNED_CHANGED_PATHS:\n  - "
+                            + "\n  - ".join(unexpected_paths)
+                        )
+
+                        recorder.write_json(
+                            f"change_surface_{change_surface_cycles:02d}_detected.json",
+                            {
+                                "unexpected_changed_paths": unexpected_paths,
+                                "planned_candidate_paths": sorted(
+                                    planned_candidate_paths(workspace, plan)
+                                ),
+                                "actual_changed_paths": sorted(
+                                    collect_changed_paths(workspace)
+                                ),
+                            },
+                        )
+
+                        restore_unplanned_paths_to_baseline(
+                            workspace,
+                            preflight=preflight,
+                            paths=unexpected_paths,
+                        )
+
+                        remaining_unplanned = find_unplanned_changed_paths(
+                            workspace,
+                            plan,
+                        )
+                        if remaining_unplanned:
+                            raise RuntimeError(
+                                "Controller failed to restore unplanned paths:\n  - "
+                                + "\n  - ".join(remaining_unplanned)
+                            )
+
+                        revision_context = change_surface_revision_context(
+                            unexpected_paths=unexpected_paths,
+                            current_plan=plan,
+                        )
+
+                        revised_plan = run_validated_planner(
+                            codex,
+                            workspace=workspace,
+                            task_prompt=prompt,
+                            toolchain=toolchain,
+                            preflight=preflight,
+                            baseline_snapshot=baseline_snapshot,
+                            revision_context=revision_context,
+                            explicit_skills=explicit_skills,
+                            max_validation_retries=max_plan_validation_retries,
+                            phase_label=(
+                                "CHANGE_SURFACE_REPLAN_"
+                                f"{change_surface_cycles}"
+                            ),
+                            artifact_prefix=(
+                                "change_surface_replan_"
+                                f"{change_surface_cycles:02d}"
+                            ),
+                            recorder=recorder,
+                        )
+
+                        if revised_plan is None:
+                            print(
+                                "HARNESS_TASK_BLOCKED: "
+                                "change_surface_replanner_artifact_invalid"
+                            )
+                            return 2
+                        if revised_plan["status"] == "BLOCKED":
+                            print(
+                                "HARNESS_TASK_BLOCKED: change_surface_replanner"
+                            )
+                            return 2
+                        if revised_plan["status"] == "NEEDS_USER_DECISION":
+                            print(
+                                "HARNESS_TASK_NEEDS_USER_DECISION: "
+                                "change_surface_replanner"
+                            )
+                            return 3
+                        if revised_plan["status"] != "READY":
+                            print(
+                                "HARNESS_TASK_BLOCKED: "
+                                "unexpected_change_surface_replanner_status="
+                                + str(revised_plan["status"])
+                            )
+                            return 2
+
+                        # Any old candidate change omitted by the revised plan is no
+                        # longer accepted and is restored as well. This makes actual
+                        # diff == revised planned surface a mechanical invariant.
+                        revised_planned = planned_candidate_paths(
+                            workspace,
+                            revised_plan,
+                        )
+                        obsolete_changed = sorted(
+                            collect_changed_paths(workspace) - revised_planned
+                        )
+                        if obsolete_changed:
+                            restore_unplanned_paths_to_baseline(
+                                workspace,
+                                preflight=preflight,
+                                paths=obsolete_changed,
+                            )
+
+                        plan = revised_plan
+                        baseline_snapshot = capture_baseline_snapshot(
+                            workspace,
+                            preflight=preflight,
+                            candidate_paths=[
+                                str(path)
+                                for path in plan.get("candidate_paths", [])
+                            ],
+                            existing_snapshot=baseline_snapshot,
+                            captured_before_first_edit=False,
+                            captured_before_path_edit=True,
+                            snapshot_role=(
+                                "pre_path_edit_after_surface_reconciliation"
+                            ),
+                        )
+
+                        validate_actual_surface_against_plan(
+                            workspace,
+                            plan,
+                        )
+
+                        recorder.write_json(
+                            f"baseline_snapshot_surface_{change_surface_cycles:02d}.json",
+                            baseline_snapshot,
+                        )
+                        print_structured(
+                            "UPDATED BASELINE SNAPSHOT",
+                            baseline_snapshot,
+                        )
+
+                        surface_prompt = build_change_surface_repair_prompt(
+                            unexpected_paths=unexpected_paths,
+                            revised_plan=plan,
+                            baseline_snapshot=baseline_snapshot,
+                        )
+                        surface_started = time.monotonic()
+                        codex.run_turn(
+                            thread_id=thread_id,
+                            prompt=surface_prompt,
+                            on_delta=stream_agent_delta,
+                            on_message_end=stream_agent_message_end,
+                            skills=explicit_skills,
+                        )
+                        phase_done(
+                            f"CHANGE_SURFACE_REPAIR_{change_surface_cycles}",
+                            surface_started,
+                        )
+                        continue
+
                 print(
                     f"=== DETERMINISTIC CHECKS "
                     f"(repair_cycles={repair_cycles}) ==="
@@ -2504,6 +3043,19 @@ def main() -> int:
                     )
                     continue
 
+                if risk != "low" and find_unplanned_changed_paths(
+                    workspace,
+                    plan,
+                ):
+                    # A deterministic check is allowed to reveal/create candidate
+                    # files, but they are subject to the same D-032 reconciliation
+                    # before evaluation. Loop back to the machine-enforced gate.
+                    print(
+                        "CHANGE_SURFACE_CHANGED_DURING_CHECKS: "
+                        "reconciling before evaluation"
+                    )
+                    continue
+
                 if risk == "low":
                     if heldout_checks:
                         print()
@@ -2537,6 +3089,11 @@ def main() -> int:
                             )
                             return 4
 
+                    if not finalize_success_guarded(
+                        workspace_session=workspace_session,
+                        recorder=recorder,
+                    ):
+                        return 2
                     print()
                     print(
                         "HARNESS_TASK_PASS"
@@ -2706,6 +3263,28 @@ def main() -> int:
                             "HELDOUT_PASS"
                         )
 
+                    try:
+                        validate_actual_surface_against_plan(
+                            workspace,
+                            plan,
+                        )
+                    except RuntimeError as exc:
+                        recorder.write_text(
+                            "final_change_surface_error.txt",
+                            str(exc) + "\n",
+                        )
+                        print(
+                            "HARNESS_TASK_BLOCKED: "
+                            "final_change_surface_mismatch"
+                        )
+                        print("CHANGE_SURFACE_FAIL:", exc)
+                        return 2
+
+                    if not finalize_success_guarded(
+                        workspace_session=workspace_session,
+                        recorder=recorder,
+                    ):
+                        return 2
                     print(
                         "HARNESS_TASK_PASS"
                     )
@@ -2809,9 +3388,25 @@ def main() -> int:
                         )
                         return 2
 
-                    # If replan expands the candidate surface after implementation,
-                    # preserve original pre-edit snapshots for known paths and mark
-                    # newly seen paths as candidate-state-at-replan.
+                    # D-032 guarantees the actual diff was within the previous
+                    # planned surface before evaluation. If the revised plan removes
+                    # an old changed path, restore it. Newly added plan paths are
+                    # therefore still untouched and can receive trusted per-path
+                    # pre-edit evidence even though the task already has other edits.
+                    revised_planned = planned_candidate_paths(
+                        workspace,
+                        plan,
+                    )
+                    obsolete_changed = sorted(
+                        collect_changed_paths(workspace) - revised_planned
+                    )
+                    if obsolete_changed:
+                        restore_unplanned_paths_to_baseline(
+                            workspace,
+                            preflight=preflight,
+                            paths=obsolete_changed,
+                        )
+
                     baseline_snapshot = (
                         capture_baseline_snapshot(
                             workspace,
@@ -2828,6 +3423,10 @@ def main() -> int:
                                 baseline_snapshot
                             ),
                             captured_before_first_edit=False,
+                            captured_before_path_edit=True,
+                            snapshot_role=(
+                                "pre_path_edit_after_evaluator_replan"
+                            ),
                         )
                     )
 

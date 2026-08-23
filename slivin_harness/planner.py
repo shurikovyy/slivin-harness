@@ -561,6 +561,12 @@ representation, lifecycle и authority. Не исправляй код и не �
 
 16. CANDIDATE PATHS.
     Только точные repo-relative paths предполагаемых изменений.
+    Это machine-enforced planned change surface, а не справочный список.
+    Включай production files, tests и docs, которые реально могут потребоваться для
+    заявленного решения. Если revision_context сообщает UNPLANNED_CHANGE_SURFACE,
+    независимо реши, нужен ли каждый обнаруженный path: required path явно добавь,
+    unrelated path не добавляй. Controller уже откатил такие paths к baseline и
+    снимет trusted pre-path-edit snapshot перед повторной implementation.
 
 17. REPLAN.
     После REPLAN_REQUIRED исправляй artifact по independent feedback.

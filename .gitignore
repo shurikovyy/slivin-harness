@@ -12,6 +12,7 @@ harness.local.toml
 # Harness runtime output
 # -----------------------------------------------------------------------------
 runs/
+.workspaces/
 .harness_tmp/
 **/.harness_tmp/
 *.log

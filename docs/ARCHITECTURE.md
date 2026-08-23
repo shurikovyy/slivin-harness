@@ -67,8 +67,11 @@ slivin_harness/planner.py
 slivin_harness/evaluator.py
     Fresh read-only independent Evaluator.
 
+slivin_harness/workspace.py
+    Managed project profiles/worktrees, local-file exposure, candidate patch/apply.
+
 tools/prepare_workspace.py
-    Подготовка disposable project workspace/baseline.
+    Подготовка static historical/fixture workspace/baseline.
 
 tools/self_check.py
     Быстрая самопроверка Harness source/manifests.
@@ -110,6 +113,8 @@ PLAN VALIDATION
 PRE-EDIT BASELINE SNAPSHOT
     ↓
 IMPLEMENT (workspace-write)
+    ↓
+CHANGE-SURFACE RECONCILIATION (D-032)
     ↓
 DETERMINISTIC CHECKS
    / \
@@ -341,37 +346,163 @@ Confidence строится через:
 
 ---
 
-## 12. Current evidence-integrity limitation: planned vs actual change surface
+## 12. D-032: planned vs actual change surface — machine-enforced
 
-Текущий Controller снимает pre-edit snapshot по `Planner.candidate_paths`.
+`Planner.candidate_paths` теперь является не справочным списком, а planned change surface.
 
-Но на successful Matrix historical run Implementer после собственного consumer discovery изменил дополнительные Distribution paths, которых не было в initial `candidate_paths`.
-
-Controller пока не делает mechanical:
+После каждого Implementer/repair turn Controller сравнивает:
 
 ```text
-final changed paths
+actual changed paths
 vs
-planned candidate_paths
+plan.candidate_paths
 ```
 
-reconciliation.
-
-Следствие:
-
-- product candidate может быть корректным;
-- Fresh Evaluator может принять расширение;
-- но trusted pre-edit evidence для поздно добавленного path отсутствует.
-
-Это зафиксированный hardening gap.
-
-Целевой contract:
+Если найден новый path:
 
 ```text
-actual path outside planned candidate surface
-→ explicit expansion/replan/evidence downgrade
+unexpected edit
+    ↓
+Controller records violation
+    ↓
+rollback только unexpected path к trusted baseline
+    ↓
+read-only change-surface replan
+    ↓
+если path нужен → добавить в candidate_paths
+    ↓
+снять trusted pre-path-edit snapshot
+    ↓
+Implementer повторяет необходимое изменение
 ```
 
-а не молчаливое принятие.
+Если revised plan исключает ранее изменённый path, Controller также возвращает его к baseline.
 
-До реализации этого guard `candidate_paths` нужно считать planning/evidence declaration, а не жёстким filesystem allowlist.
+Deterministic checks не обходят этот gate: если check сам создаёт новый non-ignored candidate path, цикл возвращается в reconciliation до Fresh Evaluator.
+
+Перед финальным PASS Controller повторно проверяет отсутствие changed paths вне planned surface.
+
+### Evidence semantics
+
+Baseline snapshot теперь различает:
+
+```text
+captured_before_first_edit
+captured_before_path_edit
+worktree_snapshot_role
+```
+
+Поздно найденный consumer может получить честное:
+
+```text
+captured_before_first_edit = false
+captured_before_path_edit  = true
+role = pre_path_edit_after_surface_reconciliation
+```
+
+То есть Harness больше не притворяется, что весь task ещё pre-edit, но сохраняет trusted evidence именно для нового path до повторного изменения.
+
+---
+
+## 13. Managed project workspace: Git worktree вместо копирования repository
+
+Для обычной project development Harness больше не требует:
+
+```text
+copy repository
+→ delete .venv/node_modules/.env
+→ run
+→ copy candidate назад вручную
+```
+
+Task manifest указывает logical project name:
+
+```toml
+project = "my_project"
+workspace_mode = "git_worktree"
+```
+
+Machine-specific source path хранится только в ignored:
+
+```text
+harness.local.toml
+```
+
+Controller создаёт detached Git worktree из committed source `HEAD`.
+
+### Почему worktree
+
+Он даёт одновременно:
+
+- clean known baseline;
+- independent task diff;
+- отсутствие user dirty state;
+- отсутствие тяжёлого копирования `.venv`/`node_modules`;
+- возможность discard failed candidate;
+- shared Git objects с source repo.
+
+### Local/untracked exposure
+
+Project profile может opt-in скопировать отдельные ignored/untracked paths:
+
+```toml
+[projects.my_project.workspace]
+copy_untracked = [".env"]
+```
+
+Они доступны Agent, но excluded из task Git status/candidate patch.
+
+Default остаётся opt-in: `.env` не экспонируется автоматически.
+
+### Result publication
+
+Два режима:
+
+```text
+keep_worktree
+apply_to_source
+```
+
+`apply_to_source` после полного Harness PASS:
+
+1. строит binary candidate patch, включая новые non-ignored files;
+2. проверяет, что source `HEAD` не изменился;
+3. проверяет отсутствие новых source changes, кроме configured local exposures;
+4. применяет patch в исходный working tree;
+5. не делает commit/push/branch/PR.
+
+Таким образом quality/execution layer остаётся отделён от будущего Git publication/task supervisor.
+
+---
+
+## 14. Portable configuration model
+
+Harness source больше не привязан к `sa_icover/.venv`, конкретному portable Node или конкретному Jest path.
+
+Bootstrap Python:
+
+```text
+SLIVIN_HARNESS_PYTHON
+→ python3
+→ python
+→ py -3
+```
+
+Codex:
+
+```text
+SLIVIN_CODEX_CMD
+→ [codex].command
+→ codex.cmd/codex from PATH
+```
+
+Project/tool paths:
+
+```text
+harness.local.toml
+[projects.<name>.toolchain]
+```
+
+Поддерживается `{project_root}`.
+
+Это позволяет одному Harness repository обслуживать несколько проектов и несколько машин без редактирования committed manifests/source.

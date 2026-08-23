@@ -226,3 +226,56 @@ Prompt «не меняй production» не является boundary.
 4. имеет понятный failure mode;
 5. можно проверить historical/production evidence;
 6. его можно позже удалить, если model станет достаточно сильной.
+
+---
+
+## 14. Project/machine configuration не коммитить в manifests
+
+Если появляется новый project или новая машина:
+
+```text
+repo path
+project Python
+Node/Jest paths
+local exposed files
+workspace root
+```
+
+должны добавляться в `harness.local.toml`, а не в `task_runner.py`, README commands или committed task manifests.
+
+Committed manifest должен ссылаться на logical:
+
+```toml
+project = "name"
+```
+
+---
+
+## 15. Новый changed path — не просто reviewer observation
+
+D-032 является machine invariant.
+
+Если новый Harness change позволяет Agent менять path вне `candidate_paths` без controlled rollback/replan, это regression evidence layer.
+
+После изменений Controller запускать `tools/self_check.py`: unit tests проверяют базовую reconciliation semantics.
+
+---
+
+## 16. Worktree/publication changes требуют Windows smoke
+
+Любое изменение:
+
+```text
+git worktree
+core.excludesFile
+copy_untracked
+candidate.patch
+apply_to_source
+```
+
+требует как минимум:
+
+1. stdlib self-check;
+2. temporary repo unit test;
+3. smoke на Windows/Git Bash;
+4. проверку, что source repo не получает commit/index side effects.
