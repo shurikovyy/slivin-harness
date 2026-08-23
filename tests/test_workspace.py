@@ -68,10 +68,11 @@ class WorkspaceTests(unittest.TestCase):
             manifest=manifest,
             local_config=local_config,
             harness_root=sandbox,
-            task_id="demo-task",
+            task_id="MATRIX_" + ("VERY_LONG_TASK_NAME_" * 8),
         )
 
         self.assertTrue(session.managed)
+        self.assertLessEqual(len(session.workspace.parent.name), 40)
         self.assertTrue((session.workspace / "app.py").is_file())
         self.assertEqual(
             (session.workspace / ".env").read_text(encoding="utf-8"),

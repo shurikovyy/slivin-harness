@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Windows portability fixes
+
+- Made the UTF-8 console regression test newline-agnostic (`LF`/`CRLF`) while
+  still asserting exact Unicode content.
+- Bounded managed worktree project/task filesystem segments with a stable hash
+  to reduce Windows path depth without losing the full task ID in metadata.
+- Enable repository-local `core.longpaths=true` before managed worktree creation
+  on Windows.
+
+
 ### Windows console / failed-worktree diagnostics
 
 - Enforced UTF-8 stdout/stderr for Harness launchers and Controller to prevent

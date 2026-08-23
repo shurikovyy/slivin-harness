@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -55,6 +56,20 @@ def _run_git(
         )
     return result
 
+
+
+
+def _safe_path_segment(raw: str, *, fallback: str, max_length: int = 40) -> str:
+    safe = "".join(
+        ch if ch.isalnum() or ch in "-_" else "_"
+        for ch in str(raw)
+    ).strip("._") or fallback
+    if len(safe) <= max_length:
+        return safe
+
+    digest = hashlib.sha256(str(raw).encode("utf-8")).hexdigest()[:8]
+    prefix_length = max(1, max_length - len(digest) - 1)
+    return f"{safe[:prefix_length]}-{digest}"
 
 def _safe_relative_path(raw: str) -> Path:
     rel = Path(raw.replace("\\", "/"))
@@ -317,14 +332,18 @@ def prepare_workspace_session(
         project_root=source_repo,
     )
 
-    safe_project = "".join(
-        ch if ch.isalnum() or ch in "-_" else "_"
-        for ch in str(project_name)
-    ) or "project"
-    safe_task = "".join(
-        ch if ch.isalnum() or ch in "-_" else "_"
-        for ch in task_id
-    ) or "task"
+    # Keep generated Windows paths comfortably below legacy MAX_PATH.
+    # The full project/task identifiers are still preserved in run metadata/logs.
+    safe_project = _safe_path_segment(
+        str(project_name),
+        fallback="project",
+        max_length=32,
+    )
+    safe_task = _safe_path_segment(
+        task_id,
+        fallback="task",
+        max_length=40,
+    )
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     suffix = uuid.uuid4().hex[:8]
     workspace = (
@@ -334,6 +353,12 @@ def prepare_workspace_session(
         / f"{stamp}-{suffix}"
     ).resolve()
     workspace.parent.mkdir(parents=True, exist_ok=True)
+
+    # Git for Windows can otherwise fail to create/remove a worktree when a
+    # deeply nested project file crosses the legacy MAX_PATH boundary. This is
+    # a local repository setting and does not change tracked project files.
+    if os.name == "nt":
+        _run_git(source_repo, "config", "core.longpaths", "true")
 
     # Required by Git for worktree-specific config such as core.excludesFile.
     _run_git(source_repo, "config", "extensions.worktreeConfig", "true")

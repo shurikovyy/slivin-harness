@@ -28,8 +28,8 @@ class ConsoleEncodingTests(unittest.TestCase):
             sys.stdout.flush()
 
             self.assertEqual(
-                out_buffer.getvalue().decode("utf-8"),
-                "Русский текст → UTF-8\n",
+                out_buffer.getvalue().decode("utf-8").splitlines(),
+                ["Русский текст → UTF-8"],
             )
         finally:
             sys.stdout = original_stdout

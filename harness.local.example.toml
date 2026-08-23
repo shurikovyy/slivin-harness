@@ -17,6 +17,8 @@ command = "codex"
 [workspace]
 # Managed project worktrees are created here. They contain only tracked project
 # files plus explicitly exposed local files; .venv/node_modules do not need copying.
+# On Windows prefer a short path because project-relative file names can be deep.
+# Example: C:/Users/<user>/.slivin/w
 root = "~/.slivin-harness/workspaces"
 
 # Global tools can be shared by historical/static cases.

@@ -473,3 +473,66 @@ core.excludesFile=<task-worktree>/.harness_git_excludes
 Это проверяется `tools/self_check.py` на temporary Git repository без зависимости от `sa_icover`.
 
 Перед новым release/tag всё равно нужен smoke на реальной Windows-машине, потому что файловые locks, path syntax и Codex sandbox остаются platform-sensitive.
+
+
+---
+
+## 18. Long paths в managed worktrees
+
+На Windows полный путь складывается из:
+
+```text
+workspace root
++ project segment
++ task segment
++ run id
++ project-relative file path
+```
+
+Даже если сам repository помещается в `MAX_PATH`, длинный task ID может
+сделать linked worktree заметно глубже. Симптом при удалении:
+
+```text
+git worktree remove --force ...
+error: failed to delete ...: Filename too long
+```
+
+Harness поэтому:
+
+1. ограничивает физические project/task path segments и добавляет stable hash
+   при усечении;
+2. на Windows включает для source repository локальный:
+
+   ```text
+   core.longpaths=true
+   ```
+
+   перед созданием managed worktree.
+
+Полный `task_id` при этом не теряется: он остаётся в manifest, console output и
+run metadata; сокращается только filesystem segment.
+
+Для machine-local config всё равно предпочтителен короткий root, например:
+
+```toml
+[workspace]
+root = "C:/Users/<user>/.slivin/w"
+```
+
+### Очистка старого уже созданного long-path worktree
+
+Из source repository сначала включить:
+
+```bash
+git config core.longpaths true
+```
+
+и повторить:
+
+```bash
+git worktree remove --force "$WT"
+git worktree prune
+```
+
+Если physical directory был удалён вручную, `git worktree prune` очищает stale
+registration.
