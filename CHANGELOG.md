@@ -1,20 +1,53 @@
 # Changelog
 
+## Unreleased
+
+### Documentation baseline
+
+- Added architecture documentation under `docs/`.
+- Recorded accepted, rejected and deferred decisions.
+- Recorded Windows sandbox/workspace setup and troubleshooting history.
+- Recorded the causal development history from the first App Server/sandbox probes
+  through the successful Matrix historical benchmark.
+- Added a maintenance policy so future Harness changes retain their rationale.
+
 ## v0.4.6
 
-Initial clean Git-repository baseline for Slivin Harness.
+Quality-core milestone.
 
-Current quality pipeline includes:
+Current pipeline includes:
 
-- Planner/Characterization;
+- Planner / Characterization;
+- current-contract and assumption validation;
 - pre-edit baseline snapshots;
-- release obligation ledger;
-- Fresh Evaluator;
-- held-out oracle calibration;
+- release obligation evidence ledger;
+- LIFE state lifecycle/ownership audit;
 - REP representation-consumer audit;
 - AUTH authority/precedence audit;
-- LIFE state lifecycle/ownership audit;
-- heartbeat, timings and run artifacts.
+- Fresh Evaluator;
+- deterministic repair loops and replan loops;
+- held-out checks without tutoring;
+- hash-bound historical grader calibration;
+- heartbeat, timings, health checks and run artifacts;
+- repository instruction/skill discovery;
+- disposable workspace preparation and secret hygiene.
 
-Future Harness changes should be ordinary Git commits. Do not create parallel
-`*_vNNN.py` source copies.
+### Proven historical milestone
+
+The Matrix all-matching historical case was completed autonomously:
+
+```text
+calibration certificate PASS
+→ Planner
+→ Implementer
+→ deterministic checks PASS
+→ Fresh Evaluator PASS
+→ held-out PASS
+→ HARNESS_TASK_PASS
+```
+
+The final candidate also passed an independent post-hoc audit without a material
+escaped defect. In particular, the shared-selection change preserved the
+Distribution stage guard as fail-closed for token-only selection.
+
+This is an intermediate quality milestone, not proof of universal reliability.
