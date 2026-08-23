@@ -12,6 +12,7 @@ risk = "medium"
 max_fix_cycles = 3
 max_replan_cycles = 2
 max_change_surface_cycles = 2
+max_impact_cycles = 2
 max_plan_validation_retries = 2
 require_clean_git = true
 

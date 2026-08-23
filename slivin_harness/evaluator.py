@@ -9,6 +9,7 @@ from slivin_harness.protocol import (
     EVALUATOR_PROTOCOL_VERSION,
     evaluator_schema_for_plan,
     finding_id_schema,
+    impact_fingerprint,
     plan_fingerprint,
 )
 
@@ -22,6 +23,7 @@ EVALUATOR_SCHEMA = {
             "enum": [EVALUATOR_PROTOCOL_VERSION],
         },
         "plan_fingerprint": {"type": "string"},
+        "impact_fingerprint": {"type": "string"},
         "status": {
             "type": "string",
             "enum": [
@@ -79,6 +81,32 @@ EVALUATOR_SCHEMA = {
                     "evidence_type",
                     "evidence",
                 ],
+            },
+        },
+        "impact_assessment": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string"},
+                    "status": {
+                        "type": "string",
+                        "enum": ["PASS", "FAIL", "UNVERIFIED"],
+                    },
+                    "evidence_type": {
+                        "type": "string",
+                        "enum": [
+                            "test",
+                            "runtime",
+                            "code_trace",
+                            "static",
+                            "not_available",
+                        ],
+                    },
+                    "evidence": {"type": "string"},
+                },
+                "required": ["id", "status", "evidence_type", "evidence"],
             },
         },
         "shared_changes": {
@@ -164,11 +192,13 @@ EVALUATOR_SCHEMA = {
     "required": [
         "protocol_version",
         "plan_fingerprint",
+        "impact_fingerprint",
         "status",
         "summary",
         "changed_contract",
         "planner_assumption_audit",
         "obligation_assessment",
+        "impact_assessment",
         "shared_changes",
         "plan_findings",
         "findings",
@@ -185,7 +215,7 @@ EVALUATOR_INSTRUCTIONS = """
 1. Перепроверь observable contract, final diff, surrounding code/tests и A-*.
 
 2. STRICT CROSS-STAGE PROTOCOL.
-   `protocol_version` всегда ровно `evaluator.v2`.
+   `protocol_version` всегда ровно `evaluator.v3`.
    `plan_fingerprint` должен быть ровно тем значением, которое Controller передал
    для текущего approved plan. Это связывает verdict с конкретной ревизией plan.
    `planner_assumption_audit[].id` можно брать ТОЛЬКО из exact assumption IDs,
@@ -199,6 +229,15 @@ EVALUATOR_INSTRUCTIONS = """
    Отдельно перепроверь Planner `release_critical` у CC-* и INT-*: если materially
    required contract/interaction ошибочно помечен false и поэтому отсутствует в
    Controller ledger, это plan defect → `REPLAN_REQUIRED` + `plan_findings`.
+
+
+3A. SHARED IMPACT LEDGER.
+   Controller передаёт отдельный Fresh Shared Impact Audit. Верни ровно по одной
+   `impact_assessment` для каждого IMP-* ID. Не доверяй disposition аудитора слепо:
+   перепроверь consumer, reachability и evidence по repository. PASS допустим только
+   если каждый material sibling consumer совместим с final candidate либо требуемое
+   изменение/verification реально выполнено. IMP-* не заменяются CONS-*; это
+   независимый machine-owned completeness gate.
 
 4. LIFE-* AUDIT.
    Независимо перепроверь role/scope/lifecycle каждого state mechanism:
@@ -268,6 +307,7 @@ def run_evaluator(
     workspace: Path,
     task_prompt: str,
     plan: dict,
+    impact_audit: dict,
     checks_summary: str,
     required_obligation_ids: list[str],
     preflight: dict | None = None,
@@ -284,10 +324,17 @@ def run_evaluator(
     )
 
     plan_json = json.dumps(plan, ensure_ascii=False, indent=2)
+    impact_json = json.dumps(impact_audit, ensure_ascii=False, indent=2)
     approved_plan_fingerprint = plan_fingerprint(plan)
+    approved_impact_fingerprint = impact_fingerprint(impact_audit)
     obligation_json = json.dumps(required_obligation_ids, ensure_ascii=False, indent=2)
     assumption_json = json.dumps(
         [str(item["id"]) for item in plan.get("assumptions", [])],
+        ensure_ascii=False,
+        indent=2,
+    )
+    impact_id_json = json.dumps(
+        [str(item["id"]) for item in impact_audit.get("items", [])],
         ensure_ascii=False,
         indent=2,
     )
@@ -325,6 +372,19 @@ PLAN_FINGERPRINT: {approved_plan_fingerprint}
 {plan_json}
 --- END PLAN ---
 
+Fresh Shared Impact Audit, выполненный отдельным read-only role на exact candidate:
+IMPACT_FINGERPRINT: {approved_impact_fingerprint}
+
+--- BEGIN SHARED IMPACT AUDIT ---
+{impact_json}
+--- END SHARED IMPACT AUDIT ---
+
+Exact IMP-* IDs for impact_assessment:
+
+--- BEGIN REQUIRED IMPACT IDS ---
+{impact_id_json}
+--- END REQUIRED IMPACT IDS ---
+
 Обязательные obligation IDs для evidence ledger:
 
 --- BEGIN REQUIRED OBLIGATIONS ---
@@ -355,7 +415,7 @@ surrounding runtime code. Не доверяй объяснению implementer.
     raw = codex.run_turn(
         thread_id=thread_id,
         prompt=prompt,
-        output_schema=evaluator_schema_for_plan(EVALUATOR_SCHEMA, plan),
+        output_schema=evaluator_schema_for_plan(EVALUATOR_SCHEMA, plan, impact_audit),
         skills=explicit_skills,
         on_heartbeat=on_heartbeat,
     )

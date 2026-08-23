@@ -13,6 +13,7 @@ for rel in (
     "slivin_harness/console.py",
     "slivin_harness/planner.py",
     "slivin_harness/evaluator.py",
+    "slivin_harness/impact.py",
     "slivin_harness/protocol.py",
     "slivin_harness/workspace.py",
     "tools/prepare_workspace.py",

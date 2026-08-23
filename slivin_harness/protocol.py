@@ -6,7 +6,8 @@ import json
 from typing import Iterable
 
 PLANNER_PROTOCOL_VERSION = "planner.v2"
-EVALUATOR_PROTOCOL_VERSION = "evaluator.v2"
+EVALUATOR_PROTOCOL_VERSION = "evaluator.v3"
+IMPACT_PROTOCOL_VERSION = "impact.v1"
 
 ID_PATTERNS = {
     "current_contract": r"^CC-[0-9]+$",
@@ -19,6 +20,7 @@ ID_PATTERNS = {
     "preservation_contract": r"^PRES-[0-9]+$",
     "interaction_matrix": r"^INT-[0-9]+$",
     "test_matrix": r"^TEST-[0-9]+$",
+    "impact_items": r"^IMP-[0-9]+$",
 }
 
 
@@ -113,10 +115,54 @@ def plan_fingerprint(plan: dict) -> str:
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:16]
 
-def evaluator_schema_for_plan(base_schema: dict, plan: dict) -> dict:
+
+
+def impact_fingerprint(impact: dict) -> str:
+    payload = json.dumps(
+        impact,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def impact_obligation_ids(impact: dict | None) -> list[str]:
+    if not impact:
+        return []
+    return [str(item["id"]) for item in impact.get("items", [])]
+
+
+def impact_required_candidate_paths(impact: dict | None) -> list[str]:
+    if not impact:
+        return []
+    result: list[str] = []
+    for item in impact.get("items", []):
+        if item.get("disposition") != "CHANGE_REQUIRED":
+            continue
+        for raw in item.get("required_candidate_paths", []):
+            path = str(raw)
+            if path not in result:
+                result.append(path)
+    return result
+
+
+def impact_schema_for_plan(base_schema: dict, plan: dict) -> dict:
+    schema = deepcopy(base_schema)
+    schema["properties"]["plan_fingerprint"]["enum"] = [plan_fingerprint(plan)]
+    return schema
+
+def evaluator_schema_for_plan(
+    base_schema: dict,
+    plan: dict,
+    impact: dict | None = None,
+) -> dict:
     """Bind evaluator cross-references to exact Controller-approved IDs."""
     schema = deepcopy(base_schema)
     schema["properties"]["plan_fingerprint"]["enum"] = [plan_fingerprint(plan)]
+    schema["properties"]["impact_fingerprint"]["enum"] = [
+        impact_fingerprint(impact or {})
+    ]
 
     obligation_ids = required_obligation_ids(plan)
     obligation_array = schema["properties"]["obligation_assessment"]
@@ -129,6 +175,12 @@ def evaluator_schema_for_plan(base_schema: dict, plan: dict) -> dict:
     assumption_id = assumption_array["items"]["properties"]["id"]
     if assumption_ids:
         assumption_id["enum"] = assumption_ids
+
+    impact_ids = impact_obligation_ids(impact)
+    impact_array = schema["properties"]["impact_assessment"]
+    impact_id = impact_array["items"]["properties"]["id"]
+    if impact_ids:
+        impact_id["enum"] = impact_ids
 
     return schema
 

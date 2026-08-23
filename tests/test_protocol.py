@@ -10,6 +10,7 @@ from slivin_harness.protocol import (
     EVALUATOR_PROTOCOL_VERSION,
     PLANNER_PROTOCOL_VERSION,
     evaluator_schema_for_plan,
+    impact_fingerprint,
     plan_fingerprint,
     required_obligation_ids,
 )
@@ -212,7 +213,7 @@ class ProtocolContractTests(unittest.TestCase):
 
     def test_evaluator_schema_is_bound_to_exact_controller_ids(self) -> None:
         plan = valid_plan()
-        schema = evaluator_schema_for_plan(EVALUATOR_SCHEMA, plan)
+        schema = evaluator_schema_for_plan(EVALUATOR_SCHEMA, plan, {"items": []})
         obligations = required_obligation_ids(plan)
         self.assertEqual(
             schema["properties"]["plan_fingerprint"]["enum"],
@@ -248,6 +249,7 @@ class ProtocolContractTests(unittest.TestCase):
         prompt = build_evaluator_repair_prompt(
             {"status": "FINDINGS", "findings": []},
             plan=plan,
+            impact_audit={"items": []},
             baseline_snapshot={"head_sha": "abc", "files": {}},
         )
         self.assertIn(f"PLAN_FINGERPRINT: {plan_fingerprint(plan)}", prompt)
@@ -260,6 +262,7 @@ class ProtocolContractTests(unittest.TestCase):
         evaluation = {
             "protocol_version": EVALUATOR_PROTOCOL_VERSION,
             "plan_fingerprint": "wrong",
+            "impact_fingerprint": impact_fingerprint({"items": []}),
             "status": "FINDINGS",
             "summary": "summary",
             "changed_contract": "contract",
@@ -275,13 +278,14 @@ class ProtocolContractTests(unittest.TestCase):
                 }
                 for item_id in obligations
             ],
+            "impact_assessment": [],
             "shared_changes": [],
             "plan_findings": [],
             "findings": [],
             "unverified_risks": [],
         }
         with self.assertRaises(ArtifactContractError) as ctx:
-            validate_evaluation_artifact(evaluation, plan=plan, risk="medium")
+            validate_evaluation_artifact(evaluation, plan=plan, impact_audit={"items": []}, risk="medium")
         self.assertEqual(ctx.exception.code, "EVALUATOR_PLAN_FINGERPRINT_MISMATCH")
 
     def test_protocol_versions_are_explicit(self) -> None:

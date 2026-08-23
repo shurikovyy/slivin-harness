@@ -17,13 +17,18 @@ from pathlib import Path
 from slivin_harness.app_server import CodexAppServer
 from slivin_harness.console import configure_utf8_stdio
 from slivin_harness.evaluator import run_evaluator
+from slivin_harness.impact import run_impact_auditor
 from slivin_harness.planner import run_planner
 from slivin_harness.protocol import (
     ArtifactContractError,
     EVALUATOR_PROTOCOL_VERSION,
     ID_PATTERNS,
+    IMPACT_PROTOCOL_VERSION,
     PLANNER_PROTOCOL_VERSION,
     compact_plan_retry_context,
+    impact_fingerprint,
+    impact_obligation_ids,
+    impact_required_candidate_paths,
     plan_fingerprint,
     required_obligation_ids,
 )
@@ -1041,10 +1046,188 @@ def validate_plan_artifact(
         )
 
 
+
+def validate_impact_artifact(
+    impact: dict,
+    *,
+    plan: dict,
+    workspace: Path,
+) -> None:
+    if impact.get("protocol_version") != IMPACT_PROTOCOL_VERSION:
+        raise ArtifactContractError(
+            code="IMPACT_PROTOCOL_VERSION_MISMATCH",
+            field="protocol_version",
+            message="Impact artifact protocol_version does not match Controller contract.",
+            expected=IMPACT_PROTOCOL_VERSION,
+            actual=impact.get("protocol_version"),
+        )
+
+    expected_plan_fingerprint = plan_fingerprint(plan)
+    if impact.get("plan_fingerprint") != expected_plan_fingerprint:
+        raise ArtifactContractError(
+            code="IMPACT_PLAN_FINGERPRINT_MISMATCH",
+            field="plan_fingerprint",
+            message="Impact audit is not bound to the current approved plan.",
+            expected=expected_plan_fingerprint,
+            actual=impact.get("plan_fingerprint"),
+        )
+
+    items = impact.get("items", [])
+    ids: list[str] = []
+    pattern = re.compile(ID_PATTERNS["impact_items"])
+    for item in items:
+        item_id = str(item.get("id", ""))
+        if pattern.fullmatch(item_id) is None:
+            raise ArtifactContractError(
+                code="IMPACT_ID_FORMAT_INVALID",
+                field="items[].id",
+                message="Impact item ID must be one bare IMP-* identifier.",
+                expected="IMP-<integer>",
+                actual=item_id,
+            )
+        ids.append(item_id)
+
+        reader_paths = [str(path) for path in item.get("reader_paths", [])]
+        if not reader_paths:
+            raise ArtifactContractError(
+                code="IMPACT_READER_PATHS_MISSING",
+                field=f"items[{item_id}].reader_paths",
+                message="Material impact item must identify concrete reader paths.",
+                expected="At least one exact repo-relative reader path.",
+                actual=reader_paths,
+            )
+        for raw in reader_paths:
+            _safe_repo_path(workspace, raw)
+
+        required_paths = [
+            str(path) for path in item.get("required_candidate_paths", [])
+        ]
+        verification_paths = [
+            str(path) for path in item.get("verification_paths", [])
+        ]
+        for raw in required_paths + verification_paths:
+            _safe_repo_path(workspace, raw)
+
+        if item.get("disposition") == "CHANGE_REQUIRED" and not required_paths:
+            raise ArtifactContractError(
+                code="IMPACT_CHANGE_PATHS_MISSING",
+                field=f"items[{item_id}].required_candidate_paths",
+                message="CHANGE_REQUIRED must name exact paths that need implementation/test changes.",
+                expected="At least one exact repo-relative path.",
+                actual=required_paths,
+            )
+
+        if not item.get("evidence"):
+            raise ArtifactContractError(
+                code="IMPACT_EVIDENCE_MISSING",
+                field=f"items[{item_id}].evidence",
+                message="Impact item has no concrete source evidence.",
+                expected="At least one concrete code/search evidence string.",
+                actual=[],
+            )
+
+    if len(ids) != len(set(ids)):
+        raise ArtifactContractError(
+            code="IMPACT_DUPLICATE_ID",
+            field="items[].id",
+            message="Impact audit returned duplicate IMP IDs.",
+            expected="Unique IMP-* IDs.",
+            actual=ids,
+        )
+
+    if impact.get("status") == "COMPLETE" and impact.get("shared_change_detected"):
+        if not items:
+            raise ArtifactContractError(
+                code="IMPACT_SHARED_CHANGE_WITHOUT_ITEMS",
+                field="items",
+                message="Shared change was detected but no sibling-consumer inventory was returned.",
+                expected="At least one IMP-* item.",
+                actual=[],
+            )
+
+    if impact.get("status") == "COMPLETE" and not impact.get("completeness_evidence"):
+        raise ArtifactContractError(
+            code="IMPACT_COMPLETENESS_EVIDENCE_MISSING",
+            field="completeness_evidence",
+            message="Impact audit must show how repository-wide sibling consumers were searched.",
+            expected="At least one repository-wide search/trace evidence string.",
+            actual=[],
+        )
+
+
+def impact_change_items(impact: dict) -> list[dict]:
+    return [
+        item for item in impact.get("items", [])
+        if item.get("disposition") == "CHANGE_REQUIRED"
+    ]
+
+
+def missing_impact_candidate_paths(plan: dict, impact: dict) -> list[str]:
+    planned = {str(path) for path in plan.get("candidate_paths", [])}
+    return [
+        path for path in impact_required_candidate_paths(impact)
+        if path not in planned
+    ]
+
+
+def impact_revision_context(impact: dict, missing_paths: list[str]) -> dict:
+    return {
+        "reason": "SHARED_IMPACT_CHANGE_REQUIRED",
+        "impact_fingerprint": impact_fingerprint(impact),
+        "mandatory_required_candidate_paths": missing_paths,
+        "impact_audit": impact,
+        "instruction": (
+            "Fresh Shared Impact Audit found reachable sibling consumers that are "
+            "incompatible with the current candidate. Treat CHANGE_REQUIRED items "
+            "as machine-owned impact evidence. Add every mandatory required path to "
+            "candidate_paths and update preservation/tests as needed; do not dismiss "
+            "the consumer merely because it was absent from the initial Planner list."
+        ),
+    }
+
+
+def build_impact_repair_prompt(
+    impact: dict,
+    *,
+    plan: dict,
+    baseline_snapshot: dict,
+) -> str:
+    return f"""
+Fresh Shared Impact Auditor found material sibling-consumer work before release.
+
+Task is NOT complete.
+
+Current Controller-approved PLAN_FINGERPRINT: {plan_fingerprint(plan)}
+IMPACT_FINGERPRINT: {impact_fingerprint(impact)}
+
+--- BEGIN CURRENT PLAN ---
+{json.dumps(plan, ensure_ascii=False, indent=2)}
+--- END CURRENT PLAN ---
+
+--- BEGIN SHARED IMPACT AUDIT ---
+{json.dumps(impact, ensure_ascii=False, indent=2)}
+--- END SHARED IMPACT AUDIT ---
+
+--- BEGIN CURRENT BASELINE SNAPSHOT ---
+{json.dumps(baseline_snapshot, ensure_ascii=False, indent=2)}
+--- END CURRENT BASELINE SNAPSHOT ---
+
+Independently verify each CHANGE_REQUIRED item and its real lifecycle reachability.
+For confirmed items, fix the incompatible local reader/consumer and add targeted
+regression evidence. Do not change unrelated scope and do not encode a known-answer
+implementation. Every changed path must remain inside current candidate_paths;
+D-032 will enforce this mechanically.
+
+After repair finish the turn. Harness will rerun deterministic checks, a NEW fresh
+Shared Impact Audit, and only then Fresh Evaluator.
+""".strip()
+
+
 def validate_evaluation_artifact(
     evaluation: dict,
     *,
     plan: dict,
+    impact_audit: dict,
     risk: str,
 ) -> None:
     if evaluation.get("protocol_version") != EVALUATOR_PROTOCOL_VERSION:
@@ -1066,6 +1249,16 @@ def validate_evaluation_artifact(
             message="Evaluator verdict is not bound to the current Controller-approved plan.",
             expected=expected_fingerprint,
             actual=evaluation.get("plan_fingerprint"),
+        )
+
+    expected_impact_fingerprint = impact_fingerprint(impact_audit)
+    if evaluation.get("impact_fingerprint") != expected_impact_fingerprint:
+        raise ArtifactContractError(
+            code="EVALUATOR_IMPACT_FINGERPRINT_MISMATCH",
+            field="impact_fingerprint",
+            message="Evaluator verdict is not bound to the current Fresh Shared Impact Audit.",
+            expected=expected_impact_fingerprint,
+            actual=evaluation.get("impact_fingerprint"),
         )
 
     expected_obligations = set(
@@ -1094,6 +1287,21 @@ def validate_evaluation_artifact(
         )
         raise RuntimeError(
             "Evaluator obligation ledger does not match Planner obligations. "
+            f"Missing={missing}; extra={extra}"
+        )
+
+    expected_impact_ids = set(impact_obligation_ids(impact_audit))
+    impact_assessed = evaluation.get("impact_assessment", [])
+    impact_assessed_ids = [str(item["id"]) for item in impact_assessed]
+
+    if len(impact_assessed_ids) != len(set(impact_assessed_ids)):
+        raise RuntimeError("Evaluator returned duplicate impact IDs.")
+
+    if set(impact_assessed_ids) != expected_impact_ids:
+        missing = sorted(expected_impact_ids - set(impact_assessed_ids))
+        extra = sorted(set(impact_assessed_ids) - expected_impact_ids)
+        raise RuntimeError(
+            "Evaluator impact ledger does not match Fresh Shared Impact Audit. "
             f"Missing={missing}; extra={extra}"
         )
 
@@ -1132,6 +1340,12 @@ def validate_evaluation_artifact(
     not_passed = [
         item
         for item in assessed
+        if item["status"] != "PASS"
+    ]
+
+    impact_not_passed = [
+        item
+        for item in impact_assessed
         if item["status"] != "PASS"
     ]
 
@@ -1175,12 +1389,13 @@ def validate_evaluation_artifact(
 
     if (
         not_passed
+        or impact_not_passed
         or blocking_findings
         or blocking_plan_findings
         or narrowing_audit_failures
     ):
         raise RuntimeError(
-            "Evaluator returned contradictory PASS: unresolved release obligation, "
+            "Evaluator returned contradictory PASS: unresolved release/impact obligation, "
             "blocking implementation/plan finding, or unconfirmed "
             "behavior-narrowing assumption."
         )
@@ -1290,6 +1505,7 @@ def build_evaluator_repair_prompt(
     evaluation: dict,
     *,
     plan: dict,
+    impact_audit: dict,
     baseline_snapshot: dict,
 ) -> str:
     evaluation_json = json.dumps(
@@ -1303,6 +1519,11 @@ def build_evaluator_repair_prompt(
         indent=2,
     )
     approved_plan_fingerprint = plan_fingerprint(plan)
+    approved_impact_fingerprint = impact_fingerprint(impact_audit)
+    impact_json = json.dumps(impact_audit, ensure_ascii=False, indent=2)
+    impact_ids_json = json.dumps(
+        impact_obligation_ids(impact_audit), ensure_ascii=False, indent=2
+    )
     snapshot_json = json.dumps(
         baseline_snapshot,
         ensure_ascii=False,
@@ -1325,6 +1546,17 @@ PLAN_FINGERPRINT: {approved_plan_fingerprint}
 --- BEGIN CURRENT PLAN ---
 {plan_json}
 --- END CURRENT PLAN ---
+
+Current Fresh Shared Impact Audit for this repair cycle.
+IMPACT_FINGERPRINT: {approved_impact_fingerprint}
+
+--- BEGIN CURRENT IMPACT AUDIT ---
+{impact_json}
+--- END CURRENT IMPACT AUDIT ---
+
+--- BEGIN CONTROLLER IMPACT IDS ---
+{impact_ids_json}
+--- END CONTROLLER IMPACT IDS ---
 
 Controller-derived blocking obligation IDs:
 
@@ -2436,6 +2668,74 @@ def run_validated_planner(
     return None
 
 
+
+def run_validated_impact_audit(
+    codex: CodexAppServer,
+    *,
+    workspace: Path,
+    task_prompt: str,
+    plan: dict,
+    changed_paths: list[str],
+    checks_summary_text: str,
+    preflight: dict,
+    baseline_snapshot: dict,
+    explicit_skills: list[dict[str, str]],
+    phase_label: str,
+    artifact_prefix: str,
+    recorder: RunRecorder,
+) -> dict | None:
+    started = time.monotonic()
+    impact = run_impact_auditor(
+        codex,
+        workspace=workspace,
+        task_prompt=task_prompt,
+        plan=plan,
+        changed_paths=changed_paths,
+        checks_summary=checks_summary_text,
+        preflight=preflight,
+        baseline_snapshot=baseline_snapshot,
+        explicit_skills=explicit_skills,
+        on_heartbeat=make_heartbeat(phase_label),
+        on_thread_started=make_thread_started_callback(
+            phase=phase_label,
+            recorder=recorder,
+        ),
+    )
+    phase_done(phase_label, started)
+    recorder.write_json(f"{artifact_prefix}.json", impact)
+
+    try:
+        validate_impact_artifact(
+            impact,
+            plan=plan,
+            workspace=workspace,
+        )
+    except (ArtifactContractError, RuntimeError) as exc:
+        if isinstance(exc, ArtifactContractError):
+            payload = exc.feedback()
+        else:
+            payload = {
+                "protocol_error": "IMPACT_ARTIFACT_VALIDATION_FAILED",
+                "field": "unknown",
+                "message": str(exc),
+            }
+        recorder.write_json(f"{artifact_prefix}_validation_error.json", payload)
+        print_structured("IMPACT VALIDATION ERROR", payload)
+        return None
+
+    contract = {
+        "protocol_version": IMPACT_PROTOCOL_VERSION,
+        "impact_fingerprint": impact_fingerprint(impact),
+        "plan_fingerprint": plan_fingerprint(plan),
+        "impact_obligation_ids": impact_obligation_ids(impact),
+        "required_candidate_paths": impact_required_candidate_paths(impact),
+    }
+    recorder.write_json(f"{artifact_prefix}_contract.json", contract)
+    print_structured("SHARED IMPACT CONTRACT", contract)
+    print_structured("SHARED IMPACT RESULT", impact)
+    return impact
+
+
 def print_structured(
     title: str,
     value: dict,
@@ -2521,11 +2821,13 @@ def evaluator_machine_guard(
     evaluation: dict,
     *,
     plan: dict,
+    impact_audit: dict,
     risk: str,
 ) -> None:
     validate_evaluation_artifact(
         evaluation,
         plan=plan,
+        impact_audit=impact_audit,
         risk=risk,
     )
 
@@ -2589,6 +2891,13 @@ def main() -> int:
             manifest.get(
                 "max_change_surface_cycles",
                 max_replan_cycles,
+            )
+        )
+
+        max_impact_cycles = int(
+            manifest.get(
+                "max_impact_cycles",
+                2,
             )
         )
 
@@ -2788,6 +3097,10 @@ def main() -> int:
             f"{max_change_surface_cycles}"
         )
         print(
+            f"MAX_IMPACT_CYCLES: "
+            f"{max_impact_cycles}"
+        )
+        print(
             "MAX_PLAN_VALIDATION_RETRIES:",
             max_plan_validation_retries,
         )
@@ -2891,7 +3204,7 @@ def main() -> int:
 
         with CodexAppServer(
             codex_cmd,
-            client_version="0.5.2",
+            client_version="0.5.3",
             runtime_tmp=runtime_tmp,
         ) as codex:
             context_started = (
@@ -3083,6 +3396,8 @@ def main() -> int:
             repair_cycles = 0
             replan_cycles = 0
             change_surface_cycles = 0
+            impact_cycles = 0
+            impact_index = 0
             evaluation_index = 0
 
             while True:
@@ -3375,6 +3690,180 @@ def main() -> int:
                     )
                     continue
 
+                if risk != "low":
+                    impact_index += 1
+                    print()
+                    print("=== FRESH SHARED IMPACT AUDIT ===")
+                    current_impact = run_validated_impact_audit(
+                        codex,
+                        workspace=workspace,
+                        task_prompt=prompt,
+                        plan=plan,
+                        changed_paths=sorted(collect_changed_paths(workspace)),
+                        checks_summary_text=checks_summary(results),
+                        preflight=preflight,
+                        baseline_snapshot=baseline_snapshot,
+                        explicit_skills=explicit_skills,
+                        phase_label=f"IMPACT_{impact_index}",
+                        artifact_prefix=f"impact_{impact_index:02d}",
+                        recorder=recorder,
+                    )
+
+                    if current_impact is None:
+                        print("HARNESS_TASK_BLOCKED: impact_artifact_invalid")
+                        return 2
+                    if current_impact.get("status") == "BLOCKED":
+                        print("HARNESS_TASK_BLOCKED: shared_impact_auditor")
+                        return 2
+
+                    required_impact_changes = impact_change_items(current_impact)
+                    if required_impact_changes:
+                        if impact_cycles >= max_impact_cycles:
+                            print(
+                                "HARNESS_TASK_FAIL: maximum shared-impact repair "
+                                "cycles reached"
+                            )
+                            return 1
+
+                        impact_cycles += 1
+                        missing_paths = missing_impact_candidate_paths(
+                            plan,
+                            current_impact,
+                        )
+
+                        if missing_paths:
+                            print()
+                            print(
+                                f"=== SHARED IMPACT REPLAN {impact_cycles}: "
+                                "MISSING SIBLING PATHS ==="
+                            )
+                            print(
+                                "IMPACT_REQUIRED_PATHS:\n  - "
+                                + "\n  - ".join(missing_paths)
+                            )
+
+                            revised_plan = run_validated_planner(
+                                codex,
+                                workspace=workspace,
+                                task_prompt=prompt,
+                                toolchain=toolchain,
+                                preflight=preflight,
+                                baseline_snapshot=baseline_snapshot,
+                                revision_context=impact_revision_context(
+                                    current_impact,
+                                    missing_paths,
+                                ),
+                                trusted_benchmark_evidence=trusted_benchmark_evidence,
+                                explicit_skills=explicit_skills,
+                                max_validation_retries=max_plan_validation_retries,
+                                phase_label=f"IMPACT_REPLAN_{impact_cycles}",
+                                artifact_prefix=f"impact_replan_{impact_cycles:02d}",
+                                recorder=recorder,
+                            )
+
+                            if revised_plan is None:
+                                print(
+                                    "HARNESS_TASK_BLOCKED: "
+                                    "impact_replanner_artifact_invalid"
+                                )
+                                return 2
+                            if revised_plan.get("status") == "BLOCKED":
+                                print("HARNESS_TASK_BLOCKED: impact_replanner")
+                                return 2
+                            if revised_plan.get("status") == "NEEDS_USER_DECISION":
+                                print(
+                                    "HARNESS_TASK_NEEDS_USER_DECISION: "
+                                    "impact_replanner"
+                                )
+                                return 3
+                            if revised_plan.get("status") != "READY":
+                                print(
+                                    "HARNESS_TASK_BLOCKED: "
+                                    "unexpected_impact_replanner_status="
+                                    + str(revised_plan.get("status"))
+                                )
+                                return 2
+
+                            missing_after_replan = missing_impact_candidate_paths(
+                                revised_plan,
+                                current_impact,
+                            )
+                            if missing_after_replan:
+                                recorder.write_json(
+                                    f"impact_replan_{impact_cycles:02d}_missing_paths.json",
+                                    {
+                                        "missing_required_candidate_paths": (
+                                            missing_after_replan
+                                        )
+                                    },
+                                )
+                                print(
+                                    "HARNESS_TASK_BLOCKED: "
+                                    "impact_replan_missing_required_paths"
+                                )
+                                print(
+                                    "MISSING_REQUIRED_PATHS:\n  - "
+                                    + "\n  - ".join(missing_after_replan)
+                                )
+                                return 2
+
+                            revised_planned = planned_candidate_paths(
+                                workspace,
+                                revised_plan,
+                            )
+                            obsolete_changed = sorted(
+                                collect_changed_paths(workspace) - revised_planned
+                            )
+                            if obsolete_changed:
+                                restore_unplanned_paths_to_baseline(
+                                    workspace,
+                                    preflight=preflight,
+                                    paths=obsolete_changed,
+                                )
+
+                            plan = revised_plan
+                            baseline_snapshot = capture_baseline_snapshot(
+                                workspace,
+                                preflight=preflight,
+                                candidate_paths=[
+                                    str(path)
+                                    for path in plan.get("candidate_paths", [])
+                                ],
+                                existing_snapshot=baseline_snapshot,
+                                captured_before_first_edit=False,
+                                captured_before_path_edit=True,
+                                snapshot_role=(
+                                    "pre_path_edit_after_shared_impact_replan"
+                                ),
+                            )
+                            recorder.write_json(
+                                f"baseline_snapshot_impact_{impact_cycles:02d}.json",
+                                baseline_snapshot,
+                            )
+                            print_structured(
+                                "UPDATED BASELINE SNAPSHOT",
+                                baseline_snapshot,
+                            )
+
+                        impact_repair_prompt = build_impact_repair_prompt(
+                            current_impact,
+                            plan=plan,
+                            baseline_snapshot=baseline_snapshot,
+                        )
+                        impact_repair_started = time.monotonic()
+                        codex.run_turn(
+                            thread_id=thread_id,
+                            prompt=impact_repair_prompt,
+                            on_delta=stream_agent_delta,
+                            on_message_end=stream_agent_message_end,
+                            skills=explicit_skills,
+                        )
+                        phase_done(
+                            f"IMPACT_REPAIR_{impact_cycles}",
+                            impact_repair_started,
+                        )
+                        continue
+
                 if risk == "low":
                     if heldout_checks:
                         print()
@@ -3434,6 +3923,7 @@ def main() -> int:
                     workspace=workspace,
                     task_prompt=prompt,
                     plan=plan,
+                    impact_audit=current_impact,
                     checks_summary=(
                         checks_summary(
                             results
@@ -3493,6 +3983,7 @@ def main() -> int:
                     evaluator_machine_guard(
                         evaluation,
                         plan=plan,
+                        impact_audit=current_impact,
                         risk=risk,
                     )
                 except RuntimeError as exc:
@@ -3817,6 +4308,7 @@ def main() -> int:
                     build_evaluator_repair_prompt(
                         evaluation,
                         plan=plan,
+                        impact_audit=current_impact,
                         baseline_snapshot=baseline_snapshot,
                     )
                 )
