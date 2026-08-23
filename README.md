@@ -2117,3 +2117,36 @@ docs/CURRENT_STATE.md
 - Git trust boundary;
 - target-project runtime gap;
 - следующий рекомендуемый шаг.
+
+
+---
+
+# 44. Windows Git Bash: битая кириллица / `UnicodeEncodeError: 'charmap'`
+
+Harness console contract — UTF-8.
+
+Launchers `run` / `py` set:
+
+```text
+PYTHONUTF8=1
+PYTHONIOENCODING=utf-8
+```
+
+а Controller дополнительно reconfigure'ит stdout/stderr в UTF-8.
+
+Это нужно потому, что Windows Python под Git Bash иногда стартует с legacy
+ANSI/charmap encoding. Симптомы:
+
+```text
+Русский текст → ▒▒▒▒
+UnicodeEncodeError: 'charmap' codec can't encode character ...
+```
+
+При managed worktree run Harness также всегда печатает:
+
+```text
+MANAGED_WORKTREE_ON_EXIT: ...
+```
+
+даже если task завершился ошибкой. `runs/.../workspace_session.json` содержит
+тот же путь для последующего audit.

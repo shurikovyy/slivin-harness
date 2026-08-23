@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Windows console / failed-worktree diagnostics
+
+- Enforced UTF-8 stdout/stderr for Harness launchers and Controller to prevent
+  Git Bash/Windows ANSI `charmap` corruption and UnicodeEncodeError failures.
+- Added a regression test that prints Cyrillic plus a Unicode arrow from a
+  legacy `cp1251` stream and verifies UTF-8 output.
+- Managed worktree metadata is now recorded at run start, not only after a
+  successful task.
+- Every managed run prints `MANAGED_WORKTREE_ON_EXIT` (or an explicit missing
+  marker) so failed/replanned tasks remain locatable for diagnosis.
+
+
 
 ### D-032 and managed-project workspace increment
 

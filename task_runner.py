@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from slivin_harness.app_server import CodexAppServer
+from slivin_harness.console import configure_utf8_stdio
 from slivin_harness.evaluator import run_evaluator
 from slivin_harness.planner import run_planner
 from slivin_harness.workspace import (
@@ -24,6 +25,8 @@ from slivin_harness.workspace import (
     prepare_workspace_session,
 )
 
+
+configure_utf8_stdio()
 
 HARNESS_ROOT = Path(__file__).resolve().parent
 
@@ -2271,6 +2274,7 @@ def evaluator_machine_guard(
 def main() -> int:
     task_started = time.monotonic()
     task_started_wall = datetime.now().astimezone()
+    workspace_session: WorkspaceSession | None = None
 
     try:
         parser = argparse.ArgumentParser()
@@ -2446,6 +2450,25 @@ def main() -> int:
 
         recorder = RunRecorder(
             task_id=task_id,
+        )
+
+        recorder.write_json(
+            "workspace_session.json",
+            {
+                "mode": workspace_session.mode,
+                "workspace": str(workspace_session.workspace),
+                "project_name": workspace_session.project_name,
+                "source_repo": (
+                    str(workspace_session.source_repo)
+                    if workspace_session.source_repo
+                    else None
+                ),
+                "source_head": workspace_session.source_head,
+                "base_sha": workspace_session.base_sha,
+                "result_mode": workspace_session.result_mode,
+                "exposed_paths": list(workspace_session.exposed_paths),
+                "candidate_patch": None,
+            },
         )
 
         recorder.write_json(
@@ -3524,6 +3547,23 @@ def main() -> int:
                 )
 
     finally:
+        if (
+            workspace_session is not None
+            and workspace_session.managed
+        ):
+            if workspace_session.workspace.exists():
+                print()
+                print(
+                    "MANAGED_WORKTREE_ON_EXIT:",
+                    workspace_session.workspace,
+                )
+            else:
+                print()
+                print(
+                    "MANAGED_WORKTREE_MISSING_ON_EXIT:",
+                    workspace_session.workspace,
+                )
+
         print()
         print(
             "TOTAL_ELAPSED:",

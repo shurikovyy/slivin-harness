@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Harness console/protocol text is UTF-8. This avoids legacy Windows
+# ANSI/charmap stdout under Git Bash.
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+
 if [[ -n "${SLIVIN_HARNESS_PYTHON:-}" ]]; then
   exec "$SLIVIN_HARNESS_PYTHON" "$@"
 fi
