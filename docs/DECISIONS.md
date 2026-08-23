@@ -338,30 +338,50 @@ Harness знает paths к Node/Jest/etc и делает их legible agent'у.
 
 ---
 
-## D-019 — Outer Harness Git + inner disposable task Git
+## D-019 — Harness source Git отделён от task/project Git
 
-**Status:** ACCEPTED
+**Status:** ACCEPTED / UPDATED BY D-035
 
-Outer repository version-control'ит Harness.
+Harness repository version-control'ит только Harness.
 
-Inner Git хранит project baseline/task diff.
+Task execution использует отдельный project Git context:
+
+- managed mode — linked detached worktree source repository;
+- static/legacy mode — отдельный inner Git baseline fixture.
 
 ### Почему
 
-Project snapshot не должен попадать в Harness source history.
+Project snapshot/candidate не должен попадать в Harness source history.
 
+Первоначальная формулировка «inner disposable Git внутри `cases/.../workspace`» была
+слишком привязана к старому static workflow. D-035 заменил основной execution model
+на managed Git worktree.
 ---
 
 ## D-020 — `.env` физически запрещён в agent workspace
 
-**Status:** ACCEPTED
+**Status:** SUPERSEDED BY D-036
 
-Ignore не является security boundary.
+### Исходное решение
 
-### Отвергнуто
+Ранний Harness полностью запрещал real `.env*` в agent workspace, потому что
+`.gitignore` не является security boundary.
 
-«Файл в `.gitignore`, значит безопасно».
+### Почему superseded
 
+Позже был принят более точный contract: visibility local files является explicit
+user-controlled trust decision.
+
+Текущий contract определён D-036:
+
+- default — `.env` не экспонируется;
+- managed project может opt-in через `copy_untracked`;
+- static/legacy fixture может opt-in через `--allow-env`;
+- exposed local file не входит в candidate patch/result publication.
+
+Исходный security lesson сохраняется:
+
+> ignored файл всё равно доступен Agent, если физически присутствует в workspace.
 ---
 
 ## D-021 — Git history вместо source-файлов с version suffix
@@ -685,9 +705,13 @@ Controller создаёт isolated detached worktree из configured source repo
 
 При этом сохраняются clean baseline и independent diff.
 
-### Historical exception
+### Static/legacy fallback
 
-Static `workspace = "cases/.../workspace"` сохраняется для frozen historical fixtures (`_90`).
+Static `workspace = "..."` сохраняется только как fallback для intentionally
+materialized filesystem fixtures или source без удобного Git ref.
+
+Текущий Matrix historical `_90` уже использует managed project profile +
+`git_worktree`; он больше не копируется в `cases/.../workspace`.
 
 ---
 

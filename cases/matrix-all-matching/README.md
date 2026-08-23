@@ -1,6 +1,14 @@
 # Matrix all-matching historical benchmark
 
-`workspace/` intentionally не tracked Harness repository.
+Этот case проверяет quality-core Harness на реальном historical escaped defect.
+
+**Текущий execution mode: managed Git worktree.**
+
+`cases/matrix-all-matching/` больше не содержит и не требует локальный `workspace/`.
+Broken baseline хранится как отдельный Git repository, путь к которому задаётся только
+в `harness.local.toml`.
+
+---
 
 ## Purpose
 
@@ -18,32 +26,161 @@ Matrix filters
 
 Case проверяет, способен ли Harness исправить bug без доступа к known-good implementation.
 
-## Setup
+---
 
-После clone:
+## Source baseline
 
-1. Скопировать **содержимое** broken `_90` в:
+Нужен отдельный Git repository с historical broken `_90`, например:
 
-   ```text
-   cases/matrix-all-matching/workspace/
-   ```
+```text
+C:/Users/<user>/Downloads/sa_icover_90
+```
 
-2. Убедиться, что реальные `.env*`/secrets отсутствуют.
+Требования:
 
-3. Подготовить baseline:
+```text
+Git repository
+HEAD = broken historical baseline
+git status --short = empty
+```
 
-   ```bash
-   ./py tools/prepare_workspace.py \
-       cases/matrix-all-matching/workspace
-   ```
+Baseline не нужно копировать в Harness repository.
 
-4. Run:
+Если `_90` получен как обычная папка без `.git`, его можно **один раз** превратить
+в Git baseline через `tools/prepare_workspace.py`. После этого benchmark работает
+напрямую от этого source repository и `prepare_workspace.py` больше не участвует
+в каждом запуске.
 
-   ```bash
-   ./run cases/matrix-all-matching/task.toml
-   ```
+---
 
-## Known-good reference
+## Local project profile
+
+Machine-specific binding находится в ignored `harness.local.toml`.
+
+Пример:
+
+```toml
+[codex]
+command = "C:/path/to/codex.cmd"
+
+[workspace]
+# На Windows рекомендуется короткий root.
+root = "C:/Users/<user>/.slivin/w"
+
+[projects.matrix_baseline]
+repo = "C:/Users/<user>/Downloads/sa_icover_90"
+base_ref = "HEAD"
+require_clean_source = true
+
+# Historical source должен остаться `_90`.
+result_mode = "keep_worktree"
+
+[projects.matrix_baseline.toolchain]
+project_python = "{project_root}/.venv/Scripts/python.exe"
+node = "C:/path/to/node.exe"
+jest = "{project_root}/node_modules/jest/bin/jest.js"
+
+[projects.matrix_baseline.workspace]
+# Optional explicit trust decision.
+copy_untracked = [".env"]
+```
+
+`{project_root}` Harness подставляет из:
+
+```toml
+[projects.matrix_baseline]
+repo = "..."
+```
+
+В `task.toml` ничего вместо `{workspace}` писать не нужно: `{workspace}` — это
+runtime path автоматически созданного disposable worktree текущего run.
+
+---
+
+## Run
+
+Из Harness root:
+
+```bash
+./py tools/self_check.py
+./run cases/matrix-all-matching/task.toml
+```
+
+Harness автоматически:
+
+```text
+source `_90` HEAD
+    ↓
+git worktree add --detach
+    ↓
+новый unique managed workspace
+    ↓
+Planner / Implementer / checks / Evaluator / held-out
+```
+
+Физический worktree создаётся под configured `[workspace].root`, а не внутри
+`cases/matrix-all-matching/`.
+
+---
+
+## Result
+
+Case использует:
+
+```toml
+result_mode = "keep_worktree"
+```
+
+Поэтому source `_90` **не изменяется** после успешного run.
+
+Accepted/intermediate candidate остаётся в managed worktree, а run artifacts
+сохраняются под:
+
+```text
+runs/MATRIX_DATATABLE_ALL_MATCHING_BULK_ACTION_SCOPE_BENCHMARK/<run-id>/
+```
+
+После запуска Controller печатает location managed worktree. При failed run worktree
+тоже сохраняется для диагностики.
+
+---
+
+## Re-run
+
+Новый независимый trial не требует reset старого worktree.
+
+Достаточно убедиться, что source baseline всё ещё clean:
+
+```bash
+cd /path/to/sa_icover_90
+git status --short
+```
+
+и снова выполнить:
+
+```bash
+cd ~/Tools/slivin-harness
+./run cases/matrix-all-matching/task.toml
+```
+
+Каждый run получает новый detached worktree от того же source `HEAD`.
+
+Старый retained/failed worktree можно оставить для audit либо удалить корректно через
+source repository:
+
+```bash
+cd /path/to/sa_icover_90
+git worktree list
+git worktree remove --force "<worktree-path>"
+git worktree prune
+```
+
+На Windows для уже созданного очень длинного path может потребоваться
+`core.longpaths=true`; подробности — `docs/WINDOWS_SETUP.md`.
+
+---
+
+## Known-good reference и calibration
 
 Полная `_92` рядом с Agent не нужна.
 
@@ -56,23 +193,27 @@ _92 → PASS
 
 Repository хранит hash-bound calibration certificate.
 
-Если grader/check definition меняется, Harness откажется запускать case до recalibration.
+Если grader/check definition меняется, Harness должен отказаться от historical
+acceptance до explicit recalibration.
+
+---
 
 ## Held-out scope
 
-Held-out проверяет только public Matrix contract:
+Held-out проверяет public Matrix contract:
 
 1. all-matching остаётся explicit selection;
 2. ordinary filter-only не показывает normal confirm action;
 3. manual checkbox сохраняет normal action.
 
-Он **не содержит** known-answer assertion про Distribution.
+Он не кодирует ready-made implementation и не используется как tutoring feedback
+внутри trial.
 
-В successful historical run Distribution consumer был найден generic Planner/Evaluator analysis.
+---
 
-## Successful milestone
+## Historical milestone
 
-Один clean trial завершился:
+На lineage 0.4.6 один clean trial завершился:
 
 ```text
 Planner
@@ -83,52 +224,11 @@ Planner
 → HARNESS_TASK_PASS
 ```
 
-Post-hoc audit material product defect не нашёл.
+Позднее case был переведён на managed-worktree infrastructure и используется как
+regression benchmark для следующих Harness increments.
 
-## Known benchmark nuances
-
-Во время broader sibling exploration встречались unrelated historical failures в existing suites вокруг:
-
-```text
-odata-response-state
-grouped-page-selection
-```
-
-Они не являлись release gates final trial.
-
-Перед превращением такого failure в blocker всегда проверять broken baseline.
-
-## Current Harness hardening gap discovered from this case
-
-Planner initial `candidate_paths` не включал Distribution source/test paths, а Implementer позже корректно изменил их после consumer discovery.
-
-Следовательно текущий Controller пока не mechanically reconciles:
-
-```text
-planned candidate_paths
-vs
-actual final changed paths
-```
-
-Подробно:
+Текущий validation status новой infrastructure см. в:
 
 ```text
 docs/CURRENT_STATE.md
-D-032 в docs/DECISIONS.md
 ```
-
-## Reset before another independent trial
-
-```bash
-cd cases/matrix-all-matching/workspace
-
-git reset --hard HEAD
-git clean -fd
-rm -rf .harness_tmp
-
-git status --short
-```
-
-После reset status должен быть пустым.
-
-Не делать новый baseline commit из прошлого candidate.

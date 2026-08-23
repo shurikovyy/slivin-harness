@@ -1,22 +1,28 @@
 # Workspace model, Git boundaries и local files
 
-## 1. Два разных режима workspace
+## 1. Основной и fallback режимы
 
-Slivin Harness теперь разделяет:
+Slivin Harness теперь использует один основной execution model:
 
 ```text
-A. Managed project task
-   → Git worktree из реального configured project repository
-
-B. Static historical/fixture task
-   → cases/.../workspace с отдельным inner Git baseline
+Managed project task
+→ configured source Git repository
+→ detached Git worktree per run
 ```
 
-Для обычной разработки использовать **A**.
+И один fallback:
 
-Static mode сохраняется для frozen historical eval cases вроде `_90`.
+```text
+Static/legacy fixture
+→ заранее подготовленная директория с собственным clean Git baseline
+```
 
----
+Для обычной разработки и для текущего Matrix historical benchmark используется
+**managed Git worktree**.
+
+Static mode нужен только когда source не представлен удобным Git repository/ref либо
+нужен намеренно frozen filesystem fixture. Он не должен становиться способом вручную
+копировать обычный project repository в `cases/`.
 
 # 2. Managed project task — основной production-development mode
 
@@ -381,26 +387,36 @@ workspace session metadata
 
 ---
 
-# 11. Static historical/fixture mode
+# 11. Static/legacy fixture mode
 
-Historical case может по-прежнему использовать:
+Fallback mode:
 
 ```toml
-workspace = "cases/matrix-all-matching/workspace"
+workspace = "/path/to/already-prepared/static-fixture"
 ```
 
-Здесь Harness **не создаёт Git worktree автоматически**.
+Harness не создаёт managed worktree автоматически.
 
-Это полезно, когда broken state существует только как frozen archive/snapshot, а не как удобный source repo commit.
+Использовать его имеет смысл только когда:
+
+- source не является Git repository/ref;
+- fixture deliberately materialized как отдельное filesystem state;
+- reproducer требует layout, который нельзя удобно представить source worktree.
+
+**Текущий Matrix `_90` этот mode больше не использует.** Он хранится как отдельный
+Git source repository и каждый trial получает managed worktree.
 
 ---
 
 ## 11.1. `prepare_workspace.py`
 
-Для copied frozen snapshot:
+`prepare_workspace.py` — one-time helper именно для static/legacy folder без удобного
+baseline Git state.
+
+Пример:
 
 ```bash
-./py tools/prepare_workspace.py cases/.../workspace
+./py tools/prepare_workspace.py /path/to/static-fixture
 ```
 
 Он:
@@ -410,16 +426,9 @@ workspace = "cases/matrix-all-matching/workspace"
 3. добавляет local `.git/info/exclude` policy;
 4. проверяет clean status.
 
-Он больше **не удаляет**:
+Он не является обязательным шагом перед каждым managed project run.
 
-```text
-.venv
-venv
-env
-node_modules
-```
-
-Они лишь ignored baseline Git.
+`.venv`, `venv`, `env`, `node_modules` не удаляются — они исключаются из baseline Git.
 
 ---
 
@@ -431,35 +440,59 @@ Default:
 real .env* → fail-fast
 ```
 
-Opt-in:
+Explicit opt-in:
 
 ```bash
-./py tools/prepare_workspace.py WORKSPACE --allow-env
+./py tools/prepare_workspace.py /path/to/static-fixture --allow-env
 ```
 
-Файл останется доступен Agent и ignored Git.
+Файл остаётся доступен Agent и ignored Git.
 
-Это специально отличается от старого absolute ban.
+Для managed project mode local-file exposure задаётся через project profile:
 
----
+```toml
+[projects.my_project.workspace]
+copy_untracked = [".env"]
+```
 
-# 12. Historical baseline reset
+# 12. Повторные trials
 
-Перед новым независимым trial:
+## Managed worktree mode
+
+Новый trial всегда создаёт новый detached worktree от configured source `base_ref`.
+
+Не нужно reset'ить предыдущий task worktree.
+
+Перед повтором достаточно убедиться, что source repository сохранил intended baseline:
 
 ```bash
-cd cases/matrix-all-matching/workspace
+cd /path/to/source
+git status --short
+git rev-parse HEAD
+```
 
+Для historical `result_mode = "keep_worktree"` source остаётся неизменным, поэтому
+один и тот же `_90` можно использовать для нескольких независимых trials.
+
+Старые worktrees можно сохранить для audit либо удалить через source repository:
+
+```bash
+git worktree list
+git worktree remove --force "<worktree-path>"
+git worktree prune
+```
+
+Windows cleanup/long-path nuances описаны в `docs/WINDOWS_SETUP.md`.
+
+## Static/legacy mode
+
+Только для static fixture перед повтором вернуть его inner Git к baseline:
+
+```bash
 git reset --hard HEAD
 git clean -fd
 rm -rf .harness_tmp
-
-git status --short
 ```
-
-Не делать новый baseline commit из candidate прошлого trial.
-
----
 
 # 13. Outer Harness Git
 

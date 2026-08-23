@@ -80,50 +80,71 @@ Matrix
 
 # 3. Текущий validation status и environment
 
-Последний **полностью подтверждённый Agent historical run**:
+Последний полностью подтверждённый **quality-core** milestone остаётся lineage 0.4.6
+historical Matrix PASS.
 
-```text
-Windows 10 build 19045
-Git Bash / MINGW64
-Codex CLI 0.148.0
-Slivin Harness 0.4.6 lineage
-```
-
-Текущая source revision после этого milestone содержит следующий development increment:
+После него development increment добавил:
 
 ```text
 D-032 machine-enforced change-surface reconciliation
 portable project profiles/toolchain
 managed Git worktrees
-opt-in .env exposure
-apply_to_source result mode
+opt-in local-file/.env exposure
+keep_worktree / apply_to_source
+Windows UTF-8 console hardening
+Windows managed-worktree path shortening / long-path support
 ```
 
-Для этих новых механизмов stdlib `self_check`/unit tests проходят в development environment, но перед новым tag нужны локальные Windows checks:
+## Что уже доказал первый real managed-worktree run
 
-1. `./py tools/self_check.py`;
-2. historical Matrix regression run;
-3. managed-worktree smoke на реальном project profile;
-4. проверка `apply_to_source` на безопасной test task.
+На Windows 10 / Git Bash / Codex CLI 0.148.0 Harness успешно:
 
-После этого CURRENT_STATE нужно перевести с «development increment» на новый validated milestone.
+1. разрешил `matrix_baseline` из `harness.local.toml`;
+2. создал detached worktree вне Harness repository;
+3. скопировал opt-in `.env`;
+4. использовал project Python/Jest из configured `{project_root}`;
+5. выполнил Planner;
+6. выполнил Implementer;
+7. прошёл deterministic checks;
+8. запустил Fresh Evaluator;
+9. получил корректный `REPLAN_REQUIRED`;
+10. выполнил read-only replan.
 
-Machine-specific paths больше не являются Harness contract. Они живут в:
+То есть managed-worktree execution и project-toolchain resolution фактически работали.
+
+## Почему trial не завершился
+
+После успешного replan Controller попытался вывести revised structured plan в console и
+упал на Windows legacy `charmap`:
+
+```text
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'
+```
+
+Сами JSON run artifacts сохраняли корректный UTF-8; повреждалась только console boundary.
+
+После этого в source добавлены:
+
+- UTF-8 launch/runtime enforcement;
+- console regression test;
+- LF/CRLF-neutral assertion;
+- managed-worktree metadata at run start;
+- `MANAGED_WORKTREE_ON_EXIT` diagnostics;
+- short hashed filesystem segments;
+- repository-local `core.longpaths=true` на Windows.
+
+**Текущий статус:** source/unit hardening реализован; полный Matrix rerun после этих
+Windows fixes ещё нужен до нового validated tag.
+
+Machine/project-specific paths являются local configuration:
 
 ```text
 harness.local.toml
-SLIVIN_HARNESS_PYTHON   # только bootstrap Controller Python
+SLIVIN_HARNESS_PYTHON
 SLIVIN_CODEX_CMD
 ```
 
-Project-specific dependencies задаются через:
-
-```text
-[projects.<name>]
-[projects.<name>.toolchain]
-```
-
----
+Project dependencies задаются через `[projects.<name>.toolchain]`.
 
 # 4. Текущий ownership / Git contract
 
@@ -157,50 +178,49 @@ Production writes также не являются частью текущего
 
 ---
 
-# 5. D-032 hardening — implemented, awaiting Windows/full regression
+# 5. D-032 hardening — implemented, end-to-end exercise pending
 
-Historical origin остаётся тем же: successful Matrix Implementer корректно нашёл Distribution consumer, но изменил files вне initial `candidate_paths`, поэтому trusted pre-edit evidence для них отсутствовал.
+Historical origin: successful Matrix Implementer однажды изменил Distribution files
+вне initial `candidate_paths`, поэтому trusted pre-edit evidence для них отсутствовал.
 
-Текущий Controller теперь механически enforce'ит:
+Текущий Controller machine-enforce'ит:
 
 ```text
 actual changed paths ⊆ plan.candidate_paths
 ```
 
-Если Agent/repair создаёт незапланированный path:
+Если write turn создаёт незапланированный path:
 
 ```text
 record
-→ rollback только unexpected path к baseline
-→ read-only replan
-→ required path явно добавляется в candidate_paths
+→ rollback unexpected path
+→ read-only change-surface replan
+→ revised candidate_paths
 → trusted pre-path-edit snapshot
-→ Implementer повторяет изменение
+→ Implementer повторяет требуемое изменение
 ```
 
-Если revised plan исключает ранее changed path, он возвращается к baseline.
+Final PASS тоже имеет actual-diff-to-plan guard.
 
-Gate повторяется после deterministic checks и перед финальным PASS.
+## Что показал последний managed Matrix run
 
-Snapshot различает:
+В первой implementation текущего trial Agent изменил только initial planned paths.
+Поэтому D-032 unexpected-path route **не был вызван**.
+
+Fresh Evaluator самостоятельно обнаружил, что initial plan недостаточно покрывает
+Distribution и stale selection counter, и вернул обычный:
 
 ```text
-captured_before_first_edit
-captured_before_path_edit
+REPLAN_REQUIRED
 ```
 
-То есть late consumer может иметь честное per-path pre-edit evidence без ложного утверждения, что task целиком всё ещё pre-edit.
+Replanner затем расширил `candidate_paths`, включая `selection/core.js` и Distribution.
 
-Local unit tests покрывают:
+Это правильный evaluator/replan route, но не прямое доказательство D-032 rollback +
+late-snapshot path.
 
-- detection tracked/untracked unexpected paths;
-- rollback только unplanned paths;
-- preservation planned edits;
-- late per-path baseline snapshot.
-
-**Status:** implementation complete, user Windows/historical validation pending.
-
----
+**Status:** implementation/unit coverage есть; end-to-end unexpected-path exercise ещё
+не наблюдался на реальном App Server trial.
 
 # 6. Другие известные незакрытые capability gaps
 
@@ -455,30 +475,40 @@ tools/check_changed_eol.py
 
 # 11. Historical benchmark discipline
 
-Перед новым независимым trial того же case:
+Текущий Matrix benchmark использует managed project profile:
 
-```bash
-cd cases/matrix-all-matching/workspace
-
-git reset --hard HEAD
-git clean -fd
-rm -rf .harness_tmp
-
-git status --short
+```text
+harness.local.toml
+[projects.matrix_baseline]
+repo = <path-to-broken-_90>
+result_mode = "keep_worktree"
 ```
 
-Должен быть clean baseline.
+Source `_90` должен оставаться clean и неизменным:
 
-После этого:
+```bash
+cd /path/to/sa_icover_90
+git status --short
+git rev-parse HEAD
+```
+
+Каждый trial:
 
 ```bash
 cd ~/Tools/slivin-harness
 ./run cases/matrix-all-matching/task.toml
 ```
 
-Не использовать final candidate от прошлого trial как новый baseline.
+создаёт новый unique detached worktree. Reset `cases/.../workspace` больше не нужен.
 
-Не показывать held-out assertion Implementer внутри trial.
+После failed/successful run retained worktree можно:
+
+- сохранить для audit;
+- удалить через `git worktree remove --force <path>` из source repository.
+
+Не использовать candidate worktree как baseline следующего trial.
+
+Held-out assertion не передаётся Implementer как tutoring feedback.
 
 Если grader меняется:
 
@@ -487,28 +517,27 @@ calibration certificate invalid
 → explicit recalibration
 ```
 
----
-
 # 12. Current roadmap order
 
 Состояние на момент этой записи:
 
 ```text
-1. Quality-core historical milestone                DONE (0.4.6 lineage)
-2. Knowledge-base / architecture / operational docs DONE
-3. Context gap audit                                DONE
-4. D-032 change-surface reconciliation              IMPLEMENTED; WINDOWS REGRESSION PENDING
-5. Portable project profiles / managed worktree     IMPLEMENTED; WINDOWS SMOKE PENDING
-6. GitHub Issues / task orchestration                NEXT USABILITY LAYER AFTER VALIDATION
-7. Additional historical eval corpus                 IMPORTANT
-8. Browser/runtime capability                        AS TASKS REQUIRE
-9. External typed observation/MCP                    LATER
-10. PR/CI publication                                AFTER task orchestration/quality evidence
+1. Quality-core historical milestone                    DONE (0.4.6 lineage)
+2. Knowledge-base / architecture / operational docs     DONE
+3. Context gap audit                                    DONE
+4. D-032 change-surface reconciliation                  IMPLEMENTED; E2E PATH-EXPANSION PROOF PENDING
+5. Portable profiles / managed worktree                 REAL WINDOWS EXECUTION PROVEN
+6. UTF-8 + Windows long-path hardening                  IMPLEMENTED; FULL MATRIX RERUN PENDING
+7. Documentation refactor to managed-worktree model     DONE IN CURRENT CHANGE
+8. GitHub Issues / task orchestration                    AFTER FULL MATRIX RERUN
+9. Additional historical eval corpus                    IMPORTANT
+10. Browser/runtime capability                          AS TASKS REQUIRE
+11. External typed observation/MCP                      LATER
+12. PR/CI publication                                   AFTER task orchestration/quality evidence
 ```
 
-Не начинать GitHub task supervisor до выполнения локальной validation текущего increment: tracker не должен строиться поверх непроверенного workspace/publication foundation.
-
----
+Не начинать task supervisor до успешного полного rerun текущего Matrix case после
+Windows UTF/path fixes.
 
 # 13. Что должен прочитать новый чат перед продолжением
 

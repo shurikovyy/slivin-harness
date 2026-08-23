@@ -71,7 +71,7 @@ slivin_harness/workspace.py
     Managed project profiles/worktrees, local-file exposure, candidate patch/apply.
 
 tools/prepare_workspace.py
-    Подготовка static historical/fixture workspace/baseline.
+    One-time preparation helper для static/legacy fixture без готового Git baseline.
 
 tools/self_check.py
     Быстрая самопроверка Harness source/manifests.

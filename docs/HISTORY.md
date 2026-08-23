@@ -623,3 +623,75 @@ Static historical preparation:
 `result_mode=apply_to_source` позволяет после полного quality PASS применить binary candidate patch обратно в исходный working tree без commit/push.
 
 На момент записи source/unit self-check этого increment проходит в development environment. Windows + real App Server regression должен быть выполнен перед новым validated tag.
+
+
+---
+
+# 20. Первый real managed-worktree trial на Windows
+
+После D-032/worktree redesign Matrix benchmark был переведён с локальной копии
+`cases/.../workspace` на external source repository + managed detached worktree.
+
+Run подтвердил:
+
+```text
+local project profile resolution
+→ worktree creation outside Harness repo
+→ opt-in .env copy
+→ project Python/Jest resolution from source
+→ Planner
+→ Implementer
+→ deterministic checks PASS
+→ Fresh Evaluator
+→ REPLAN_REQUIRED
+→ revised Planner
+```
+
+Fresh Evaluator снова обнаружил два реальных gap initial candidate:
+
+- Distribution stage/eligibility representation;
+- stale all-matching selection counter.
+
+Это подтвердило, что evaluator/replan quality logic работает и в новом workspace model.
+
+## Failure: Windows console encoding
+
+После `REPLAN_1_DONE` Controller упал не на reasoning, а при печати Unicode revised
+plan:
+
+```text
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'
+```
+
+Run artifacts при этом содержали корректный UTF-8. Root cause находился в Python
+stdout/stderr encoding under Git Bash/Windows.
+
+Добавлены:
+
+```text
+PYTHONUTF8=1
+PYTHONIOENCODING=utf-8
+Controller stdout/stderr reconfigure
+console regression test
+LF/CRLF-neutral test assertion
+```
+
+## Failure: long path при cleanup старого worktree
+
+Первый managed path включал полный длинный `task_id`; `git worktree remove --force`
+на Windows получил `Filename too long`.
+
+Добавлены:
+
+- bounded/hash-suffixed filesystem path segments;
+- short workspace-root recommendation;
+- repository-local `core.longpaths=true`;
+- explicit failed-worktree location diagnostics.
+
+## Validation nuance
+
+Этот run не вызвал D-032 unexpected-path route: Implementer изменил только planned
+files, а missing consumers были обнаружены Fresh Evaluator и добавлены через ordinary
+`REPLAN_REQUIRED`.
+
+Полный rerun после UTF/path fixes остаётся следующим validation gate.

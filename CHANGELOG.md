@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+
+### Documentation refactor: managed worktree is the canonical workflow
+
+- Removed stale Matrix instructions that copied `_90` into
+  `cases/matrix-all-matching/workspace`.
+- Matrix historical benchmark documentation now uses the external
+  `matrix_baseline` project profile and a fresh managed Git worktree per trial.
+- Reframed `prepare_workspace.py` and static `workspace = ...` as legacy/fixture
+  fallback mechanisms rather than the normal historical workflow.
+- Marked D-020 absolute `.env` ban as superseded by D-036 explicit opt-in policy.
+- Updated CURRENT_STATE/HISTORY with the first real managed-worktree Windows run,
+  including the UTF-8 console and long-path failures and their hardening status.
+- Documented that repeated managed historical trials create new worktrees and do
+  not reset/reuse a `cases/.../workspace` directory.
+
+
 ### Windows portability fixes
 
 - Made the UTF-8 console regression test newline-agnostic (`LF`/`CRLF`) while
