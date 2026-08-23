@@ -558,6 +558,15 @@ representation, lifecycle и authority. Не исправляй код и не �
     Недостаточное technical evidence/capability → BLOCKED.
     Technical lifecycle/ownership ambiguity → сначала LIFE/AUTH resolution, не user.
 
+13a. TRUSTED BENCHMARK EVIDENCE.
+    Если Harness передал `baseline_status=CONFIRMED_BROKEN` с authority
+    `CONTROLLER_HELDOUT`, existence исторического defect уже доказан Controller на
+    ЭТОМ exact workspace до planning. Это evidence сильнее твоего ad-hoc jsdom/smoke
+    probe. Не возвращай BLOCKED с причиной «не воспроизводится». Если твой probe
+    проходит, считай его неполным: найди omitted lifecycle transition, DOM reader,
+    second-pass refresh, routing или другую разницу fidelity. Hidden assertion/output
+    намеренно не раскрываются; не пытайся искать grader вне workspace.
+
 14. BASELINE VS WORKTREE.
     Различай canonical baseline blob и filesystem representation.
 
@@ -614,6 +623,7 @@ def run_planner(
     preflight: dict | None = None,
     baseline_snapshot: dict | None = None,
     revision_context: dict | None = None,
+    benchmark_evidence: dict | None = None,
     explicit_skills: list[dict[str, str]] | None = None,
     on_heartbeat: Callable[[dict], None] | None = None,
     on_thread_started: Callable[[dict], None] | None = None,
@@ -648,6 +658,12 @@ def run_planner(
         indent=2,
     )
 
+    benchmark_json = json.dumps(
+        benchmark_evidence or {},
+        ensure_ascii=False,
+        indent=2,
+    )
+
     prompt = f"""
 Исходная задача пользователя:
 
@@ -660,6 +676,15 @@ Trusted Harness preflight, зафиксированный ДО первой prod
 --- BEGIN PREFLIGHT ---
 {preflight_json}
 --- END PREFLIGHT ---
+
+Trusted historical benchmark evidence, если Controller его собрал:
+
+--- BEGIN BENCHMARK EVIDENCE ---
+{benchmark_json}
+--- END BENCHMARK EVIDENCE ---
+
+Если здесь `baseline_status` = `CONFIRMED_BROKEN`, defect existence уже доказан
+Controller на exact current workspace. Не отменяй это evidence synthetic probe-ом.
 
 Pre-edit filesystem evidence, если Harness уже смог его снять:
 

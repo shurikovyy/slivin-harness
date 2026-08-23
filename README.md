@@ -1199,6 +1199,7 @@ Historical benchmark может использовать один из двух 
 ```toml
 [benchmark]
 calibration_certificate = "hidden_checks/matrix_all_matching.calibration.json"
+confirm_current_baseline_broken = true
 ```
 
 Harness проверяет:

@@ -598,3 +598,22 @@ Planner planner.v2
 
 Local self-check является необходимым, но недостаточным evidence. Следующий gate —
 clean Matrix historical run через реальный Codex App Server на Windows.
+
+
+---
+
+# Trusted baseline reproduction gate
+
+The latest hardening closes the false `BLOCKED: defect not reproduced` failure mode for historical benchmarks.
+
+For Matrix the manifest now declares:
+
+```toml
+[benchmark]
+calibration_certificate = "hidden_checks/matrix_all_matching.calibration.json"
+confirm_current_baseline_broken = true
+```
+
+Before Planner, Controller runs the hidden grader on the exact managed worktree. Expected result is FAIL. Only a sanitized `CONFIRMED_BROKEN` fact is sent to Planner.
+
+This preserves held-out secrecy while preventing a lower-fidelity synthetic probe from overriding objective benchmark evidence.

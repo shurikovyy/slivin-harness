@@ -30,6 +30,7 @@ assert task["result_mode"] == "keep_worktree"
 assert task["benchmark"]["calibration_certificate"] == (
     "hidden_checks/matrix_all_matching.calibration.json"
 )
+assert task["benchmark"]["confirm_current_baseline_broken"] is True
 assert (ROOT / task["benchmark"]["calibration_certificate"]).is_file()
 
 with (ROOT / "harness.local.example.toml").open("rb") as handle:

@@ -816,3 +816,33 @@ Cross-stage coordination должна быть typed/machine-owned там, гд�
 - protocol unit tests;
 - Harness self-check;
 - следующий clean Matrix historical trial через real App Server.
+
+
+---
+
+## D-039 — Controller-owned historical baseline evidence outranks Planner synthetic probes
+
+**Status:** ACCEPTED
+
+### Decision
+
+For historical benchmarks with `confirm_current_baseline_broken=true`, the Controller runs the held-out grader on the exact current workspace before planning. The baseline must FAIL as expected.
+
+Planner receives only the sanitized fact:
+
+```text
+baseline_status = CONFIRMED_BROKEN
+authority = CONTROLLER_HELDOUT
+```
+
+Hidden assertion text/output is not exposed.
+
+A Planner ad-hoc/jsdom/smoke probe may help locate the cause but may not negate the Controller-confirmed defect. If the probe passes, Planner must investigate the missing lifecycle/DOM/reader transition rather than return `BLOCKED: not reproduced`.
+
+### Origin
+
+A managed-worktree Matrix trial returned `BLOCKED` because a simplified jsdom probe exercised the first availability pass but omitted the active-filter-chip second pass. The calibrated held-out still failed on that exact baseline.
+
+### Why
+
+Evidence hierarchy must be machine-owned. A partial model-created reproduction is lower fidelity than a calibrated Controller check executed against the exact workspace.

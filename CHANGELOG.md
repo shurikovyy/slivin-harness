@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Trusted historical baseline gate
+
+- Historical benchmarks can now require `confirm_current_baseline_broken=true`.
+- The Controller executes the held-out grader against the exact current workspace before Planner starts and requires the expected FAIL.
+- Planner receives only sanitized `CONTROLLER_HELDOUT / CONFIRMED_BROKEN` evidence; hidden assertion/output remains undisclosed.
+- A Planner `BLOCKED` verdict cannot negate Controller-confirmed historical failure with a lower-fidelity synthetic probe.
+- Added regression coverage for baseline FAIL/PASS gating and evidence sanitization.
+
+
 ### Strict cross-stage protocol (0.5.1 candidate)
 
 - Replaced Planner-authored free-form `release_obligations` with Controller-derived blocking IDs.

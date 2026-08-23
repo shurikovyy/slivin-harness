@@ -1711,6 +1711,97 @@ def verify_oracle_calibration_certificate(
     print()
 
 
+def run_benchmark_baseline_gate(
+    specs: list[dict],
+    *,
+    workspace: Path,
+    toolchain: dict[str, str],
+    runtime_root: Path,
+) -> dict:
+    """Prove that the *current* historical workspace is still broken.
+
+    This is Controller-owned evidence. Check output is intentionally retained only
+    in the run artifact; Planner receives a sanitized fact and never the hidden
+    assertion text.
+    """
+    if not specs:
+        raise RuntimeError(
+            "benchmark.confirm_current_baseline_broken=true requires at least "
+            "one held-out check."
+        )
+
+    print("=== BENCHMARK BASELINE GATE ===")
+    records: list[dict] = []
+    all_failed_as_expected = True
+
+    for index, spec in enumerate(specs, start=1):
+        result = run_check(
+            spec,
+            workspace=workspace,
+            toolchain=toolchain,
+            runtime_tmp=(runtime_root / f"check_{index:02d}"),
+        )
+        failed_as_expected = not result.passed
+        all_failed_as_expected = (
+            all_failed_as_expected and failed_as_expected
+        )
+
+        print(
+            f"[{index}/{len(specs)}] {spec['name']}: ",
+            "FAIL as expected" if failed_as_expected else "UNEXPECTED PASS",
+            f"({format_duration(result.duration_seconds, compact=True)})",
+        )
+
+        records.append({
+            "check": spec["name"],
+            "expected_result": "FAIL",
+            "observed_result": "FAIL" if failed_as_expected else "PASS",
+            "passed_gate": failed_as_expected,
+            "result": _check_result_record(result),
+        })
+
+    evidence = {
+        "schema_version": 1,
+        "baseline_status": (
+            "CONFIRMED_BROKEN"
+            if all_failed_as_expected
+            else "NOT_CONFIRMED_BROKEN"
+        ),
+        "authority": "CONTROLLER_HELDOUT",
+        "workspace": str(workspace),
+        "check_names": [record["check"] for record in records],
+        "failure_details_exposed_to_planner": False,
+        "records": records,
+    }
+
+    if all_failed_as_expected:
+        print("BENCHMARK_BASELINE_CONFIRMED_BROKEN")
+    else:
+        print("BENCHMARK_BASELINE_NOT_CONFIRMED_BROKEN")
+    print()
+
+    return evidence
+
+
+def planner_benchmark_context(evidence: dict | None) -> dict:
+    """Sanitized trusted fact for Planner; never expose hidden assertion text."""
+    if not evidence:
+        return {}
+    return {
+        "schema_version": evidence.get("schema_version", 1),
+        "baseline_status": evidence.get("baseline_status"),
+        "authority": evidence.get("authority"),
+        "check_names": list(evidence.get("check_names", [])),
+        "failure_details_exposed_to_planner": False,
+        "policy": (
+            "This exact workspace was independently proven broken by the "
+            "Controller before planning. Do not use an ad-hoc or partial probe "
+            "to negate defect existence. If your probe passes, treat the probe "
+            "as lower-fidelity and identify the missing lifecycle/readers."
+        ),
+    }
+
+
 def format_duration(
     seconds: float,
     *,
@@ -2163,9 +2254,37 @@ def assert_harness_tmp_ignored(
 
 def _plan_validation_error(
     plan: dict,
+    *,
+    trusted_benchmark_evidence: dict | None = None,
 ) -> dict | None:
     try:
         validate_plan_artifact(plan)
+
+        if (
+            trusted_benchmark_evidence
+            and trusted_benchmark_evidence.get("baseline_status")
+            == "CONFIRMED_BROKEN"
+            and plan.get("status") == "BLOCKED"
+        ):
+            raise ArtifactContractError(
+                code="PLANNER_TRUSTED_BASELINE_CONFLICT",
+                field="status",
+                message=(
+                    "Planner returned BLOCKED even though the Controller already "
+                    "proved this exact historical workspace fails the calibrated "
+                    "held-out contract. A partial/synthetic reproduction cannot "
+                    "override stronger Controller evidence."
+                ),
+                expected=(
+                    "Return READY and investigate why any local probe disagrees "
+                    "with the trusted baseline evidence. BLOCKED is not valid for "
+                    "'defect not reproduced' in this benchmark."
+                ),
+                actual={
+                    "status": plan.get("status"),
+                    "summary": plan.get("summary"),
+                },
+            )
     except ArtifactContractError as exc:
         return exc.feedback()
     except RuntimeError as exc:
@@ -2193,6 +2312,7 @@ def run_validated_planner(
     preflight: dict,
     baseline_snapshot: dict | None,
     revision_context: dict | None,
+    trusted_benchmark_evidence: dict | None,
     explicit_skills: list[dict[str, str]],
     max_validation_retries: int,
     phase_label: str,
@@ -2215,6 +2335,9 @@ def run_validated_planner(
             preflight=preflight,
             baseline_snapshot=baseline_snapshot,
             revision_context=current_revision,
+            benchmark_evidence=planner_benchmark_context(
+                trusted_benchmark_evidence
+            ),
             explicit_skills=explicit_skills,
             on_heartbeat=make_heartbeat(
                 phase_label
@@ -2241,7 +2364,8 @@ def run_validated_planner(
         )
 
         error = _plan_validation_error(
-            plan
+            plan,
+            trusted_benchmark_evidence=trusted_benchmark_evidence,
         )
 
         if error is None:
@@ -2543,6 +2667,9 @@ def main() -> int:
         raw_certificate = benchmark.get(
             "calibration_certificate"
         )
+        confirm_current_baseline_broken = bool(
+            benchmark.get("confirm_current_baseline_broken", False)
+        )
         calibration_certificate = (
             resolve_harness_path(raw_certificate)
             if raw_certificate
@@ -2674,6 +2801,10 @@ def main() -> int:
             )
         )
         print("ORACLE_CALIBRATION:", calibration_mode)
+        print(
+            "BENCHMARK_BASELINE_GATE:",
+            "enabled" if confirm_current_baseline_broken else "disabled",
+        )
         if calibrate_heldout:
             print(
                 "GOOD_REFERENCE_WORKSPACE:",
@@ -2716,6 +2847,34 @@ def main() -> int:
                 calibration_started,
             )
 
+        trusted_benchmark_evidence: dict | None = None
+        if confirm_current_baseline_broken:
+            baseline_gate_started = time.monotonic()
+            trusted_benchmark_evidence = run_benchmark_baseline_gate(
+                heldout_checks,
+                workspace=workspace,
+                toolchain=toolchain,
+                runtime_root=(recorder.root / "benchmark_baseline_gate_tmp"),
+            )
+            recorder.write_json(
+                "benchmark_baseline_gate.json",
+                trusted_benchmark_evidence,
+            )
+            phase_done(
+                "BENCHMARK_BASELINE_GATE",
+                baseline_gate_started,
+            )
+            if (
+                trusted_benchmark_evidence.get("baseline_status")
+                != "CONFIRMED_BROKEN"
+            ):
+                print(
+                    "HARNESS_TASK_BLOCKED: benchmark_baseline_not_broken"
+                )
+                return 2
+            if require_clean_git:
+                assert_clean_git(workspace)
+
         preflight = capture_preflight(
             workspace
         )
@@ -2732,7 +2891,7 @@ def main() -> int:
 
         with CodexAppServer(
             codex_cmd,
-            client_version="0.5.1",
+            client_version="0.5.2",
             runtime_tmp=runtime_tmp,
         ) as codex:
             context_started = (
@@ -2792,6 +2951,7 @@ def main() -> int:
                     preflight=preflight,
                     baseline_snapshot=None,
                     revision_context=None,
+                    trusted_benchmark_evidence=trusted_benchmark_evidence,
                     explicit_skills=explicit_skills,
                     max_validation_retries=(
                         max_plan_validation_retries
@@ -2993,6 +3153,7 @@ def main() -> int:
                             preflight=preflight,
                             baseline_snapshot=baseline_snapshot,
                             revision_context=revision_context,
+                            trusted_benchmark_evidence=trusted_benchmark_evidence,
                             explicit_skills=explicit_skills,
                             max_validation_retries=max_plan_validation_retries,
                             phase_label=(
@@ -3486,6 +3647,7 @@ def main() -> int:
                             revision_context=(
                                 evaluation
                             ),
+                            trusted_benchmark_evidence=trusted_benchmark_evidence,
                             explicit_skills=(
                                 explicit_skills
                             ),
