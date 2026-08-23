@@ -18,8 +18,19 @@ class PrepareWorkspaceTests(unittest.TestCase):
         (workspace / ".env").write_text("TOKEN=secret\n", encoding="utf-8")
         (workspace / ".venv").mkdir()
         (workspace / ".venv" / "marker.txt").write_text("venv", encoding="utf-8")
+        (workspace / ".venv" / "Lib" / "site-packages" / "coverage").mkdir(parents=True)
+        (workspace / ".venv" / "Lib" / "site-packages" / "coverage" / "__init__.py").write_text(
+            "# legitimate installed package\n",
+            encoding="utf-8",
+        )
+        (workspace / ".venv" / "Lib" / "site-packages" / "cached.pyc").write_bytes(b"venv-pyc")
         (workspace / "node_modules").mkdir()
         (workspace / "node_modules" / "marker.txt").write_text("node", encoding="utf-8")
+        (workspace / "node_modules" / "some-package" / "coverage").mkdir(parents=True)
+        (workspace / "node_modules" / "some-package" / "coverage" / "data.txt").write_text(
+            "legitimate package data\n",
+            encoding="utf-8",
+        )
         (workspace / "__pycache__").mkdir()
         (workspace / "__pycache__" / "junk.pyc").write_bytes(b"junk")
 
@@ -37,7 +48,16 @@ class PrepareWorkspaceTests(unittest.TestCase):
 
         self.assertTrue((workspace / ".env").is_file())
         self.assertTrue((workspace / ".venv" / "marker.txt").is_file())
+        self.assertTrue(
+            (workspace / ".venv" / "Lib" / "site-packages" / "coverage" / "__init__.py").is_file()
+        )
+        self.assertTrue(
+            (workspace / ".venv" / "Lib" / "site-packages" / "cached.pyc").is_file()
+        )
         self.assertTrue((workspace / "node_modules" / "marker.txt").is_file())
+        self.assertTrue(
+            (workspace / "node_modules" / "some-package" / "coverage" / "data.txt").is_file()
+        )
         self.assertFalse((workspace / "__pycache__").exists())
 
         tracked = subprocess.run(

@@ -22,7 +22,9 @@ for rel in (
 with (ROOT / "cases/matrix-all-matching/task.toml").open("rb") as handle:
     task = tomllib.load(handle)
 
-assert task["workspace"] == "cases/matrix-all-matching/workspace"
+assert task["project"] == "matrix_baseline"
+assert task["workspace_mode"] == "git_worktree"
+assert task["result_mode"] == "keep_worktree"
 assert task["benchmark"]["calibration_certificate"] == (
     "hidden_checks/matrix_all_matching.calibration.json"
 )

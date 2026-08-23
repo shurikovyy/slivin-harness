@@ -34,6 +34,16 @@ GENERATED_DIR_NAMES = {
     "coverage",
 }
 
+# These directories may contain legitimate packages/directories named like
+# generated artifacts (for example .venv/.../site-packages/coverage). They are
+# local runtime/toolchain assets and must never be traversed by cleanup.
+PRESERVED_RUNTIME_DIR_NAMES = {
+    ".venv",
+    "venv",
+    "env",
+    "node_modules",
+}
+
 
 def run_git(workspace: Path, *args: str) -> str:
     result = subprocess.run(
@@ -54,16 +64,19 @@ def run_git(workspace: Path, *args: str) -> str:
 
 def remove_generated(workspace: Path) -> None:
     for path in sorted(workspace.rglob("*"), reverse=True):
-        if ".git" in path.parts:
+        rel = path.relative_to(workspace)
+        if ".git" in rel.parts:
+            continue
+        if any(part in PRESERVED_RUNTIME_DIR_NAMES for part in rel.parts):
             continue
         if path.is_dir() and (
             path.name in GENERATED_DIR_NAMES
             or path.name.startswith(".jest-cache")
         ):
-            print(f"REMOVE_GENERATED: {path.relative_to(workspace)}")
+            print(f"REMOVE_GENERATED: {rel}")
             shutil.rmtree(path, ignore_errors=True)
         elif path.is_file() and path.suffix in {".pyc", ".pyo"}:
-            print(f"REMOVE_GENERATED: {path.relative_to(workspace)}")
+            print(f"REMOVE_GENERATED: {rel}")
             path.unlink(missing_ok=True)
 
 
