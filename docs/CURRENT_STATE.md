@@ -574,3 +574,27 @@ shipping-date business rules
 Harness documentation хранит только integration contracts, необходимые для самого Harness.
 
 Это предотвращает быстрое устаревание копии product knowledge.
+
+
+---
+
+# 15. Strict handoff protocol hardening (pending real-trial validation)
+
+Последний clean managed Matrix trial не дошёл до implementation: три Planner attempts
+были semantically содержательны, но нарушили representation `release_obligations`,
+записывая prose/grouped IDs. Controller правильно заблокировал task.
+
+Принято D-038:
+
+```text
+Planner planner.v2
+→ no release_obligations field
+→ CC/INT release_critical booleans
+→ Controller exact blocking ledger
+→ plan_fingerprint
+→ Implementer / Fresh Evaluator
+→ Evaluator evaluator.v2 exact-ID/fingerprint binding
+```
+
+Local self-check является необходимым, но недостаточным evidence. Следующий gate —
+clean Matrix historical run через реальный Codex App Server на Windows.

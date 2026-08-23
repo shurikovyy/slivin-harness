@@ -506,3 +506,11 @@ harness.local.toml
 Поддерживается `{project_root}`.
 
 Это позволяет одному Harness repository обслуживать несколько проектов и несколько машин без редактирования committed manifests/source.
+
+
+---
+
+## 13. Cross-stage protocol
+
+Strict Planner/Controller/Implementer/Evaluator handoff описан в `HANDOFF_PROTOCOL.md`.
+Planner protocol `planner.v2` не содержит свободного cross-reference списка obligations; Controller owns exact ledger and plan fingerprint. Evaluator protocol `evaluator.v2` bound к exact current IDs/fingerprint.

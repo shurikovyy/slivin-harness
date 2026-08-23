@@ -5,12 +5,23 @@ from pathlib import Path
 from typing import Callable
 
 from slivin_harness.app_server import CodexAppServer
+from slivin_harness.protocol import (
+    EVALUATOR_PROTOCOL_VERSION,
+    evaluator_schema_for_plan,
+    finding_id_schema,
+    plan_fingerprint,
+)
 
 
 EVALUATOR_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
+        "protocol_version": {
+            "type": "string",
+            "enum": [EVALUATOR_PROTOCOL_VERSION],
+        },
+        "plan_fingerprint": {"type": "string"},
         "status": {
             "type": "string",
             "enum": [
@@ -96,7 +107,7 @@ EVALUATOR_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": finding_id_schema("P"),
                     "severity": {
                         "type": "string",
                         "enum": ["BLOCKER", "HIGH", "MEDIUM", "LOW"],
@@ -120,7 +131,7 @@ EVALUATOR_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": finding_id_schema("F"),
                     "severity": {
                         "type": "string",
                         "enum": ["BLOCKER", "HIGH", "MEDIUM", "LOW"],
@@ -151,6 +162,8 @@ EVALUATOR_SCHEMA = {
         },
     },
     "required": [
+        "protocol_version",
+        "plan_fingerprint",
         "status",
         "summary",
         "changed_contract",
@@ -171,10 +184,23 @@ EVALUATOR_INSTRUCTIONS = """
 
 1. Перепроверь observable contract, final diff, surrounding code/tests и A-*.
 
-2. OBLIGATION LEDGER.
-   Верни ровно по одной assessment для каждого release obligation.
+2. STRICT CROSS-STAGE PROTOCOL.
+   `protocol_version` всегда ровно `evaluator.v2`.
+   `plan_fingerprint` должен быть ровно тем значением, которое Controller передал
+   для текущего approved plan. Это связывает verdict с конкретной ревизией plan.
+   `planner_assumption_audit[].id` можно брать ТОЛЬКО из exact assumption IDs,
+   которые Controller передал ниже. `obligation_assessment[].id` можно брать
+   ТОЛЬКО из exact blocking obligation IDs Controller. ID — это bare identifier,
+   никогда не prose и не несколько IDs в одной строке. Schema дополнительно
+   ограничивает эти поля exact enum-значениями.
 
-3. LIFE-* AUDIT.
+3. OBLIGATION LEDGER.
+   Верни ровно по одной assessment для каждого Controller-provided obligation ID.
+   Отдельно перепроверь Planner `release_critical` у CC-* и INT-*: если materially
+   required contract/interaction ошибочно помечен false и поэтому отсутствует в
+   Controller ledger, это plan defect → `REPLAN_REQUIRED` + `plan_findings`.
+
+4. LIFE-* AUDIT.
    Независимо перепроверь role/scope/lifecycle каждого state mechanism:
    USER_INTENT, ACTION_LOCAL, DERIVED, CACHE, PERSISTED_SOURCE,
    EXTERNAL_SOURCE, LEGACY_COMPAT, UNKNOWN.
@@ -187,7 +213,7 @@ EVALUATOR_INSTRUCTIONS = """
    - какую authority domain он реально имеет;
    - не продолжает ли transient/action-local state влиять за пределами своей domain.
 
-4. LIFECYCLE AUTHORITY.
+5. LIFECYCLE AUTHORITY.
    Для НОВОГО действия USER_INTENT обычно определяет target в своей domain.
    ACTION_LOCAL state authoritative только для action instance, который его создал.
    Frozen in-flight target не должен молча ретаргетиться новым global intent.
@@ -198,34 +224,34 @@ EVALUATOR_INSTRUCTIONS = """
    остался между peer states после lifecycle/ownership анализа. Implementation-only
    ambiguity не является product decision.
 
-5. REP-*.
+6. REP-*.
    Проверь downstream local readers representations, не только backend endpoint:
    stage/eligibility/permission/visibility/count/summary/payload/routing/readback.
 
-6. AUTH-*.
+7. AUTH-*.
    Проверь reachable combinations и consistency across surfaces.
    UI state A + executable payload B без подтверждённого contract → material finding.
 
-7. CHANGE-SURFACE INTEGRITY.
+8. CHANGE-SURFACE INTEGRITY.
    Независимо сравни final changed paths с `plan.candidate_paths`. Каждый реально
    изменённый non-ignored path должен быть в planned surface. Для поздно добавленного
    path baseline snapshot должен честно содержать `captured_before_path_edit=true`;
    не принимай candidate-state-after-edit за pre-edit evidence. Несогласованность
    planned vs actual surface → REPLAN_REQUIRED/BLOCKED в зависимости от ownership.
 
-8. TEST VALIDITY.
+9. TEST VALIDITY.
    Regression evidence должен различать broken contract и candidate.
 
-9. CONS-* / INT-* / PRES-*.
+10. CONS-* / INT-* / PRES-*.
    Проверяй каждого consumer и preservation independently.
 
-10. ROUTING.
+11. ROUTING.
    FINDINGS — candidate defect.
    REPLAN_REQUIRED — plan пропустил/неверно классифицировал material LIFE/REP/AUTH.
    BLOCKED — нет mandatory technical capability/evidence.
    NEEDS_USER_DECISION — только реальная unresolved product semantics между peer states.
 
-11. PASS допустим только если:
+12. PASS допустим только если:
     - blocking findings отсутствуют;
     - все release obligations PASS;
     - narrowing assumptions подтверждены;
@@ -258,7 +284,13 @@ def run_evaluator(
     )
 
     plan_json = json.dumps(plan, ensure_ascii=False, indent=2)
+    approved_plan_fingerprint = plan_fingerprint(plan)
     obligation_json = json.dumps(required_obligation_ids, ensure_ascii=False, indent=2)
+    assumption_json = json.dumps(
+        [str(item["id"]) for item in plan.get("assumptions", [])],
+        ensure_ascii=False,
+        indent=2,
+    )
     preflight_json = json.dumps(preflight or {}, ensure_ascii=False, indent=2)
     baseline_snapshot_json = json.dumps(
         baseline_snapshot or {},
@@ -287,6 +319,8 @@ Pre-edit filesystem evidence, снятое Harness ПОСЛЕ planning и ДО i
 
 Planning/characterization artifact:
 
+PLAN_FINGERPRINT: {approved_plan_fingerprint}
+
 --- BEGIN PLAN ---
 {plan_json}
 --- END PLAN ---
@@ -296,6 +330,12 @@ Planning/characterization artifact:
 --- BEGIN REQUIRED OBLIGATIONS ---
 {obligation_json}
 --- END REQUIRED OBLIGATIONS ---
+
+Точные assumption IDs для planner_assumption_audit:
+
+--- BEGIN REQUIRED ASSUMPTION IDS ---
+{assumption_json}
+--- END REQUIRED ASSUMPTION IDS ---
 
 Deterministic checks, выполненные внешним Harness:
 
@@ -315,7 +355,7 @@ surrounding runtime code. Не доверяй объяснению implementer.
     raw = codex.run_turn(
         thread_id=thread_id,
         prompt=prompt,
-        output_schema=EVALUATOR_SCHEMA,
+        output_schema=evaluator_schema_for_plan(EVALUATOR_SCHEMA, plan),
         skills=explicit_skills,
         on_heartbeat=on_heartbeat,
     )

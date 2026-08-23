@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Strict cross-stage protocol (0.5.1 candidate)
+
+- Replaced Planner-authored free-form `release_obligations` with Controller-derived blocking IDs.
+- Added `release_critical` booleans to CC/INT items; all LIFE/REP/AUTH/CONS/PRES/TEST remain mechanically blocking.
+- Added explicit `planner.v2` / `evaluator.v2` protocol versions.
+- Added plan fingerprints and bound Evaluator verdicts to the exact current plan revision.
+- Dynamically constrain Evaluator obligation/assumption IDs to Controller-approved enums.
+- Added structured compact Planner validation feedback instead of replaying huge malformed artifacts.
+- Added strict protocol regression tests and `docs/HANDOFF_PROTOCOL.md`.
+- No fuzzy/regex repair of malformed model references is performed.
+
+
 
 ### Documentation refactor: managed worktree is the canonical workflow
 

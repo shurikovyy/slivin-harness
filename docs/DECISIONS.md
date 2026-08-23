@@ -768,3 +768,51 @@ apply_to_source
 ### Почему
 
 Убирает ручное копирование результата, но не смешивает quality layer с Git publication authority.
+
+
+---
+
+## D-038 — Strict cross-stage protocol и Controller-owned obligation ledger
+
+**Status:** ACCEPTED / ENFORCED
+
+### Context
+
+Real managed-worktree trial трижды потратил Planner turns из-за malformed
+`release_obligations`: Planner возвращал prose/grouped IDs вместо exact references.
+Controller корректно блокировал artifact, но сам interface позволял бессмысленное
+дублирование semantic IDs в free-form array.
+
+### Decision
+
+1. Planner protocol version — `planner.v2`.
+2. Planner **не возвращает** `release_obligations`.
+3. Все LIFE/REP/AUTH/CONS/PRES/TEST являются blocking детерминированно.
+4. CC/INT имеют локальный boolean `release_critical`.
+5. Controller owns exact blocking ID ledger.
+6. Accepted plan получает canonical `plan_fingerprint`.
+7. Evaluator protocol — `evaluator.v2`; assumption/obligation IDs и fingerprint
+   bound к exact current plan через dynamic enum + Controller set validation.
+8. Malformed IDs не нормализуются regex'ом автоматически.
+9. Validation retry получает compact structured protocol error вместо полного
+   malformed artifact.
+10. Evaluator-repair и change-surface handoff всегда содержат current approved plan,
+    fingerprint, blocking IDs и baseline evidence.
+
+### Why
+
+Cross-stage coordination должна быть typed/machine-owned там, где нет продуктовой
+неопределённости. Модель не должна повторно кодировать список ссылок в свободном
+тексте, если Controller может вычислить его из source artifact.
+
+### Rejected
+
+- автоматически извлекать `CC-1` из строки `CC-1 — ...`;
+- split/regex guessing строк `CC-1, CC-2 ...`;
+- решить проблему только более строгим prompt без изменения ownership/schema.
+
+### Evidence required
+
+- protocol unit tests;
+- Harness self-check;
+- следующий clean Matrix historical trial через real App Server.

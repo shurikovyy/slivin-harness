@@ -270,13 +270,13 @@ Evaluator должен проверять, что test не false-green.
 
 ---
 
-## 12. Release Obligations
+## 12. Release Obligations — Controller-owned ledger
 
-Не все `CC`/observation становятся blockers.
+Не все `CC`/interaction observations становятся blockers, но Planner больше **не**
+формирует отдельный free-form `release_obligations` array. Это cross-reference
+representation оказалось ненадёжным и дублирующим.
 
-`release_obligations` — только claims, без которых нельзя доказать final correctness.
-
-Обязательно включаются materially relevant:
+Controller детерминированно включает все:
 
 - `LIFE-*`;
 - `REP-*`;
@@ -285,9 +285,19 @@ Evaluator должен проверять, что test не false-green.
 - `PRES-*`;
 - `TEST-*`.
 
-`INT-*` — если interaction влияет на requested/preserved behavior.
+Planner делает только локальную boolean-классификацию:
 
-`CC-*` — если final correctness реально зависит от данного fact.
+```text
+current_contract[].release_critical
+interaction_matrix[].release_critical
+```
+
+`true` CC/INT включаются Controller в blocking ledger; `false` остаются
+characterization context. Fresh Evaluator независимо проверяет, не пометил ли Planner
+material CC/INT как advisory.
+
+Exact blocking IDs — machine-owned handoff Controller → Implementer/Evaluator.
+Подробно: `HANDOFF_PROTOCOL.md`.
 
 ---
 

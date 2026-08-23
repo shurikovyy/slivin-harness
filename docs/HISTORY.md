@@ -695,3 +695,45 @@ files, а missing consumers были обнаружены Fresh Evaluator и д�
 `REPLAN_REQUIRED`.
 
 Полный rerun после UTF/path fixes остаётся следующим validation gate.
+
+
+---
+
+# 21. Planner/Controller protocol failure: free-form obligation IDs
+
+После Windows/worktree fixes новый Matrix trial дошёл до planning, но implementation
+не стартовал. Три Planner attempts возвращали semantically useful characterization,
+однако поле `release_obligations` имело неправильную representation:
+
+```text
+"CC-1 — preserve ..."
+"CC-1, CC-2 ..."
+```
+
+Controller ожидал exact IDs и корректно fail-closed завершил:
+
+```text
+HARNESS_TASK_BLOCKED: planner_artifact_invalid
+```
+
+Проблема классифицирована как **protocol design defect**, а не model reasoning defect:
+Planner заставляли заново кодировать cross-reference list, который Controller мог
+вычислить сам.
+
+## Hardening
+
+Введён strict protocol:
+
+```text
+planner.v2
+→ local release_critical booleans
+→ Controller-derived exact obligation ledger
+→ plan_fingerprint
+→ Implementer
+→ evaluator.v2 bound to exact IDs/fingerprint
+```
+
+Также validation retry перестал пересылать весь malformed artifact и получает compact
+structured error. Это снижает token/latency cost повторных planning turns.
+
+Следующий real Matrix trial является acceptance gate этого protocol increment.

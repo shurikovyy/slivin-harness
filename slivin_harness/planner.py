@@ -5,12 +5,20 @@ from pathlib import Path
 from typing import Callable
 
 from slivin_harness.app_server import CodexAppServer
+from slivin_harness.protocol import (
+    PLANNER_PROTOCOL_VERSION,
+    id_schema,
+)
 
 
 PLANNER_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
+        "protocol_version": {
+            "type": "string",
+            "enum": [PLANNER_PROTOCOL_VERSION],
+        },
         "status": {
             "type": "string",
             "enum": [
@@ -55,7 +63,7 @@ PLANNER_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": id_schema("current_contract"),
                     "state": {"type": "string"},
                     "behavior": {"type": "string"},
                     "evidence": {
@@ -74,6 +82,7 @@ PLANNER_SCHEMA = {
                         ],
                     },
                     "compatibility_notes": {"type": "string"},
+                    "release_critical": {"type": "boolean"},
                 },
                 "required": [
                     "id",
@@ -82,6 +91,7 @@ PLANNER_SCHEMA = {
                     "evidence",
                     "source",
                     "compatibility_notes",
+                    "release_critical",
                 ],
             },
         },
@@ -91,7 +101,7 @@ PLANNER_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": id_schema("assumptions"),
                     "claim": {"type": "string"},
                     "evidence": {
                         "type": "array",
@@ -143,7 +153,7 @@ PLANNER_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": id_schema("affected_consumers"),
                     "consumer": {"type": "string"},
                     "why_affected": {"type": "string"},
                 },
@@ -156,7 +166,7 @@ PLANNER_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": id_schema("state_lifecycle_audit"),
                     "mechanism": {"type": "string"},
                     "role": {
                         "type": "string",
@@ -219,7 +229,7 @@ PLANNER_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": id_schema("decision_escalations"),
                     "question": {"type": "string"},
                     "mechanisms": {
                         "type": "array",
@@ -253,7 +263,7 @@ PLANNER_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": id_schema("representation_consumer_audit"),
                     "logical_state": {"type": "string"},
                     "representations": {
                         "type": "array",
@@ -315,7 +325,7 @@ PLANNER_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": id_schema("authority_matrix"),
                     "coexisting_states": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -347,7 +357,7 @@ PLANNER_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": id_schema("preservation_contract"),
                     "claim": {"type": "string"},
                 },
                 "required": ["id", "claim"],
@@ -359,12 +369,19 @@ PLANNER_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": id_schema("interaction_matrix"),
                     "scenario": {"type": "string"},
                     "expected": {"type": "string"},
                     "risk": {"type": "string"},
+                    "release_critical": {"type": "boolean"},
                 },
-                "required": ["id", "scenario", "expected", "risk"],
+                "required": [
+                    "id",
+                    "scenario",
+                    "expected",
+                    "risk",
+                    "release_critical",
+                ],
             },
         },
         "test_matrix": {
@@ -373,7 +390,7 @@ PLANNER_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": id_schema("test_matrix"),
                     "scenario": {"type": "string"},
                     "expected": {"type": "string"},
                     "test_level": {
@@ -399,10 +416,6 @@ PLANNER_SCHEMA = {
             "type": "array",
             "items": {"type": "string"},
         },
-        "release_obligations": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
         "proposed_change_surface": {
             "type": "array",
             "items": {"type": "string"},
@@ -413,6 +426,7 @@ PLANNER_SCHEMA = {
         },
     },
     "required": [
+        "protocol_version",
         "status",
         "summary",
         "reproduction",
@@ -431,7 +445,6 @@ PLANNER_SCHEMA = {
         "interaction_matrix",
         "test_matrix",
         "candidate_paths",
-        "release_obligations",
         "proposed_change_surface",
         "unknowns",
     ],
@@ -548,18 +561,32 @@ representation, lifecycle и authority. Не исправляй код и не �
 14. BASELINE VS WORKTREE.
     Различай canonical baseline blob и filesystem representation.
 
-15. RELEASE OBLIGATIONS.
-    Обязательно включай:
-    - все materially relevant LIFE-*;
+15. RELEASE-CRITICAL MARKING.
+    НЕ создавай отдельный список release obligations и НЕ повторяй IDs в prose.
+    Controller сам детерминированно строит blocking ledger:
+    - все LIFE-*;
     - все REP-*;
     - все AUTH-*;
     - все materially affected CONS-*;
     - все PRES-*;
-    - все TEST-*.
-    INT-* — если interaction влияет на requested/preserved behavior.
-    CC-* — только если final correctness зависит от этого факта.
+    - все TEST-*;
+    - только CC-* с `release_critical=true`;
+    - только INT-* с `release_critical=true`.
 
-16. CANDIDATE PATHS.
+    Для каждого current_contract и interaction_matrix ОБЯЗАТЕЛЬНО выставь
+    `release_critical` как boolean. Это единственный способ выбрать advisory vs
+    blocking CC/INT. Не кодируй этот выбор в строках, описаниях или ID.
+
+16. STRICT PROTOCOL FORMAT.
+    `protocol_version` всегда ровно `planner.v2`.
+    Все ID-поля — только bare identifiers по schema, например:
+    `CC-1`, `A-2`, `CONS-3`, `LIFE-4`, `REP-1`, `AUTH-2`, `PRES-5`,
+    `INT-7`, `TEST-9`, `DEC-1`.
+    Никогда не добавляй к ID пояснение (`CC-1 — ...` запрещено), не объединяй
+    несколько IDs в одной строке (`CC-1, CC-2` запрещено) и не используй ID как
+    поле для prose. Пояснение всегда хранится в семантическом поле объекта.
+
+17. CANDIDATE PATHS.
     Только точные repo-relative paths предполагаемых изменений.
     Это machine-enforced planned change surface, а не справочный список.
     Включай production files, tests и docs, которые реально могут потребоваться для
@@ -568,11 +595,11 @@ representation, lifecycle и authority. Не исправляй код и не �
     unrelated path не добавляй. Controller уже откатил такие paths к baseline и
     снимет trusted pre-path-edit snapshot перед повторной implementation.
 
-17. REPLAN.
+18. REPLAN.
     После REPLAN_REQUIRED исправляй artifact по independent feedback.
     Baseline определяй через preflight/baseline_snapshot/head_sha.
 
-18. proposed_change_surface — owners/files/modules, не готовый patch.
+19. proposed_change_surface — owners/files/modules, не готовый patch.
 
 Верни только JSON по output schema.
 """.strip()
@@ -653,6 +680,7 @@ Feedback предыдущего Fresh Evaluator для перепланиров�
 --- END REVISION CONTEXT ---
 
 Сначала охарактеризуй существующий contract, затем подготовь planning artifact.
+Protocol contract: `protocol_version` = `planner.v2`; ID-поля должны соответствовать schema буквально.
 Если workspace уже содержит candidate changes, canonical pre-change baseline —
 это preflight.head_sha, а не текущая рабочая копия.
 Код не изменяй.

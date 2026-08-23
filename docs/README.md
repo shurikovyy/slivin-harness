@@ -11,6 +11,7 @@
 | [CURRENT_STATE.md](CURRENT_STATE.md) | Оперативный handoff: текущий milestone, известные gaps и следующий шаг |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Текущая архитектура Harness, роли, state machine и границы ответственности |
 | [QUALITY_MODEL.md](QUALITY_MODEL.md) | Модель качества: current contract, assumptions, LIFE/REP/AUTH, obligations, Evaluator, held-out |
+| [HANDOFF_PROTOCOL.md](HANDOFF_PROTOCOL.md) | Строгий Planner → Controller → Implementer/Evaluator protocol, fingerprints и machine-owned obligations |
 | [DECISIONS.md](DECISIONS.md) | Принятые, отклонённые и отложенные архитектурные решения с причинами |
 | [HISTORY.md](HISTORY.md) | История развития и реальные failures, которые породили текущие механизмы |
 | [WINDOWS_SETUP.md](WINDOWS_SETUP.md) | Проверенная конфигурация Windows/Git Bash/Codex sandbox |

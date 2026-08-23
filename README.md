@@ -1278,21 +1278,43 @@ TOTAL_ELAPSED
 
 Planner structured artifact дополнительно проверяется Controller.
 
+Planner/Controller handoff использует protocol `planner.v2`.
+
+Planner больше не формирует свободный `release_obligations` list. Вместо этого он
+ставит boolean `release_critical` у CC/INT, а Controller детерминированно строит exact
+blocking IDs из всех LIFE/REP/AUTH/CONS/PRES/TEST + critical CC/INT.
+
 Например блокируются:
 
-- duplicate obligation IDs;
+- malformed/duplicate IDs;
+- legacy/free-form `release_obligations`;
 - unsafe narrowing assumption без достаточного evidence;
-- invalid release obligations;
+- invalid `release_critical`;
 - `READY` без required candidate paths;
 - `NEEDS_USER_DECISION` без доказанного decision escalation.
+
+После validation Controller публикует отдельный `PLAN CONTRACT`:
+
+```text
+protocol_version
+plan_fingerprint
+blocking_obligation_ids
+candidate_paths
+```
+
+Evaluator использует `evaluator.v2`; его obligation/assumption IDs и
+`plan_fingerprint` schema-bound к exact текущему plan.
 
 Если artifact invalid:
 
 ```text
-INVALID PLAN ARTIFACT
-→ validation error
+INVALID PLAN SUMMARY
+→ structured PLAN VALIDATION ERROR
 → fresh Planner attempt
 ```
+
+Полный invalid JSON сохраняется в `runs/`, но в retry передаётся compact structured
+feedback, а не огромный malformed artifact. См. `docs/HANDOFF_PROTOCOL.md`.
 
 до:
 

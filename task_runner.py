@@ -18,6 +18,15 @@ from slivin_harness.app_server import CodexAppServer
 from slivin_harness.console import configure_utf8_stdio
 from slivin_harness.evaluator import run_evaluator
 from slivin_harness.planner import run_planner
+from slivin_harness.protocol import (
+    ArtifactContractError,
+    EVALUATOR_PROTOCOL_VERSION,
+    ID_PATTERNS,
+    PLANNER_PROTOCOL_VERSION,
+    compact_plan_retry_context,
+    plan_fingerprint,
+    required_obligation_ids,
+)
 from slivin_harness.workspace import (
     WorkspaceSession,
     apply_candidate_to_source,
@@ -58,8 +67,9 @@ IMPLEMENTER_INSTRUCTIONS = """
 - current_contract/assumptions Planner нужно перепроверять по фактическому коду и тестам;
 - не вводи новую eligibility/validity condition, сужающую compatibility behavior,
   без доказательства или явного требования пользователя;
-- `release_obligations` из plan являются blocking verification obligations:
-  реализация должна оставить достаточно evidence для независимого Evaluator;
+- blocking verification obligations вычисляет Controller детерминированно из
+  `release_critical` CC/INT и всех LIFE/REP/AUTH/CONS/PRES/TEST; реализация должна
+  оставить достаточно evidence для независимого Evaluator;
 - LIFE-* задают scope/lifecycle/authority state mechanisms; ACTION_LOCAL state
   не должен переопределять target другого нового action, а frozen in-flight target
   не должен молча ретаргетиться global intent;
@@ -832,28 +842,42 @@ def collect_plan_ids(
     ]
 
 
-def required_obligation_ids(
-    plan: dict,
-) -> list[str]:
-    return [
-        str(item_id)
-        for item_id in plan.get(
-            "release_obligations",
-            [],
-        )
-    ]
-
 
 def validate_plan_artifact(
     plan: dict,
 ) -> None:
-    all_ids: list[str] = []
+    if "release_obligations" in plan:
+        raise ArtifactContractError(
+            code="PLANNER_FORBIDDEN_RELEASE_OBLIGATIONS_FIELD",
+            field="release_obligations",
+            message=(
+                "Planner must not restate blocking obligation IDs. "
+                "The Controller derives that ledger deterministically."
+            ),
+            expected=(
+                "Omit release_obligations entirely. Mark only CC/INT items with "
+                "release_critical=true/false; Controller owns the final ID ledger."
+            ),
+            actual=plan.get("release_obligations"),
+        )
 
-    fields = (
+    if plan.get("protocol_version") != PLANNER_PROTOCOL_VERSION:
+        raise ArtifactContractError(
+            code="PLANNER_PROTOCOL_VERSION_MISMATCH",
+            field="protocol_version",
+            message=(
+                "Planner artifact protocol_version does not match the Controller contract."
+            ),
+            expected=PLANNER_PROTOCOL_VERSION,
+            actual=plan.get("protocol_version"),
+        )
+
+    id_fields = (
         "current_contract",
         "assumptions",
         "affected_consumers",
         "state_lifecycle_audit",
+        "decision_escalations",
         "representation_consumer_audit",
         "authority_matrix",
         "preservation_contract",
@@ -861,9 +885,25 @@ def validate_plan_artifact(
         "test_matrix",
     )
 
-    for field in fields:
+    all_ids: list[str] = []
+    for field in id_fields:
+        pattern = re.compile(ID_PATTERNS[field])
         for item in plan.get(field, []):
-            item_id = str(item["id"])
+            item_id = str(item.get("id", ""))
+            if pattern.fullmatch(item_id) is None:
+                raise ArtifactContractError(
+                    code="PLANNER_ID_FORMAT_INVALID",
+                    field=f"{field}[].id",
+                    message=(
+                        f"Planner ID must be a bare identifier matching "
+                        f"{ID_PATTERNS[field]}; prose and grouped IDs are forbidden."
+                    ),
+                    expected=(
+                        f"One bare ID only, e.g. "
+                        f"{ID_PATTERNS[field].replace('^', '').replace('$', '')}"
+                    ),
+                    actual=item_id,
+                )
             all_ids.append(item_id)
 
     duplicates = sorted({
@@ -871,18 +911,41 @@ def validate_plan_artifact(
         for item_id in all_ids
         if all_ids.count(item_id) > 1
     })
-
     if duplicates:
-        raise RuntimeError(
-            "Planner returned duplicate obligation/assumption IDs: "
-            + ", ".join(duplicates)
+        raise ArtifactContractError(
+            code="PLANNER_DUPLICATE_ID",
+            field="*.id",
+            message="Planner returned duplicate IDs across the artifact.",
+            expected="Every artifact ID is unique.",
+            actual=duplicates,
         )
 
     for contract in plan.get("current_contract", []):
         if not contract.get("evidence"):
-            raise RuntimeError(
-                "Planner current_contract item has no evidence: "
-                f"{contract.get('id')}"
+            raise ArtifactContractError(
+                code="PLANNER_CURRENT_CONTRACT_EVIDENCE_MISSING",
+                field=f"current_contract[{contract.get('id')}].evidence",
+                message="Current-contract item has no evidence.",
+                expected="At least one concrete evidence string.",
+                actual=[],
+            )
+        if not isinstance(contract.get("release_critical"), bool):
+            raise ArtifactContractError(
+                code="PLANNER_RELEASE_CRITICAL_INVALID",
+                field=f"current_contract[{contract.get('id')}].release_critical",
+                message="Current-contract release_critical must be a boolean.",
+                expected="true or false",
+                actual=contract.get("release_critical"),
+            )
+
+    for interaction in plan.get("interaction_matrix", []):
+        if not isinstance(interaction.get("release_critical"), bool):
+            raise ArtifactContractError(
+                code="PLANNER_RELEASE_CRITICAL_INVALID",
+                field=f"interaction_matrix[{interaction.get('id')}].release_critical",
+                message="Interaction release_critical must be a boolean.",
+                expected="true or false",
+                actual=interaction.get("release_critical"),
             )
 
     for assumption in plan.get("assumptions", []):
@@ -891,140 +954,91 @@ def validate_plan_artifact(
                 assumption.get("confidence") != "HIGH"
                 or not assumption.get("evidence")
             ):
-                raise RuntimeError(
-                    "Planner proposed behavior-narrowing assumption without "
-                    "HIGH-confidence evidence: "
-                    f"{assumption.get('id')}"
+                raise ArtifactContractError(
+                    code="PLANNER_UNSAFE_NARROWING_ASSUMPTION",
+                    field=f"assumptions[{assumption.get('id')}]",
+                    message=(
+                        "Behavior-narrowing assumption lacks HIGH-confidence evidence."
+                    ),
+                    expected=(
+                        "confidence=HIGH and at least one concrete evidence item, "
+                        "or do not narrow existing behavior."
+                    ),
+                    actual={
+                        "confidence": assumption.get("confidence"),
+                        "evidence": assumption.get("evidence"),
+                    },
                 )
-
-
-    known_obligation_ids: set[str] = set()
-    for field in (
-        "current_contract",
-        "affected_consumers",
-        "state_lifecycle_audit",
-        "representation_consumer_audit",
-        "authority_matrix",
-        "preservation_contract",
-        "interaction_matrix",
-        "test_matrix",
-    ):
-        known_obligation_ids.update(
-            collect_plan_ids(plan, field)
-        )
-
-    release_ids = [
-        str(item_id)
-        for item_id in plan.get(
-            "release_obligations",
-            [],
-        )
-    ]
-
-    if len(release_ids) != len(set(release_ids)):
-        raise RuntimeError(
-            "Planner returned duplicate release_obligations."
-        )
-
-    unknown_release_ids = sorted(
-        set(release_ids) - known_obligation_ids
-    )
-    if unknown_release_ids:
-        raise RuntimeError(
-            "Planner release_obligations reference unknown IDs: "
-            + ", ".join(unknown_release_ids)
-        )
-
-    mandatory_release_ids = set(
-        collect_plan_ids(
-            plan,
-            "preservation_contract",
-        )
-    ) | set(
-        collect_plan_ids(
-            plan,
-            "test_matrix",
-        )
-    ) | set(
-        collect_plan_ids(
-            plan,
-            "affected_consumers",
-        )
-    ) | set(
-        collect_plan_ids(
-            plan,
-            "state_lifecycle_audit",
-        )
-    ) | set(
-        collect_plan_ids(
-            plan,
-            "representation_consumer_audit",
-        )
-    ) | set(
-        collect_plan_ids(
-            plan,
-            "authority_matrix",
-        )
-    )
-
-    missing_mandatory = sorted(
-        mandatory_release_ids - set(release_ids)
-    )
-    if missing_mandatory:
-        raise RuntimeError(
-            "Planner omitted mandatory release obligations: "
-            + ", ".join(missing_mandatory)
-        )
 
     candidate_paths = [
         str(path)
-        for path in plan.get(
-            "candidate_paths",
-            [],
-        )
+        for path in plan.get("candidate_paths", [])
     ]
-    if plan.get("status") == "READY" and not candidate_paths:
-        raise RuntimeError(
-            "Planner READY artifact must declare candidate_paths."
+    if len(candidate_paths) != len(set(candidate_paths)):
+        raise ArtifactContractError(
+            code="PLANNER_DUPLICATE_CANDIDATE_PATH",
+            field="candidate_paths",
+            message="Planner returned duplicate candidate_paths.",
+            expected="Unique repo-relative paths only.",
+            actual=candidate_paths,
         )
 
+    if plan.get("status") == "READY" and not candidate_paths:
+        raise ArtifactContractError(
+            code="PLANNER_CANDIDATE_PATHS_MISSING",
+            field="candidate_paths",
+            message="Planner READY artifact must declare candidate_paths.",
+            expected="At least one exact repo-relative path.",
+            actual=candidate_paths,
+        )
 
-    decision_escalations = plan.get(
-        "decision_escalations",
-        [],
-    )
-
+    decision_escalations = plan.get("decision_escalations", [])
     if (
         plan.get("status") == "NEEDS_USER_DECISION"
         and not decision_escalations
     ):
-        raise RuntimeError(
-            "Planner NEEDS_USER_DECISION must include at least one "
-            "decision_escalations entry proving why lifecycle/ownership "
-            "cannot resolve the conflict."
+        raise ArtifactContractError(
+            code="PLANNER_DECISION_ESCALATION_MISSING",
+            field="decision_escalations",
+            message=(
+                "NEEDS_USER_DECISION requires evidence that lifecycle/ownership "
+                "cannot resolve the semantic conflict."
+            ),
+            expected="At least one DEC-* object.",
+            actual=[],
         )
 
-    if (
-        plan.get("status") == "READY"
-        and decision_escalations
-    ):
-        raise RuntimeError(
-            "Planner READY artifact must not contain unresolved "
-            "decision_escalations."
+    if plan.get("status") == "READY" and decision_escalations:
+        raise ArtifactContractError(
+            code="PLANNER_READY_WITH_UNRESOLVED_DECISION",
+            field="decision_escalations",
+            message="READY artifact cannot contain unresolved decision escalations.",
+            expected="[] for READY status.",
+            actual=collect_plan_ids(plan, "decision_escalations"),
         )
 
-    for item in plan.get(
-        "state_lifecycle_audit",
-        [],
-    ):
-        if (
-            item.get("role") == "UNKNOWN"
-            and item.get("confidence") == "HIGH"
-        ):
-            raise RuntimeError(
-                "Planner lifecycle role UNKNOWN cannot have HIGH confidence: "
-                f"{item.get('id')}"
+    for item in plan.get("state_lifecycle_audit", []):
+        if item.get("role") == "UNKNOWN" and item.get("confidence") == "HIGH":
+            raise ArtifactContractError(
+                code="PLANNER_UNKNOWN_LIFECYCLE_HIGH_CONFIDENCE",
+                field=f"state_lifecycle_audit[{item.get('id')}].confidence",
+                message="UNKNOWN lifecycle role cannot have HIGH confidence.",
+                expected="MEDIUM/LOW confidence or a resolved lifecycle role.",
+                actual="HIGH",
             )
+
+    # Blocking obligations are Controller-owned and deterministically derived.
+    # This is intentionally computed here so Planner cannot create an ambiguous
+    # cross-reference list such as `CC-1 — description` or `CC-1, CC-2`.
+    derived = required_obligation_ids(plan)
+    if len(derived) != len(set(derived)):
+        raise ArtifactContractError(
+            code="CONTROLLER_DERIVED_OBLIGATION_DUPLICATE",
+            field="derived_release_obligations",
+            message="Controller-derived obligation ledger contains duplicate IDs.",
+            expected="A unique deterministic set of exact IDs.",
+            actual=derived,
+        )
 
 
 def validate_evaluation_artifact(
@@ -1033,6 +1047,27 @@ def validate_evaluation_artifact(
     plan: dict,
     risk: str,
 ) -> None:
+    if evaluation.get("protocol_version") != EVALUATOR_PROTOCOL_VERSION:
+        raise ArtifactContractError(
+            code="EVALUATOR_PROTOCOL_VERSION_MISMATCH",
+            field="protocol_version",
+            message=(
+                "Evaluator artifact protocol_version does not match the Controller contract."
+            ),
+            expected=EVALUATOR_PROTOCOL_VERSION,
+            actual=evaluation.get("protocol_version"),
+        )
+
+    expected_fingerprint = plan_fingerprint(plan)
+    if evaluation.get("plan_fingerprint") != expected_fingerprint:
+        raise ArtifactContractError(
+            code="EVALUATOR_PLAN_FINGERPRINT_MISMATCH",
+            field="plan_fingerprint",
+            message="Evaluator verdict is not bound to the current Controller-approved plan.",
+            expected=expected_fingerprint,
+            actual=evaluation.get("plan_fingerprint"),
+        )
+
     expected_obligations = set(
         required_obligation_ids(plan)
     )
@@ -1253,9 +1288,28 @@ OUTPUT:
 
 def build_evaluator_repair_prompt(
     evaluation: dict,
+    *,
+    plan: dict,
+    baseline_snapshot: dict,
 ) -> str:
     evaluation_json = json.dumps(
         evaluation,
+        ensure_ascii=False,
+        indent=2,
+    )
+    plan_json = json.dumps(
+        plan,
+        ensure_ascii=False,
+        indent=2,
+    )
+    approved_plan_fingerprint = plan_fingerprint(plan)
+    snapshot_json = json.dumps(
+        baseline_snapshot,
+        ensure_ascii=False,
+        indent=2,
+    )
+    obligation_json = json.dumps(
+        required_obligation_ids(plan),
         ensure_ascii=False,
         indent=2,
     )
@@ -1264,6 +1318,25 @@ def build_evaluator_repair_prompt(
 Независимый Fresh Evaluator отклонил текущий candidate.
 
 Задача НЕ завершена.
+
+Current Controller-approved plan for this repair cycle.
+PLAN_FINGERPRINT: {approved_plan_fingerprint}
+
+--- BEGIN CURRENT PLAN ---
+{plan_json}
+--- END CURRENT PLAN ---
+
+Controller-derived blocking obligation IDs:
+
+--- BEGIN CONTROLLER OBLIGATION IDS ---
+{obligation_json}
+--- END CONTROLLER OBLIGATION IDS ---
+
+Current path-local baseline evidence:
+
+--- BEGIN CURRENT BASELINE SNAPSHOT ---
+{snapshot_json}
+--- END CURRENT BASELINE SNAPSHOT ---
 
 Проверь каждое замечание самостоятельно по коду и исходному требованию.
 Исправь только подтверждённые in-scope findings и напрямую связанные
@@ -1293,8 +1366,14 @@ def build_change_surface_repair_prompt(
         ensure_ascii=False,
         indent=2,
     )
+    approved_plan_fingerprint = plan_fingerprint(revised_plan)
     snapshot_json = json.dumps(
         baseline_snapshot,
+        ensure_ascii=False,
+        indent=2,
+    )
+    obligation_json = json.dumps(
+        required_obligation_ids(revised_plan),
         ensure_ascii=False,
         indent=2,
     )
@@ -1308,7 +1387,8 @@ Slivin Harness обнаружил изменения вне planned `candidate_p
 Controller уже откатил ТОЛЬКО эти незапланированные paths к trusted task baseline.
 Изменения внутри прежнего planned surface сохранены.
 
-Fresh read-only Planner пересобрал change surface:
+Fresh read-only Planner пересобрал change surface.
+Controller-approved PLAN_FINGERPRINT: {approved_plan_fingerprint}
 
 --- BEGIN REVISED PLAN ---
 {plan_json}
@@ -1319,6 +1399,12 @@ Harness также обновил path-local baseline evidence:
 --- BEGIN UPDATED BASELINE SNAPSHOT ---
 {snapshot_json}
 --- END UPDATED BASELINE SNAPSHOT ---
+
+Controller-derived blocking obligation IDs for this revised plan:
+
+--- BEGIN CONTROLLER OBLIGATION IDS ---
+{obligation_json}
+--- END CONTROLLER OBLIGATION IDS ---
 
 Продолжи implementation по revised plan.
 Если откатанный path действительно нужен, внеси изменение заново только если он
@@ -1338,6 +1424,7 @@ def build_implementation_prompt(
         ensure_ascii=False,
         indent=2,
     )
+    approved_plan_fingerprint = plan_fingerprint(plan)
 
     toolchain_text = format_toolchain(
         toolchain
@@ -1349,6 +1436,12 @@ def build_implementation_prompt(
         indent=2,
     )
 
+    obligation_json = json.dumps(
+        required_obligation_ids(plan),
+        ensure_ascii=False,
+        indent=2,
+    )
+
     return f"""
 Исходная задача пользователя:
 
@@ -1356,7 +1449,8 @@ def build_implementation_prompt(
 {task_prompt}
 --- END TASK ---
 
-Независимый read-only Planner подготовил engineering artifact:
+Независимый read-only Planner подготовил engineering artifact.
+Controller-approved PLAN_FINGERPRINT: {approved_plan_fingerprint}
 
 --- BEGIN PLAN ---
 {plan_json}
@@ -1374,9 +1468,14 @@ Planner artifact — гипотеза, подтверждённая его read-
 доказательствам и сохраняй исходный пользовательский intent.
 
 Current contract и assumptions должны быть перепроверены до ввода новых
-validity/eligibility условий. Blocking verification obligations перечислены
-в `release_obligations`; независимый Evaluator потребует конкретное evidence
-по каждому из них.
+validity/eligibility условий. Blocking verification ledger вычислен Controller
+из Planner artifact и является отдельным machine-owned handoff:
+
+--- BEGIN CONTROLLER OBLIGATION IDS ---
+{obligation_json}
+--- END CONTROLLER OBLIGATION IDS ---
+
+Независимый Evaluator потребует конкретное evidence ровно по этим IDs.
 
 Trusted toolchain, доступный в этой среде:
 
@@ -2064,11 +2163,23 @@ def assert_harness_tmp_ignored(
 
 def _plan_validation_error(
     plan: dict,
-) -> str | None:
+) -> dict | None:
     try:
         validate_plan_artifact(plan)
+    except ArtifactContractError as exc:
+        return exc.feedback()
     except RuntimeError as exc:
-        return str(exc)
+        return {
+            "protocol_error": "PLANNER_ARTIFACT_VALIDATION_FAILED",
+            "field": "unknown",
+            "message": str(exc),
+            "expected": "A Planner artifact satisfying the declared schema and Controller invariants.",
+            "actual": None,
+            "repair_rule": (
+                "Return a fresh artifact that satisfies the schema literally; "
+                "do not encode prose in ID/reference fields."
+            ),
+        }
 
     return None
 
@@ -2088,6 +2199,7 @@ def run_validated_planner(
     artifact_prefix: str,
     recorder: RunRecorder,
 ) -> dict | None:
+    base_revision_context = revision_context
     current_revision = revision_context
 
     for attempt in range(
@@ -2133,6 +2245,22 @@ def run_validated_planner(
         )
 
         if error is None:
+            plan_contract = {
+                "protocol_version": PLANNER_PROTOCOL_VERSION,
+                "plan_fingerprint": plan_fingerprint(plan),
+                "blocking_obligation_ids": required_obligation_ids(plan),
+                "candidate_paths": [
+                    str(path) for path in plan.get("candidate_paths", [])
+                ],
+            }
+            recorder.write_json(
+                f"{artifact_prefix}_contract.json",
+                plan_contract,
+            )
+            print_structured(
+                "PLAN CONTRACT",
+                plan_contract,
+            )
             print_structured(
                 (
                     "PLAN RESULT"
@@ -2144,18 +2272,22 @@ def run_validated_planner(
             return plan
 
         print_structured(
-            "INVALID PLAN ARTIFACT",
-            plan,
+            "INVALID PLAN SUMMARY",
+            compact_plan_retry_context(plan),
         )
         print(
             "PLAN_VALIDATION_FAIL:",
+            error.get("protocol_error"),
+            f"field={error.get('field')}",
+        )
+        print_structured(
+            "PLAN VALIDATION ERROR",
             error,
         )
-        print()
 
-        recorder.write_text(
-            f"{artifact_prefix}_attempt_{attempt + 1}_validation_error.txt",
-            error + "\n",
+        recorder.write_json(
+            f"{artifact_prefix}_attempt_{attempt + 1}_validation_error.json",
+            error,
         )
 
         if attempt >= max_validation_retries:
@@ -2167,11 +2299,14 @@ def run_validated_planner(
         )
 
         current_revision = {
-            "previous_revision_context": (
-                current_revision
+            "revision_context": base_revision_context,
+            "protocol_validation": error,
+            "invalid_plan_summary": compact_plan_retry_context(plan),
+            "retry_instruction": (
+                "Repair only the protocol/semantic validation failure described above. "
+                "Return a complete fresh Planner artifact under planner.v2. "
+                "Do not copy malformed field formatting from the previous attempt."
             ),
-            "validator_feedback": error,
-            "invalid_plan": plan,
         }
 
     return None
@@ -2597,7 +2732,7 @@ def main() -> int:
 
         with CodexAppServer(
             codex_cmd,
-            client_version="0.5.0",
+            client_version="0.5.1",
             runtime_tmp=runtime_tmp,
         ) as codex:
             context_started = (
@@ -2626,6 +2761,7 @@ def main() -> int:
 
             if risk == "low":
                 plan = {
+                    "protocol_version": PLANNER_PROTOCOL_VERSION,
                     "status": "READY",
                     "summary": (
                         "Planner skipped for "
@@ -2642,7 +2778,6 @@ def main() -> int:
                     "interaction_matrix": [],
                     "test_matrix": [],
                     "candidate_paths": [],
-                    "release_obligations": [],
                 }
             else:
                 print(
@@ -3518,7 +3653,9 @@ def main() -> int:
 
                 repair_prompt = (
                     build_evaluator_repair_prompt(
-                        evaluation
+                        evaluation,
+                        plan=plan,
+                        baseline_snapshot=baseline_snapshot,
                     )
                 )
 
