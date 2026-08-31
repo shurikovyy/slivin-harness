@@ -127,6 +127,10 @@ candidate.v1
 
 Generated `WORKFLOW.md` и `workflow.v1.json` теперь проверяются docs-sync, поэтому нумерация и переходы не должны снова расходиться вручную.
 
+## 3k. Private Controller plane и Execution Broker 0.8.0a3
+
+Authoritative Run State и receipts вынесены в `RUN_DIR/controller_private`. `.harness_tmp` окончательно закреплён как non-authoritative scratch. Добавлен role-aware Execution Broker, environment filtering, Windows-safe path validation и enforcement levels `ENFORCED / ADVISORY / UNAVAILABLE`. Self-verify claim теперь повышается Controller в HMAC receipt, связанный с candidate и revision vector.
+
 ## 3j. Native Windows file-mode portability 0.8.0a2
 
 Первый self-check упакованной `0.8.0a1` на native Windows обнаружил, что POSIX-воспроизведение mode-only change через `Path.chmod()` непереносимо: NTFS/Git for Windows может не сообщать executable-bit рабочего файла как изменение, даже если test принудительно выставил `core.filemode=true`.

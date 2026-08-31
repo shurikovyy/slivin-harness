@@ -1,4 +1,4 @@
-# Практическая работа с Harness 0.8.0a2
+# Практическая работа с Harness 0.8.0a3
 
 ## 1. Что изменилось для пользователя
 
@@ -152,7 +152,7 @@ Run State уже отражает эти переходы и invalidation, но 
 
 ## 9. Runtime Step 5
 
-В 0.8.0a2 он записывается:
+В 0.8.0a3 он записывается:
 
 ```text
 state = SKIPPED
@@ -190,3 +190,23 @@ User Task Contract normalizer появится в следующей фазе; �
 ## 12. Что не считать доказанным
 
 Наличие Step 5/двухфазного Evaluator в target documentation не означает, что они уже работают. Ориентируйтесь на колонку «Состояние в Phase 1» в [WORKFLOW.md](WORKFLOW.md).
+
+
+## Как читать Phase 2 artifacts
+
+Для обычной диагностики используйте public mirror:
+
+```text
+runs/<task>/<run>/run_state.json
+execution_policies.json
+```
+
+Authoritative Controller state находится в:
+
+```text
+runs/<task>/<run>/controller_private/
+```
+
+Его не нужно копировать в prompt или редактировать вручную. `.harness_tmp` внутри worktree — только scratch; его наличие или содержимое никогда не является основанием для `PASS`.
+
+В `execution_policies.json` проверяйте поле enforcement. `ADVISORY` означает, что Harness сформировал правильный intent/environment, но OS-level boundary ещё не доказана на данной платформе.

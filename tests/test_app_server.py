@@ -180,6 +180,16 @@ class AppServerTests(unittest.TestCase):
         self.assertEqual(server.runtime_tmp, root)
         self.assertIsNone(server.stderr_log_path)
 
+
+    def test_process_environment_can_be_broker_supplied(self) -> None:
+        server = CodexAppServer(
+            Path("codex"),
+            process_env={"PATH": "brokered"},
+            execution_policy={"role": "app_server"},
+        )
+        self.assertEqual(server.process_env, {"PATH": "brokered"})
+        self.assertEqual(server.execution_policy, {"role": "app_server"})
+
     def test_non_windows_command_is_direct(self) -> None:
         if os.name == "nt":
             self.skipTest("POSIX-specific command shape")

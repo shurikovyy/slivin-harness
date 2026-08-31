@@ -2,9 +2,9 @@
 
 > Этот файл генерируется из `slivin_harness/workflow.py`. Не редактируйте таблицы вручную; запустите `./py tools/render_workflow_docs.py`.
 
-- Harness: **0.8.0a2**
+- Harness: **0.8.0a3**
 - Workflow schema: **workflow.v1**
-- Реализуемая фаза: **phase1-state-machine-foundation**
+- Реализуемая фаза: **phase2-private-control-plane-and-execution-broker**
 
 ## Понятная схема
 
@@ -29,7 +29,7 @@
 
 ## Этапы
 
-| Step | Machine id | Название | Единственная основная задача | Условный | Успешный result code | Состояние в Phase 1 |
+| Step | Machine id | Название | Единственная основная задача | Условный | Успешный result code | Состояние в текущей фазе |
 | ---: | --- | --- | --- | :---: | --- | --- |
 | 0 | `intake_preflight` | Intake / Preflight | Фиксирует задачу, baseline, workspace и доступные инструменты. | нет | PREFLIGHT_READY | COMPATIBILITY_IMPLEMENTED |
 | 1 | `planner` | Planner | Read-only исследование и техническая модель задачи. | нет | PLANNER_READY / PLANNER_SKIPPED_FAST | COMPATIBILITY_IMPLEMENTED |
@@ -40,7 +40,7 @@
 | 6 | `evaluator` | Blind Evaluator | Независимо пытается опровергнуть полноту и корректность candidate. | нет | EVALUATION_PASS / EVALUATION_SKIPPED_FAST | COMPATIBILITY_IMPLEMENTED |
 | 7 | `final_gate` | Final Gate / result handoff | Сверяет identity доказательств и безопасно выдаёт принятый result. | нет | HARNESS_TASK_PASS / HARNESS_BENCHMARK_PASS | COMPATIBILITY_IMPLEMENTED |
 
-`COMPATIBILITY_IMPLEMENTED` означает: существующий executor 0.7.1 отображён на новый Run State, но полный новый контракт этапа будет внедряться последующими фазами. `PLANNED` означает: этап присутствует в канонической state machine, но его executor ещё не реализован. В Phase 1 Runtime честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `RUNTIME_LAYER_NOT_IMPLEMENTED_PHASE1`; это compatibility record, а не доказательство, что runtime конкретной будущей задачи не нужен.
+`COMPATIBILITY_IMPLEMENTED` означает: существующий executor 0.7.1 отображён на новый Run State, но полный новый контракт этапа будет внедряться последующими фазами. `PLANNED` означает: этап присутствует в канонической state machine, но его executor ещё не реализован. В Phase 2 Runtime всё ещё честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `RUNTIME_LAYER_NOT_IMPLEMENTED_PHASE2`; это compatibility record, а не доказательство, что runtime конкретной будущей задачи не нужен.
 
 ## Разрешённые петли
 

@@ -1,4 +1,4 @@
-# Модель качества 0.8.0a2 — Phase 1
+# Модель качества 0.8.0a3 — Phase 2
 
 ## 1. Что доказывает Phase 1
 
@@ -94,7 +94,7 @@ Step 5 Runtime / external verification
 Step 6 Blind Evaluator
 ```
 
-Но в 0.8.0a2:
+В 0.8.0a3:
 
 - Runtime executor ещё не реализован и всегда получает explicit compatibility skip;
 - Evaluator остаётся однопроходным `evaluator.v4` и получает прежний context;
@@ -180,3 +180,20 @@ status routing
 ```
 
 Planner/Implementer/Evaluator prompts будут меняться отдельными фазами и после каждой фазы проверяться на historical corpus.
+
+## Private authority и execution honesty
+
+Phase 2 добавляет два инварианта качества:
+
+```text
+agent-writable artifact != authoritative evidence
+
+declared sandbox policy != enforced sandbox capability
+```
+
+Run State, current candidate identity, Implementation Contract copies и self-verify receipts находятся в Controller private plane. Execution policy публикуется без secrets и явно помечает enforcement как `ENFORCED`, `ADVISORY` или `UNAVAILABLE`. Это предотвращает ложный PASS, основанный на модифицированном агентом stamp, и ложные security-claims о ещё не реализованном restricted runner.
+
+Self-verify receipt связан не только с bytes candidate, но и с revision vector. Contract/Verification Plan change автоматически требует новое доказательство.
+
+
+Foundation protocol versions: `controller-plane.v1`, `execution-broker.v1`.

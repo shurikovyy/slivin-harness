@@ -1,7 +1,11 @@
 {
   "schema_version": "workflow.v1",
-  "harness_version": "0.8.0a2",
-  "phase": "phase1-state-machine-foundation",
+  "harness_version": "0.8.0a3",
+  "phase": "phase2-private-control-plane-and-execution-broker",
+  "controller_foundation": {
+    "control_plane": "controller-plane.v1",
+    "execution_broker": "execution-broker.v1"
+  },
   "stages": [
     {
       "number": 0,

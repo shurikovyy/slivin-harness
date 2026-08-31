@@ -18,6 +18,12 @@ from typing import Any
 from slivin_harness import __version__
 from slivin_harness.app_server import CodexAppServer, TurnTimeoutError
 from slivin_harness.console import configure_utf8_stdio
+from slivin_harness.control_plane import (
+    ArtifactVisibility,
+    ControllerPlane,
+    SelfVerifyBinding,
+)
+from slivin_harness.execution import ExecutionBroker, ExecutionRole
 from slivin_harness.evaluator import run_evaluator
 from slivin_harness.implementer import (
     IMPLEMENTER_REPORT_SCHEMA,
@@ -132,25 +138,42 @@ class RunRecorder:
         suffix = hashlib.sha256(os.urandom(16)).hexdigest()[:8]
         self.root = HARNESS_ROOT / "runs" / task_id / f"{stamp}-{suffix}"
         self.root.mkdir(parents=True, exist_ok=True)
+        self._control_plane: ControllerPlane | None = None
+
+    @property
+    def control_plane(self) -> ControllerPlane:
+        # Lazy initialization keeps test recorders that override only ``root``
+        # compatible while making the authoritative plane unambiguous.
+        plane = getattr(self, "_control_plane", None)
+        if plane is None:
+            plane = ControllerPlane(self.root)
+            self._control_plane = plane
+        return plane
+
+    @property
+    def private_root(self) -> Path:
+        return self.control_plane.private_root
 
     def write_json(self, name: str, value: object) -> Path:
-        path = self.root / name
-        path.write_text(
-            json.dumps(value, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-            newline="\n",
-        )
-        return path
+        return self.control_plane.write_public_json(name, value)
+
+    def write_private_json(self, name: str, value: object) -> Path:
+        return self.control_plane.write_private_json(name, value)
+
+    def write_authoritative_json(self, name: str, value: object) -> Path:
+        """Write the private authority plus a public diagnostic mirror."""
+        self.control_plane.write_private_json(name, value)
+        return self.control_plane.write_public_json(name, value)
 
     def write_text(self, name: str, value: str) -> Path:
-        path = self.root / name
-        path.write_text(value, encoding="utf-8", newline="\n")
-        return path
+        return self.control_plane.write_text(
+            name, value, visibility=ArtifactVisibility.PUBLIC
+        )
 
     def write_bytes(self, name: str, value: bytes) -> Path:
-        path = self.root / name
-        path.write_bytes(value)
-        return path
+        return self.control_plane.write_bytes(
+            name, value, visibility=ArtifactVisibility.PUBLIC
+        )
 
 
 def load_manifest(path: Path) -> dict:
@@ -591,18 +614,39 @@ raise SystemExit(1)
     return script_path, stamp_path, [sys.executable, str(script_path)]
 
 
-def verify_self_verification_stamp(*, workspace: Path, stamp_path: Path) -> bool:
+def verify_self_verification_stamp(
+    *,
+    workspace: Path,
+    stamp_path: Path,
+    control_plane: ControllerPlane | None = None,
+    run_state: RunState | None = None,
+) -> bool:
+    """Validate the agent-writable claim and promote it to a private receipt.
+
+    The claim inside the workspace is deliberately non-authoritative. Only the
+    Controller recomputes candidate identity, binds the current revision vector,
+    and writes the HMAC-protected private receipt.
+    """
     if not stamp_path.is_file():
         return False
     try:
         stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return bool(
+    candidate_id = candidate_content_fingerprint(workspace)
+    if not bool(
         stamp.get("passed") is True
         and (stamp.get("candidate_id") or stamp.get("candidate_fingerprint"))
-        == candidate_content_fingerprint(workspace)
-    )
+        == candidate_id
+    ):
+        return False
+    if control_plane is not None and run_state is not None:
+        raw_binding = run_state.verification_binding(candidate_id=candidate_id)
+        binding = SelfVerifyBinding(**raw_binding)
+        control_plane.issue_self_verify_receipt(binding=binding, claim=stamp)
+        if not control_plane.verify_self_verify_receipt(binding=binding):
+            return False
+    return True
 
 
 def build_dynamic_check_specs(
@@ -688,21 +732,25 @@ def run_check(
     workspace: Path,
     toolchain: dict[str, str],
     runtime_tmp: Path,
+    execution_broker: ExecutionBroker | None = None,
+    execution_role: ExecutionRole = ExecutionRole.CONTROLLER_CHECK,
 ) -> CheckResult:
     command = expand_command(spec["command"], workspace=workspace, toolchain=toolchain)
     runtime_tmp.mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy()
-    env.update(
-        {
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "TEMP": str(runtime_tmp),
-            "TMP": str(runtime_tmp),
-            "TMPDIR": str(runtime_tmp),
-            "XDG_CACHE_HOME": str(runtime_tmp / "cache"),
-            "NPM_CONFIG_CACHE": str(runtime_tmp / "npm"),
-            "SLIVIN_HARNESS_WORKSPACE": str(workspace.resolve()),
-            "SLIVIN_HARNESS_ROOT": str(HARNESS_ROOT.resolve()),
-        }
+    extra_env = {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TEMP": str(runtime_tmp),
+        "TMP": str(runtime_tmp),
+        "TMPDIR": str(runtime_tmp),
+        "XDG_CACHE_HOME": str(runtime_tmp / "cache"),
+        "NPM_CONFIG_CACHE": str(runtime_tmp / "npm"),
+        "SLIVIN_HARNESS_WORKSPACE": str(workspace.resolve()),
+        "SLIVIN_HARNESS_ROOT": str(HARNESS_ROOT.resolve()),
+    }
+    env = (
+        execution_broker.environment_for(execution_role, extra=extra_env)
+        if execution_broker is not None
+        else {**os.environ, **extra_env}
     )
     started = time.monotonic()
     try:
@@ -745,6 +793,8 @@ def run_checks(
     toolchain: dict[str, str],
     runtime_root: Path,
     label: str,
+    execution_broker: ExecutionBroker | None = None,
+    execution_role: ExecutionRole = ExecutionRole.CONTROLLER_CHECK,
 ) -> list[CheckResult]:
     print(f"=== {label} ===")
     results: list[CheckResult] = []
@@ -754,6 +804,8 @@ def run_checks(
             workspace=workspace,
             toolchain=toolchain,
             runtime_tmp=runtime_root / f"check_{index:02d}",
+            execution_broker=execution_broker,
+            execution_role=execution_role,
         )
         results.append(result)
         state = "PASS" if result.passed else "FAIL"
@@ -1232,6 +1284,7 @@ def run_benchmark_baseline_gate(
     toolchain: dict[str, str],
     runtime_root: Path,
     failure_marker: str,
+    execution_broker: ExecutionBroker | None = None,
 ) -> dict:
     if not specs:
         raise RuntimeError("Baseline gate requires at least one held-out check")
@@ -1241,6 +1294,8 @@ def run_benchmark_baseline_gate(
         toolchain=toolchain,
         runtime_root=runtime_root,
         label="BENCHMARK BASELINE GATE",
+        execution_broker=execution_broker,
+        execution_role=ExecutionRole.HELDOUT,
     )
     if any(item.timed_out for item in results):
         raise RuntimeError("Historical baseline held-out timed out; benchmark setup is invalid")
@@ -1357,6 +1412,8 @@ def run_implementer_report(
     workspace: Path,
     stamp_path: Path,
     plan: dict | None,
+    control_plane: ControllerPlane | None = None,
+    run_state: RunState | None = None,
 ) -> dict:
     current_prompt = prompt
     current_label = label
@@ -1395,7 +1452,10 @@ def run_implementer_report(
         contract=implementation_contract,
         changed_paths=changed_paths,
         self_verification_ok=verify_self_verification_stamp(
-            workspace=workspace, stamp_path=stamp_path
+            workspace=workspace,
+            stamp_path=stamp_path,
+            control_plane=control_plane,
+            run_state=run_state,
         ),
         documentation_paths=documentation_paths,
     )
@@ -1479,13 +1539,14 @@ def main(argv: list[str] | None = None) -> int:
         workflow_mode = workflow_mode_for_manifest(manifest)
         pipeline_profile = pipeline_profile_for_manifest(manifest)
         recorder = RunRecorder(manifest["task_id"])
-        recorder.write_json("manifest_snapshot.json", manifest)
-        recorder.write_json(
+        recorder.write_authoritative_json("manifest_snapshot.json", manifest)
+        recorder.write_authoritative_json(
             "workflow_snapshot.json",
             workflow_snapshot(harness_version=__version__),
         )
         run_state = RunState.create(
-            path=recorder.root / "run_state.json",
+            path=recorder.private_root / "run_state.json",
+            public_mirror_path=recorder.root / "run_state.json",
             task_id=manifest["task_id"],
             harness_version=__version__,
             workflow_version=WORKFLOW_VERSION,
@@ -1514,8 +1575,27 @@ def main(argv: list[str] | None = None) -> int:
         if manifest.get("require_clean_git", True):
             assert_clean_git(workspace)
 
+        execution_broker = ExecutionBroker(
+            workspace=workspace,
+            run_root=recorder.root,
+            private_root=recorder.private_root,
+        )
+        execution_policies = {
+            role.value: execution_broker.policy_for(role).to_dict()
+            for role in ExecutionRole
+        }
+        recorder.write_json("execution_policies.json", execution_policies)
+        recorder.write_private_json(
+            "execution_policy_bindings.json",
+            {
+                "schema_version": "execution-policy-bindings.v1",
+                "roles": sorted(execution_policies),
+                "authoritative": True,
+            },
+        )
+
         preflight = capture_preflight(workspace)
-        recorder.write_json("preflight.json", preflight)
+        recorder.write_authoritative_json("preflight.json", preflight)
         repo_context = collect_repo_context(workspace)
         recorder.write_json("repo_context.json", repo_context)
 
@@ -1549,7 +1629,9 @@ def main(argv: list[str] | None = None) -> int:
                     "Workspace HEAD changed during the task; Git history is Controller-owned"
                 )
             run_state.observe_candidate(identity, reason_code=reason_code)
-            recorder.write_json("candidate_identity_current.json", identity.to_dict())
+            recorder.write_authoritative_json(
+                "candidate_identity_current.json", identity.to_dict()
+            )
             return identity
 
         print("TASK_STARTED:", datetime.now().astimezone().isoformat())
@@ -1586,6 +1668,7 @@ def main(argv: list[str] | None = None) -> int:
                 toolchain=toolchain,
                 runtime_root=recorder.root / "benchmark_baseline_gate_tmp",
                 failure_marker=str(benchmark["baseline_failure_marker"]),
+                execution_broker=execution_broker,
             )
             recorder.write_json("benchmark_baseline_gate.json", benchmark_evidence)
 
@@ -1603,15 +1686,25 @@ def main(argv: list[str] | None = None) -> int:
                 "workflow_snapshot.json",
                 "preflight.json",
                 "repo_context.json",
+                "execution_policies.json",
             ),
         )
 
-        runtime_tmp = workspace / ".harness_tmp" / "agent_runtime"
+        runtime_tmp = execution_broker.scratch_root(ExecutionRole.APP_SERVER)
         codex_cmd = resolve_codex_cmd(local_config)
+        app_server_policy = execution_broker.policy_for(ExecutionRole.APP_SERVER)
+        app_server_env = execution_broker.environment_for(
+            ExecutionRole.APP_SERVER,
+            # Some installations authenticate Codex through this variable. The
+            # value is inherited by the brokered process but never serialized.
+            preserve_sensitive=("OPENAI_API_KEY",),
+        )
         with CodexAppServer(
             codex_cmd,
             client_version=__version__,
             runtime_tmp=runtime_tmp,
+            process_env=app_server_env,
+            execution_policy=app_server_policy.to_dict(),
         ) as codex:
             plan: dict | None = None
             run_state.begin_stage(StageId.PLANNER)
@@ -1666,7 +1759,9 @@ def main(argv: list[str] | None = None) -> int:
             implementation_contract = build_implementation_contract(
                 plan, task_prompt=manifest["prompt"]
             )
-            recorder.write_json("implementation_contract_01.json", implementation_contract)
+            recorder.write_authoritative_json(
+                "implementation_contract_01.json", implementation_contract
+            )
             run_state.bump_revision(
                 RevisionKind.IMPLEMENTATION_CONTRACT,
                 artifact="implementation_contract_01.json",
@@ -1737,6 +1832,8 @@ def main(argv: list[str] | None = None) -> int:
                 workspace=workspace,
                 stamp_path=stamp_path,
                 plan=plan,
+                control_plane=recorder.control_plane,
+                run_state=run_state,
             )
             recorder.write_json(
                 f"implementation_report_{implementation_report_index:02d}.json", report
@@ -1789,6 +1886,8 @@ def main(argv: list[str] | None = None) -> int:
                     toolchain=toolchain,
                     runtime_root=recorder.root / f"checks_{check_index:02d}",
                     label=f"CHECKS #{check_index}",
+                    execution_broker=execution_broker,
+                    execution_role=ExecutionRole.CONTROLLER_CHECK,
                 )
                 checks_artifact = f"checks_{check_index:02d}.json"
                 recorder.write_json(checks_artifact, check_records(repair_results))
@@ -1836,6 +1935,8 @@ def main(argv: list[str] | None = None) -> int:
                         workspace=workspace,
                         stamp_path=stamp_path,
                         plan=plan,
+                        control_plane=recorder.control_plane,
+                        run_state=run_state,
                     )
                     report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
                     recorder.write_json(report_artifact, report)
@@ -1867,7 +1968,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_state.skip_stage(
                     StageId.RUNTIME_VERIFICATION,
                     StageResultCode.RUNTIME_VERIFICATION_SKIPPED,
-                    reason_code="RUNTIME_LAYER_NOT_IMPLEMENTED_PHASE1",
+                    reason_code="RUNTIME_LAYER_NOT_IMPLEMENTED_PHASE2",
                 )
 
                 if pipeline_profile == PipelineProfile.FAST:
@@ -1938,6 +2039,8 @@ def main(argv: list[str] | None = None) -> int:
                                 toolchain=toolchain,
                                 runtime_root=recorder.root / "heldout_diagnostic_after_max_fix",
                                 label="HELD-OUT DIAGNOSTIC (NO FEEDBACK)",
+                                execution_broker=execution_broker,
+                                execution_role=ExecutionRole.HELDOUT,
                             )
                             recorder.write_json(
                                 "heldout_diagnostic_after_max_fix.json",
@@ -1969,6 +2072,8 @@ def main(argv: list[str] | None = None) -> int:
                         workspace=workspace,
                         stamp_path=stamp_path,
                         plan=plan,
+                        control_plane=recorder.control_plane,
+                        run_state=run_state,
                     )
                     report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
                     recorder.write_json(report_artifact, report)
@@ -2054,7 +2159,9 @@ def main(argv: list[str] | None = None) -> int:
                         plan, task_prompt=manifest["prompt"]
                     )
                     contract_artifact = f"implementation_contract_replan_{replan_cycles:02d}.json"
-                    recorder.write_json(contract_artifact, implementation_contract)
+                    recorder.write_authoritative_json(
+                        contract_artifact, implementation_contract
+                    )
                     run_state.bump_revision(
                         RevisionKind.IMPLEMENTATION_CONTRACT,
                         artifact=contract_artifact,
@@ -2090,6 +2197,8 @@ def main(argv: list[str] | None = None) -> int:
                         workspace=workspace,
                         stamp_path=stamp_path,
                         plan=plan,
+                        control_plane=recorder.control_plane,
+                        run_state=run_state,
                     )
                     report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
                     recorder.write_json(report_artifact, report)
@@ -2161,6 +2270,8 @@ def main(argv: list[str] | None = None) -> int:
                 toolchain=toolchain,
                 runtime_root=recorder.root / "heldout",
                 label="HELD-OUT",
+                execution_broker=execution_broker,
+                execution_role=ExecutionRole.HELDOUT,
             )
             heldout_artifact = "heldout_results.json"
             recorder.write_json(heldout_artifact, check_records(heldout_results))

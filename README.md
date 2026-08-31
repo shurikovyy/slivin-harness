@@ -1,17 +1,35 @@
-# Slivin Harness 0.8.0a2 — Phase 1
+# Slivin Harness 0.8.0a3 — Phase 2
 
 Slivin Harness — Controller вокруг Codex App Server для автономной работы над coding-задачами в изолированной Git worktree.
 
-Версия **0.8.0a2** продолжает Phase 1 согласованного рефакторинга quality-core. В этой фазе не переписываются Planner, Implementer или Evaluator prompts. Сначала вводится фундамент, без которого последующие контракты нельзя надёжно связать:
+Версия **0.8.0a3** завершает Phase 2 согласованного рефакторинга quality-core. Model protocols пока не переписываются: сначала authoritative Controller state отделён от agent-writable workspace и введён единый Execution / Capability Broker.
 
 ```text
-единый machine-readable workflow
-+ versioned run_state.json
-+ единые status enums
-+ единый candidate_id
-+ machine-readable invalidation rules
-+ документация, генерируемая из workflow
+Phase 1: machine-readable workflow + versioned Run State + candidate_id
+Phase 2: private Controller plane + execution policies + private self-verify receipts
 ```
+
+## Что реализовано в Phase 2
+
+Каждый run теперь разделён на две плоскости:
+
+```text
+runs/<task>/<run>/
+├── controller_private/       # authoritative Controller state
+│   ├── run_state.json
+│   ├── candidate_identity_current.json
+│   ├── implementation_contract_*.json
+│   └── self_verify_receipt_current.json
+├── run_state.json            # public diagnostic mirror
+├── execution_policies.json   # без секретов и env values
+└── остальные public artifacts
+
+<WORKSPACE>/.harness_tmp/     # agent/runtime scratch; never authoritative
+```
+
+`ExecutionBroker` формирует role-specific policy для Planner, Implementer, Controller checks, Runtime, Evaluator и held-out. Он централизует scratch/temp/cache, фильтрует чувствительные environment variables и никогда не передаёт путь private plane в agent environment. Политика честно различает `ENFORCED`, `ADVISORY` и `UNAVAILABLE`: Phase 2 не заявляет OS-sandbox там, где restricted native Windows runner ещё не реализован.
+
+Self-verification внутри worktree остаётся удобным claim агента, но финальным доказательством становится Controller-owned HMAC receipt, привязанный одновременно к `candidate_id`, attempt и revision vector. Поэтому старый PASS нельзя переиспользовать после изменения Contract или Verification Plan даже при неизменном коде.
 
 ## Канонический workflow
 
@@ -36,7 +54,7 @@ Slivin Harness — Controller вокруг Codex App Server для автоно�
 
 Полная таблица этапов, переходов и инвалидации находится в [каноническом workflow](docs/WORKFLOW.md). Его machine-readable форма — [`docs/workflow.v1.json`](docs/workflow.v1.json).
 
-## Что реально реализовано в Phase 1
+## Что уже реализовано в фундаменте Phase 1
 
 Каждый run теперь создаёт Controller-owned:
 
@@ -67,7 +85,7 @@ runs/<task_id>/<run_id>/
 
 ## Что пока сохранено для совместимости 0.7.1
 
-Phase 1 сознательно не меняет поведение model roles:
+Phase 2 сохраняет совместимость model roles:
 
 - manifest остаётся `version = 2`;
 - `risk = "low"` всё ещё выбирает FAST compatibility pipeline;
@@ -79,19 +97,17 @@ Phase 1 сознательно не меняет поведение model roles:
 - текущие fixed repair/replan budgets и turn-timeout continuation пока сохранены;
 - dynamic checks всё ещё регистрируются через существующий Implementation Report;
 - semantic replan пока использует существующую worktree;
-- Runtime Step 5 ещё не имеет executor и фиксируется как `RUNTIME_VERIFICATION_SKIPPED` с причиной `RUNTIME_LAYER_NOT_IMPLEMENTED_PHASE1`.
+- Runtime Step 5 ещё не имеет executor и пока фиксируется как compatibility skip. Phase 2 также не заявляет, что Controller checks уже исполняются в универсальном OS-level restricted runner.
 
 Такое отображение не утверждает, что будущей production-задаче runtime не нужен. Оно лишь честно показывает текущее состояние executor-а.
 
-## Что Phase 1 ещё не реализует
+## Что Phase 2 ещё не реализует
 
 Следующие согласованные компоненты относятся к последующим фазам:
 
 ```text
 USER TASK CONTRACT
 Verification Plan compiler
-private Controller control plane
-Execution / Capability Broker
 новый Planner contract
 open-world Contract expansion
 inactivity watchdog вместо hard active timeout
@@ -252,3 +268,6 @@ Harness не делает commit, push, merge или PR.
 - [Настройка Windows](docs/WINDOWS_SETUP.md)
 - [История и roadmap](docs/HISTORY.md)
 - [Historical Matrix benchmark](cases/matrix-all-matching/README.md)
+
+
+Foundation protocol versions: `controller-plane.v1`, `execution-broker.v1`.

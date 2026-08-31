@@ -32,12 +32,16 @@ class CodexAppServer:
         client_title: str = "Slivin Harness",
         client_version: str = "0.6.5",
         runtime_tmp: Path | None = None,
+        process_env: dict[str, str] | None = None,
+        execution_policy: dict | None = None,
     ) -> None:
         self.codex_cmd = codex_cmd
         self.client_name = client_name
         self.client_title = client_title
         self.client_version = client_version
         self.runtime_tmp = runtime_tmp
+        self.process_env = dict(process_env) if process_env is not None else None
+        self.execution_policy = execution_policy
 
         self.process: subprocess.Popen[str] | None = None
         self._messages: queue.Queue[dict] = queue.Queue()
@@ -78,7 +82,7 @@ class CodexAppServer:
         if not self.codex_cmd.exists():
             raise RuntimeError(f"Codex CLI not found: {self.codex_cmd}")
 
-        env = os.environ.copy()
+        env = (self.process_env or os.environ).copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         if self.runtime_tmp is not None:
             self.runtime_tmp.mkdir(parents=True, exist_ok=True)

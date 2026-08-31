@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.0a3 — Phase 2: private Controller plane and execution broker
+
+- authoritative Run State, candidate/contract snapshots and self-verification receipts live under `RUN_DIR/controller_private`; public `run_state.json` is a diagnostic mirror;
+- added `ControllerPlane` with atomic writes, artifact visibility classes and Windows/UNC/path-traversal guards;
+- added HMAC-protected self-verify receipts bound to candidate, attempt and revision vector;
+- added role-aware `ExecutionBroker` for App Server, Planner, Implementer, Controller checks, Runtime, Evaluator and held-out;
+- centralized task-local temp/cache and sensitive environment filtering; private Controller paths are rejected from agent environments;
+- execution policies report `ENFORCED`, `ADVISORY` or `UNAVAILABLE` instead of claiming a sandbox that is not yet implemented;
+- App Server and Controller checks consume brokered environments; held-out checks use their own role policy;
+- added unit/integration coverage for private-plane separation, tamper/staleness rejection, policy honesty, path containment and release workflow;
+- Planner/Implementer/Evaluator protocols and Runtime executor remain unchanged for compatibility; the restricted native Windows check runner is explicitly deferred.
+
+
 ## 0.8.0a2 — Phase 1: native Windows file-mode portability
 
 - Fixed the Phase 1 self-check on native Windows/NTFS: the executable-bit integration test now performs a real Git capability probe and skips only when Git does not expose `chmod` as a mode-only working-tree change.

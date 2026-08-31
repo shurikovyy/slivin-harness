@@ -1,6 +1,6 @@
 # Документация Slivin Harness
 
-Актуальная версия: **0.8.0a2 — Phase 1**.
+Актуальная версия: **0.8.0a3 — Phase 2**.
 
 Начните с:
 
@@ -22,3 +22,6 @@
 ```
 
 Код, manifests и self-check остаются источником текущей исполняемой capability. В документации явно разделены уже реализованная Phase 1 foundation и target-контракты следующих фаз.
+
+
+Phase 2 добавляет `control_plane.py` и `execution.py`: authoritative artifacts находятся вне agent-writable worktree, а execution policies публикуются с честным enforcement level.

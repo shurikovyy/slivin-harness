@@ -200,3 +200,10 @@ runs/<task>/<run>/candidate_identity_current.json
 ```
 
 Phase 1 пока сохраняет существующий timeout continuation 0.7.1. Inactivity watchdog будет отдельной последующей фазой; наличие его в target workflow не означает, что он уже включён.
+
+
+## Phase 2: Windows capability boundary
+
+Phase 2 централизует execution policy, но намеренно не называет Planner/Controller-check filesystem boundary `ENFORCED`, пока отдельный native Windows restricted runner не пройдёт capability smoke test. В `execution_policies.json` такие профили отображаются как `ADVISORY`. Это корректный статус, а не ошибка self-check.
+
+Private Controller state размещается в `RUN_DIR/controller_private`, то есть вне managed worktree. Agent environment не получает этот path.

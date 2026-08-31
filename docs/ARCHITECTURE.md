@@ -1,8 +1,8 @@
-# Архитектура 0.8.0a2 — Phase 1
+# Архитектура 0.8.0a3 — Phase 2
 
-## 1. Цель Phase 1
+## 1. Цель Phase 1–2
 
-Phase 1 вводит один канонический workflow и versioned Run State, не меняя пока смысл model protocols.
+Phase 1 ввела канонический workflow и versioned Run State. Phase 2 отделяет authoritative Controller state от agent-writable workspace и централизует execution boundaries, не меняя пока смысл model protocols.
 
 До этой версии переходы между Planner, Implementer, checks, Evaluator и held-out были зашиты в `task_runner.py` и повторялись в документации вручную. Это позволяло коду и описанию расходиться.
 
@@ -37,7 +37,7 @@ stage maturity
 
 ```text
 workflow.v1
-phase1-state-machine-foundation
+phase2-private-control-plane-and-execution-broker
 ```
 
 `validate_workflow_definition()` запрещает пропущенный номер этапа, дублирующийся stage id, отсутствующий success transition или trigger без invalidation rule.
@@ -91,6 +91,47 @@ SHA-256 фактических bytes
 ```
 
 Так Controller может доказать, что self-verify, deterministic checks, Evaluator, held-out и Final Gate наблюдали один candidate.
+
+
+### `slivin_harness/control_plane.py`
+
+Определяет private control plane каждого run:
+
+```text
+RUN_DIR/controller_private/
+→ authoritative Controller state
+
+WORKSPACE/.harness_tmp/
+→ non-authoritative agent/runtime scratch
+```
+
+Private plane использует atomic writes, run-relative path validation и HMAC-protected self-verification receipts. Public `run_state.json` остаётся диагностическим mirror; Controller читает authoritative copy из `controller_private/run_state.json`.
+
+### `slivin_harness/execution.py`
+
+`ExecutionBroker` формирует policy и environment для ролей:
+
+```text
+app_server / planner / implementer / controller_check / runtime / evaluator / heldout
+```
+
+Policy описывает readable/writable roots, scratch, network и external mutation, а также реальный enforcement level. `ADVISORY` не маскируется под `ENFORCED`; restricted OS runner будет отдельной последующей фазой.
+
+### Controller-owned self-verification receipt
+
+Agent-writable stamp является только claim. Controller повторно вычисляет candidate и выпускает private receipt, связанный с:
+
+```text
+candidate_id
+task_contract_rev
+plan_rev
+implementation_contract_rev
+verification_plan_rev
+runtime_env_id
+attempt_id
+```
+
+Изменение любого измерения делает старый receipt непригодным.
 
 ### `task_runner.py`
 
@@ -167,7 +208,7 @@ candidate
 runtime_environment
 ```
 
-В Phase 1 реально изменяются:
+В текущем compatibility executor реально изменяются:
 
 ```text
 plan
@@ -176,7 +217,7 @@ candidate
 runtime_environment
 ```
 
-`task_contract` и `verification_plan` остаются `null`, потому что соответствующие executors ещё не реализованы. Наличие полей заранее фиксирует их место в общей state machine.
+`task_contract` и `verification_plan` пока могут оставаться `null`, потому что их новые protocols относятся к Phase 3. Наличие полей заранее фиксирует их место в общей state machine.
 
 ## 5. Invalidation model
 
@@ -283,7 +324,7 @@ docs/workflow.v1.json
 `check_docs_sync.py` также проверяет версии:
 
 ```text
-0.8.0a2
+0.8.0a3
 workflow.v1
 run-state.v1
 candidate.v1
@@ -313,3 +354,6 @@ publication automation
 ```
 
 Это защищает от большого недоказуемого rewrite: сначала фиксируется state ownership, затем по одной фазе меняются capabilities и model contracts.
+
+
+Foundation protocol versions: `controller-plane.v1`, `execution-broker.v1`.

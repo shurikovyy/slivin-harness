@@ -222,8 +222,15 @@ def build_candidate_identity(
 
 
 class RunState:
-    def __init__(self, *, path: Path, data: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        *,
+        path: Path,
+        data: dict[str, Any],
+        public_mirror_path: Path | None = None,
+    ) -> None:
         self.path = path
+        self.public_mirror_path = public_mirror_path
         self.data = data
 
     @classmethod
@@ -236,6 +243,7 @@ class RunState:
         workflow_version: str,
         mode: WorkflowMode,
         pipeline_profile: PipelineProfile,
+        public_mirror_path: Path | None = None,
     ) -> "RunState":
         created_at = _utc_now()
         stages = {
@@ -274,7 +282,11 @@ class RunState:
             "events": [],
             "terminal": None,
         }
-        state = cls(path=path, data=data)
+        state = cls(
+            path=path,
+            data=data,
+            public_mirror_path=public_mirror_path,
+        )
         state._append_event("RUN_CREATED")
         state.persist()
         return state
@@ -302,14 +314,34 @@ class RunState:
         self.data["updated_at"] = events[-1]["at"]
 
     def persist(self) -> None:
+        payload = json.dumps(self.data, ensure_ascii=False, indent=2) + "\n"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp = self.path.with_suffix(self.path.suffix + ".tmp")
-        temp.write_text(
-            json.dumps(self.data, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-            newline="\n",
-        )
+        temp.write_text(payload, encoding="utf-8", newline="\n")
         os.replace(temp, self.path)
+        # The public file is a diagnostic mirror. The private path above is the
+        # only authoritative state used by the Controller.
+        if self.public_mirror_path is not None:
+            self.public_mirror_path.parent.mkdir(parents=True, exist_ok=True)
+            mirror_temp = self.public_mirror_path.with_suffix(
+                self.public_mirror_path.suffix + ".tmp"
+            )
+            mirror_temp.write_text(payload, encoding="utf-8", newline="\n")
+            os.replace(mirror_temp, self.public_mirror_path)
+
+    def verification_binding(self, *, candidate_id: str) -> dict[str, Any]:
+        revisions = self._revision_snapshot()
+        return {
+            "candidate_id": candidate_id,
+            "task_contract_rev": revisions.get(RevisionKind.TASK_CONTRACT.value),
+            "plan_rev": revisions.get(RevisionKind.PLAN.value),
+            "implementation_contract_rev": revisions.get(
+                RevisionKind.IMPLEMENTATION_CONTRACT.value
+            ),
+            "verification_plan_rev": revisions.get(RevisionKind.VERIFICATION_PLAN.value),
+            "runtime_env_id": revisions.get(RevisionKind.RUNTIME_ENVIRONMENT.value),
+            "attempt_id": int(self.data["attempt_id"]),
+        }
 
     def set_baseline(
         self,

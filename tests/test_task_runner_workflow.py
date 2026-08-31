@@ -159,6 +159,14 @@ timeout_seconds = 30
             (workspace / "target.txt").write_text("after\n", encoding="utf-8")
             command = list(kwargs["self_verify_command"])
             subprocess.run(command, cwd=workspace, check=True)
+            self.assertTrue(
+                task_runner.verify_self_verification_stamp(
+                    workspace=workspace,
+                    stamp_path=Path(kwargs["stamp_path"]),
+                    control_plane=kwargs.get("control_plane"),
+                    run_state=kwargs.get("run_state"),
+                )
+            )
             contract = kwargs["implementation_contract"]
             return {
                 "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
@@ -219,6 +227,15 @@ timeout_seconds = 30
         self.assertTrue((run_root / "candidate.patch").is_file())
         self.assertTrue((run_root / "final_acceptance.json").is_file())
         self.assertTrue((run_root / "delivery_record.json").is_file())
+        self.assertTrue((run_root / "controller_private" / "run_state.json").is_file())
+        self.assertTrue(
+            (run_root / "controller_private" / "self_verify_receipt_current.json").is_file()
+        )
+        self.assertTrue((run_root / "execution_policies.json").is_file())
+        private_state = json.loads(
+            (run_root / "controller_private" / "run_state.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(private_state, state)
 
     def test_full_production_run_executes_planner_runtime_skip_and_evaluator(self) -> None:
         result, run_root, output = self.run_case(benchmark=False, risk="medium")

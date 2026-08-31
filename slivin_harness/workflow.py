@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Iterable, TypeVar
 
 WORKFLOW_VERSION = "workflow.v1"
-WORKFLOW_PHASE = "phase1-state-machine-foundation"
+WORKFLOW_PHASE = "phase2-private-control-plane-and-execution-broker"
 
 
 class _TextEnum(str, Enum):
@@ -441,10 +441,17 @@ def _enum_snapshot(enum_type: type[_TextEnum]) -> list[str]:
 
 def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
     validate_workflow_definition()
+    from slivin_harness.control_plane import CONTROL_PLANE_VERSION
+    from slivin_harness.execution import EXECUTION_BROKER_VERSION
+
     return {
         "schema_version": WORKFLOW_VERSION,
         "harness_version": harness_version,
         "phase": WORKFLOW_PHASE,
+        "controller_foundation": {
+            "control_plane": CONTROL_PLANE_VERSION,
+            "execution_broker": EXECUTION_BROKER_VERSION,
+        },
         "stages": [
             {
                 **asdict(stage),
@@ -564,11 +571,11 @@ def render_workflow_markdown(*, harness_version: str) -> str:
 
 ## Этапы
 
-| Step | Machine id | Название | Единственная основная задача | Условный | Успешный result code | Состояние в Phase 1 |
+| Step | Machine id | Название | Единственная основная задача | Условный | Успешный result code | Состояние в текущей фазе |
 | ---: | --- | --- | --- | :---: | --- | --- |
 {chr(10).join(rows)}
 
-`COMPATIBILITY_IMPLEMENTED` означает: существующий executor 0.7.1 отображён на новый Run State, но полный новый контракт этапа будет внедряться последующими фазами. `PLANNED` означает: этап присутствует в канонической state machine, но его executor ещё не реализован. В Phase 1 Runtime честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `RUNTIME_LAYER_NOT_IMPLEMENTED_PHASE1`; это compatibility record, а не доказательство, что runtime конкретной будущей задачи не нужен.
+`COMPATIBILITY_IMPLEMENTED` означает: существующий executor 0.7.1 отображён на новый Run State, но полный новый контракт этапа будет внедряться последующими фазами. `PLANNED` означает: этап присутствует в канонической state machine, но его executor ещё не реализован. В Phase 2 Runtime всё ещё честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `RUNTIME_LAYER_NOT_IMPLEMENTED_PHASE2`; это compatibility record, а не доказательство, что runtime конкретной будущей задачи не нужен.
 
 ## Разрешённые петли
 

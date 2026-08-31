@@ -16,6 +16,8 @@ if str(ROOT) not in sys.path:
 
 from slivin_harness import __version__
 from slivin_harness.implementer import IMPLEMENTER_PROTOCOL_VERSION, IMPLEMENTATION_CONTRACT_VERSION
+from slivin_harness.control_plane import CONTROL_PLANE_VERSION
+from slivin_harness.execution import EXECUTION_BROKER_VERSION
 from slivin_harness.run_state import CANDIDATE_IDENTITY_VERSION, RUN_STATE_VERSION
 from slivin_harness.workflow import (
     WORKFLOW_PHASE,
@@ -87,7 +89,7 @@ def _check_one_h1(path: Path) -> None:
 
 
 def main() -> int:
-    _assert(__version__ == "0.8.0a2", f"Unexpected Harness version: {__version__}")
+    _assert(__version__ == "0.8.0a3", f"Unexpected Harness version: {__version__}")
     _assert(MANIFEST_VERSION == 2, f"Unexpected manifest version: {MANIFEST_VERSION}")
     _assert(PLANNER_PROTOCOL_VERSION == "planner.v3", PLANNER_PROTOCOL_VERSION)
     _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v2", IMPLEMENTATION_CONTRACT_VERSION)
@@ -95,6 +97,8 @@ def main() -> int:
     _assert(WORKFLOW_VERSION == "workflow.v1", WORKFLOW_VERSION)
     _assert(RUN_STATE_VERSION == "run-state.v1", RUN_STATE_VERSION)
     _assert(CANDIDATE_IDENTITY_VERSION == "candidate.v1", CANDIDATE_IDENTITY_VERSION)
+    _assert(CONTROL_PLANE_VERSION == "controller-plane.v1", CONTROL_PLANE_VERSION)
+    _assert(EXECUTION_BROKER_VERSION == "execution-broker.v1", EXECUTION_BROKER_VERSION)
     validate_workflow_definition()
 
     docs_dir = ROOT / "docs"
@@ -130,7 +134,7 @@ def main() -> int:
         for path in [ROOT / "README.md", docs_dir / "ARCHITECTURE.md", docs_dir / "QUALITY_MODEL.md"]
     )
     for marker in (
-        "0.8.0a2",
+        "0.8.0a3",
         "version = 2",
         "planner.v3",
         "implementer.v1",
@@ -139,6 +143,8 @@ def main() -> int:
         WORKFLOW_VERSION,
         RUN_STATE_VERSION,
         CANDIDATE_IDENTITY_VERSION,
+        CONTROL_PLANE_VERSION,
+        EXECUTION_BROKER_VERSION,
         WORKFLOW_PHASE,
     ):
         _assert(marker in all_active_text, f"Active docs do not mention {marker}")
@@ -211,7 +217,8 @@ def main() -> int:
         f"harness={__version__} manifest={MANIFEST_VERSION} "
         f"planner={PLANNER_PROTOCOL_VERSION} implementer={IMPLEMENTER_PROTOCOL_VERSION} "
         f"evaluator={EVALUATOR_PROTOCOL_VERSION} workflow={WORKFLOW_VERSION} "
-        f"run_state={RUN_STATE_VERSION} candidate={CANDIDATE_IDENTITY_VERSION}"
+        f"run_state={RUN_STATE_VERSION} candidate={CANDIDATE_IDENTITY_VERSION} "
+        f"control_plane={CONTROL_PLANE_VERSION} execution_broker={EXECUTION_BROKER_VERSION}"
     )
     return 0
 
