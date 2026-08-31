@@ -9,7 +9,7 @@ moves authoritative verification state into the Controller private plane.
 ```text
 IMPLEMENTATION_CONTRACT_READY
         ↓
-IMPLEMENTER v2
+IMPLEMENTER v2 (historical Phase 4 protocol; current release uses implementer.v3)
         │
         ├─ COMPLETE
         ├─ REPLAN_REQUIRED
@@ -91,10 +91,4 @@ policy; otherwise the actual enforcement level is preserved in Controller eviden
 
 ## Current alpha boundary
 
-`0.8.0a6` makes the Phase 4 primitives executable and connects candidate freeze,
-private check records, report validation, receipt binding, progress guards, and check
-classification to the real runner. It does **not** yet claim full automatic recompilation
-of the active Implementation Contract/Verification Plan from a discovered obligation,
-worktree-local `.venv` bootstrap/rebuild, or an OS-enforced Controller subprocess sandbox
-on every platform. Those capabilities remain explicit follow-up work; the Broker records
-`ADVISORY`/`UNAVAILABLE` honestly instead of labelling them enforced.
+`0.8.0a6` introduced the Phase 4 primitives. Phase 5 (`0.8.0a8`) now implements the previously pending automatic Contract/Verification Plan recompilation and optional worktree-local `.venv` bootstrap/rebuild. A universal OS-enforced Controller subprocess sandbox remains pending; the Broker still records `ADVISORY`/`UNAVAILABLE` honestly instead of labelling it enforced.

@@ -10,7 +10,9 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-IMPLEMENTER_PROTOCOL_VERSION = "implementer.v2"
+from slivin_harness.verification import validate_proof_target
+
+IMPLEMENTER_PROTOCOL_VERSION = "implementer.v3"
 CHECK_REGISTRY_VERSION = "check-registry.v1"
 CONTROLLER_CHECKS_VERSION = "controller-checks.v1"
 WATCHDOG_VERSION = "activity-watchdog.v1"
@@ -137,9 +139,16 @@ class CheckRegistry:
     registration, but cannot author arbitrary authoritative shell commands.
     """
 
-    def __init__(self, path: Path, *, workspace: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        workspace: Path,
+        trusted_check_ids: Iterable[str] = (),
+    ) -> None:
         self.path = Path(path)
         self.workspace = Path(workspace).resolve()
+        self.trusted_check_ids = frozenset(str(value) for value in trusted_check_ids)
 
     def _empty(self) -> dict[str, Any]:
         return {"protocol_version": CHECK_REGISTRY_VERSION, "revision": 0, "checks": []}
@@ -190,6 +199,8 @@ class CheckRegistry:
             raise Phase4ContractError("Check id must be a non-empty string")
         if any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-" for ch in value):
             raise Phase4ContractError(f"Unsafe check id: {value!r}")
+        if value not in self.trusted_check_ids:
+            raise Phase4ContractError(f"Unknown trusted check id: {value!r}")
         return self._register(CheckReference("check_id", value, source))
 
     def _register(self, reference: CheckReference) -> CheckReference:
@@ -496,6 +507,15 @@ def validate_implementer_report(
                     raise Phase4ContractError("discovered obligation evidence is required")
             elif not isinstance(value, str) or not value.strip():
                 raise Phase4ContractError(f"discovered obligation {field} is required")
+        try:
+            validate_proof_target(
+                discovery.get("required_proof"),
+                field="discovered_obligation.required_proof",
+            )
+        except Exception as exc:
+            raise Phase4ContractError(
+                "discovered obligation requires a valid typed required_proof"
+            ) from exc
 
     registered = report.get("registered_checks", [])
     if not isinstance(registered, list):

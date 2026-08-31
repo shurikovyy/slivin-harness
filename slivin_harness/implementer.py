@@ -6,10 +6,15 @@ from typing import Any, Iterable, Mapping
 
 from slivin_harness.protocol import ArtifactContractError, ensure_exact_keys, safe_repo_relative, stable_fingerprint
 from slivin_harness.task_contract import validate_task_contract
-from slivin_harness.verification import merged_required_proof, validate_merged_required_proof
+from slivin_harness.verification import (
+    PROOF_TARGET_SCHEMA,
+    merged_required_proof,
+    validate_merged_required_proof,
+    validate_proof_target,
+)
 from slivin_harness.workflow import ImplementerStatus, enum_values
 
-IMPLEMENTER_PROTOCOL_VERSION = "implementer.v2"
+IMPLEMENTER_PROTOCOL_VERSION = "implementer.v3"
 IMPLEMENTATION_CONTRACT_VERSION = "implementation-contract.v3"
 CONTRACT_ITEM_TYPES = {"acceptance", "preservation", "state", "consumer", "risk", "documentation"}
 CONTRACT_ITEM_SOURCES = {"USER", "PLANNER", "USER+PLANNER", "DISCOVERED"}
@@ -74,9 +79,12 @@ IMPLEMENTER_REPORT_SCHEMA = {
                     "name": {"type": "string"},
                     "reason": {"type": "string"},
                     "required_behavior": {"type": "string"},
+                    "required_proof": PROOF_TARGET_SCHEMA,
                     "evidence": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["kind", "name", "reason", "required_behavior", "evidence"],
+                "required": [
+                    "kind", "name", "reason", "required_behavior", "required_proof", "evidence"
+                ],
             },
         },
         "blockers": {"type": "array", "items": {"type": "string"}},
@@ -345,7 +353,7 @@ def validate_implementation_report(
     self_verification_ok: bool,
     documentation_paths: list[str] | None = None,
 ) -> None:
-    """Validate implementer.v2 while retaining v1-shaped BLOCKED compatibility.
+    """Validate implementer.v3 while retaining legacy-shaped BLOCKED compatibility.
 
     COMPLETE is strict and must close every active item. Non-complete terminal
     statuses need one concrete reason/evidence package, not a fabricated row for

@@ -1,11 +1,9 @@
-# Практическая работа с Slivin Harness 0.8.0a6
+# Практическая работа с Slivin Harness 0.8.0a8
 
 ## Установка
 
-Распакуйте release в отдельный каталог и перенесите только локальный `harness.local.toml`.
-
 ```bash
-cd ~/Tools/slivin-harness-080a6-phase4
+cd ~/Tools/slivin-harness-080a7-phase5
 ./py -c "import slivin_harness; print(slivin_harness.__version__)"
 ./py tools/self_check.py
 ```
@@ -13,152 +11,168 @@ cd ~/Tools/slivin-harness-080a6-phase4
 Ожидаемая версия:
 
 ```text
-0.8.0a6
+0.8.0a8
 ```
 
-## Что происходит при FULL-задаче
+## FULL workflow
 
 ```text
-1. Manifest и repository preflight
-2. User Task Contract normalizer
-3. Fresh Planner v4
-4. Implementation Contract v3
-5. Verification Plan v1
-6. owner/capability gates
-7. Implementer v2
-8. typed check registration + revision-bound SELF VERIFY
-9. independent Controller deterministic checks
-10. runtime skip для local-only proof
-11. Evaluator v4
-12. Final Gate compatibility executor
+1. Manifest/project preflight
+2. .worktreeinclude + managed worktree
+3. optional worktree-local project runtime bootstrap
+4. User Task Contract
+5. fresh Planner v4
+6. Implementation Contract v3
+7. Verification Plan v1
+8. owner/capability gates
+9. Implementer v3
+10. discovery/check transaction when needed
+11. runtime reconciliation + SELF VERIFY
+12. independent Controller deterministic checks
+13. Runtime step: SKIPPED for local-only proof or BLOCKED until executor exists
+14. Evaluator v4 compatibility stage
+15. Final Gate compatibility stage
 ```
 
-## Какие artifacts искать
+## Project runtime configuration
 
-В run directory:
+Для Python-проекта добавьте один project-level profile:
+
+```toml
+[projects.sa_icover.runtime]
+bootstrap_python = "C:/Users/Slivin.Aleksandr/AppData/Local/Programs/Python/Python312/python.exe"
+expected_python = "3.12"
+venv = ".venv"
+dependency_files = ["requirements.txt"]
+pip_install_args = ["--disable-pip-version-check"]
+```
+
+Harness создаёт `.venv` внутри каждой managed worktree и использует абсолютный:
 
 ```text
-controller_private/task_contract_01.json
-controller_private/plan_01.json
-controller_private/implementation_contract_01.json
-controller_private/verification_plan_01.json
-controller_private/capability_gate_01.json
+<worktree>/.venv/Scripts/python.exe
 ```
 
-Публичное зеркало зависит от текущего Recorder policy. Authoritative версия всегда находится в private Controller plane.
+`source .venv/Scripts/activate` Controller не требуется.
 
-## Как читать Task Contract
+Если runtime table отсутствует, сохраняется compatibility resolver существующего `project_python`; автоматический rebuild тогда не заявляется.
 
-Проверьте:
+## `.worktreeinclude`
+
+В корне project repository:
+
+```gitignore
+.env
+.env.local
+```
+
+Только matching ignored files копируются автоматически. Они не входят в patch. `.env`, явно включённый repository owner, не требует второго `allow_sensitive_copy=true`.
+
+`copy_untracked` остаётся дополнительным local override. Sensitive path вне `.worktreeinclude` всё ещё требует explicit opt-in.
+
+## Как читать artifacts
+
+Authoritative artifacts находятся в:
 
 ```text
-raw_user_request не изменён;
-explicit acceptance отражает слова пользователя;
-explicit preservation не превратился в общую фразу;
-source_text дословно присутствует в raw request;
-normalizer не добавил техническое решение.
+RUN_DIR/controller_private/
 ```
 
-## Как читать Planner v4
-
-Для bug должны быть:
+Типичный порядок:
 
 ```text
-observed behavior
-existing intended contract
-root cause + evidence
-confidence HIGH или допустимый MEDIUM
+task_contract_01.json
+plan_01.json
+implementation_contract_01.json
+verification_plan_01.json
+capability_gate_01.json
+project_runtime_01.json          если runtime configured
+check_registry.json
+self_verify_receipt_current.json
 ```
 
-Для feature:
+После discovery/check registration могут появиться:
 
 ```text
-extension point
-design constraints
+implementation_contract_02.json
+verification_plan_02.json
+capability_gate_02.json
+contract_expansion_02.json
 ```
 
-Для shared/stateful change смотрите consumers, State Model и risks.
+Их presence означает не duplicate documentation, а новую active revision Definition of Done.
 
-## Как читать Implementation Contract
+## Как читать discovery
 
-Он не должен быть пересказом всего Planner. Основные items:
-
-```text
-ACCEPTANCE-1
-PRESERVE-1
-STATE-1          если применимо
-CONSUMER-N
-RISK-N
-DOCS-1           если нужно
-```
-
-Каждый item содержит claims и один или несколько typed proof profiles.
-
-## Как читать Verification Plan
-
-Пример local-only требования:
+`implementer.v3` передаёт:
 
 ```json
 {
-  "profiles": [
-    {"level": "LOCAL_DETERMINISTIC", "capabilities": []}
-  ]
+  "kind": "consumer",
+  "name": "Distribution",
+  "reason": "Uses the changed shared authority",
+  "required_behavior": "Stage guard remains fail-closed",
+  "required_proof": {
+    "claim": "Stage guard remains fail-closed",
+    "level": "LOCAL_DETERMINISTIC",
+    "capabilities": []
+  },
+  "evidence": ["reachable caller in static/js/distribution/index.js"]
 }
 ```
 
-Пример двух разных runtime proofs:
+Controller, а не Implementer, создаёт `CONSUMER-DISCOVERED-N`.
 
-```json
-{
-  "profiles": [
-    {"level": "LIVE_LOCAL", "capabilities": ["BROWSER_DOM", "LIVE_LOCAL_RUNTIME"]},
-    {"level": "TEST_EXTERNAL", "capabilities": ["TEST_EXTERNAL_FRESH_READ", "TEST_EXTERNAL_RUNTIME"]}
-  ]
-}
+## Что происходит при runtime drift
+
+```text
+Implementer installed an undeclared package
+или changed requirements.txt
+        ↓
+Controller detects digest/package drift
+        ↓
+destroy and rebuild worktree .venv
+        ↓
+pip install declared requirements
+        ↓
+pip check
+        ↓
+new runtime revision
+        ↓
+old self-verify stale
+        ↓
+same Implementer repeats verification
 ```
 
 ## Capability gate
 
-Если runtime executor ещё не реализован, ожидаемый результат:
+Если active proof требует Browser/test external/prod observe, а executor ещё не реализован:
 
 ```text
 HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING ...
 ```
 
-Это корректный fail-closed outcome Phase 4, а не причина вручную снижать proof до unit-теста.
+Это корректный fail-closed result. Не снижайте proof вручную до local-only.
 
 ## FAST compatibility profile
 
-Manifest `risk = "low"` пока сохраняет старый FAST pipeline. User Task Contract всё равно создаётся, Planner/Evaluator могут быть compatibility-skipped. Обычный будущий production workflow будет переведён на FULL после последующих фаз; Phase 4 не скрывает эту совместимость.
+Manifest `risk = "low"` пока сохраняет FAST compatibility pipeline. Task Contract всё равно создаётся; Planner/Evaluator могут быть skipped. Это временная совместимость manifest version 2, а не рекомендуемый production quality mode.
 
-## Документация workflow
-
-После изменения state machine:
+## Workflow docs
 
 ```bash
 ./py tools/render_workflow_docs.py
 ./py tools/check_docs_sync.py
 ```
 
-Не редактируйте generated таблицы `WORKFLOW.md` и `workflow.v3.json` вручную.
+Не редактируйте `WORKFLOW.md` и `workflow.v4.json` вручную.
 
-## Ограничения Phase 4
-
-Пока не реализованы полностью:
+## Ограничения Phase 5
 
 ```text
-автоматическая .worktreeinclude copy policy;
-worktree-local .venv bootstrap/rebuild;
-автоматическая перекомпиляция active Contract/Verification Plan из discoveries;
-universal OS-enforced sandbox для Controller subprocess;
-LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE executors;
-двухфазный Evaluator;
-clean-worktree semantic replan;
-финальная delivery transaction.
+нет universal OS-enforced Controller sandbox;
+нет LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE executor;
+нет two-phase Evaluator;
+semantic replan ещё не получает clean fresh worktree;
+final delivery transaction ещё compatibility implementation.
 ```
-
-## Implementer и Controller checks
-
-Implementer делает smallest complete fix, регистрирует material tests до `COMPLETE`, запускает self-verification и указывает конкретное evidence для каждого active Contract item. `REPLAN_REQUIRED`, `BLOCKED` и `NEEDS_USER_DECISION` являются отдельными terminal explanations и не требуют искусственных `BLOCKED`-строк по каждому item.
-
-Typed check registry хранится в private Controller plane. После добавления нового check старый self-verification receipt становится stale. Controller затем независимо повторяет trusted suite в изолированных temp/cache-каталогах и отклоняет check, который изменил candidate. Активный Implementer контролируется inactivity watchdog: running tool считается activity, Controller heartbeat — нет.

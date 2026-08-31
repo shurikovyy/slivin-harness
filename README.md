@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a6 — Phase 4
+# Slivin Harness 0.8.0a8 — Phase 5
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Версия **0.8.0a6** реализует Phase 4 поверх уже принятого фундамента Phase 1–3:
+Версия **0.8.0a8** реализует Phase 5 поверх принятого фундамента Phase 1–4:
 
 ```text
 RAW USER REQUEST
@@ -17,14 +17,18 @@ VERIFICATION PLAN verification-plan.v1
         ↓
 owner-boundary + capability gates
         ↓
-IMPLEMENTER implementer.v2
+IMPLEMENTER implementer.v3
+        ↓
+transactional Contract / Verification Plan expansion
+        ↓
+worktree-local project runtime reconciliation
         ↓
 SELF VERIFY + Controller-private typed check registry
         ↓
 CONTROLLER DETERMINISTIC CHECKS
 ```
 
-Machine-readable workflow: **workflow.v3**. Реализуемая фаза: **phase4-implementer-controller-verification**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller plane: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Evaluator пока остаётся **evaluator.v4**.
+Machine-readable workflow: **workflow.v4**. Реализуемая фаза: **phase5-contract-runtime-reproducibility**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller plane: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Evaluator пока остаётся **evaluator.v4**.
 
 ## Фундамент Phase 3
 
@@ -91,9 +95,9 @@ PROD_OBSERVE
 
 До writable Implementer Controller проверяет owner boundary и наличие требуемых capabilities. Неисполняемый обязательный runtime proof блокирует задачу до расходования writable turn.
 
-## Что добавляет Phase 4
+## Фундамент Phase 4
 
-### Implementer v2
+### Implementer v3
 
 Implementer может завершить turn только одним из четырёх статусов:
 
@@ -140,12 +144,28 @@ Candidate фиксируется до и после suite. Проверка, к�
 
 Подробности: [Phase 4 execution](docs/PHASE4_EXECUTION.md).
 
+## Что добавляет Phase 5
+
+### Transactional open-world expansion
+
+Новый consumer/risk или typed check больше не остаётся только заметкой в отчёте. Controller пересобирает active Implementation Contract и Verification Plan, повторяет owner/capability gates, инвалидирует старый self-verify и возвращает тому же Implementer новую обязательную ревизию. Check reference принимается только если он реально исполним: test path должен иметь trusted runner, а текущий встроенный trusted ID — `git.diff-check`.
+
+### Canonical `.worktreeinclude`
+
+Ignored runtime-файлы, явно перечисленные repository owner, автоматически копируются в managed worktree. `.env` из `.worktreeinclude` не требует второго sensitive opt-in, не входит в candidate/patch и восстанавливается Controller, если агент его изменил. Symlink/junction проверяется по всей цепочке родителей, а private comparison использует path-bound keyed HMAC.
+
+### Worktree-local Python runtime
+
+Проект может задать bootstrap Python и dependency declarations один раз в `harness.local.toml`. Harness создаёт собственную `.venv` в каждой worktree, использует её как authoritative `PROJECT_PYTHON`, обнаруживает скрытый `pip install`/изменение requirements и перед `COMPLETE` делает clean rebuild + повторный self-verify.
+
+Подробности: [Phase 5 contract/runtime](docs/PHASE5_CONTRACT_RUNTIME.md).
+
 ## Каноническая схема
 
 Полный Step 0–7 workflow генерируется из `slivin_harness/workflow.py`:
 
 - [Понятная схема workflow](docs/WORKFLOW.md)
-- [Machine-readable workflow.v3](docs/workflow.v3.json)
+- [Machine-readable workflow.v4](docs/workflow.v4.json)
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Модель качества](docs/QUALITY_MODEL.md)
 - [Практическое руководство](docs/PRACTICAL_GUIDE.md)
@@ -160,7 +180,7 @@ Candidate фиксируется до и после suite. Проверка, к�
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a6 ...
+DOCS_SYNC_PASS harness=0.8.0a8 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -172,14 +192,11 @@ HARNESS_SELF_CHECK_PASS
 
 Manifest пока остаётся `version = 2` для совместимости.
 
-## Границы Phase 4 alpha
+## Границы Phase 5 alpha
 
-`0.8.0a6` намеренно **не заявляет готовыми**:
+`0.8.0a8` намеренно **не заявляет готовыми**:
 
 ```text
-.worktreeinclude как автоматическую canonical copy policy;
-автоматический bootstrap/rebuild отдельной project .venv;
-автоматическую перекомпиляцию active Contract/Verification Plan из discoveries;
 universal OS-enforced sandbox для Controller subprocess;
 LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE executors;
 двухфазный Blind Evaluator;

@@ -247,6 +247,7 @@ def compile_verification_plan(
     implementation_contract: Mapping[str, Any],
     *,
     project_checks: Iterable[Mapping[str, Any]],
+    task_checks: Iterable[str] = (),
 ) -> dict[str, Any]:
     requirements: list[dict[str, Any]] = []
     required_capabilities: set[str] = set()
@@ -282,7 +283,7 @@ def compile_verification_plan(
         "implementation_contract_fingerprint": implementation_contract["fingerprint"],
         "requirements": requirements,
         "project_gates": project_gate_names,
-        "task_checks": [],
+        "task_checks": sorted({str(value) for value in task_checks}),
         "required_capabilities": sorted(required_capabilities),
         "runtime_profiles": sorted(runtime_profiles, key=_LEVEL_ORDER.__getitem__),
         "runtime_required": bool(runtime_profiles),
@@ -517,7 +518,7 @@ def available_capabilities(
         value = str(raw)
         if value not in allowed:
             raise RuntimeError(f"Unknown configured capability: {value}")
-        # Phase 3 records future runtime capability declarations but does not
+        # Phase 5 records future runtime capability declarations but does not
         # claim an executor that does not exist yet. Required runtime proof
         # therefore remains blocked before Implementer.
         if value in phase3_implemented:

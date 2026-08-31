@@ -65,7 +65,11 @@ class WorkflowDefinitionTests(unittest.TestCase):
         )
         self.assertEqual(
             INVALIDATION_RULES[InvalidationTrigger.CONTRACT_EXPANDED].invalidate_from,
-            StageId.IMPLEMENTER,
+            StageId.IMPLEMENTATION_CONTRACT,
+        )
+        self.assertEqual(
+            INVALIDATION_RULES[InvalidationTrigger.CHECK_REGISTERED].invalidate_from,
+            StageId.IMPLEMENTATION_CONTRACT,
         )
 
     def test_only_optional_compatibility_stages_define_skip_codes(self) -> None:

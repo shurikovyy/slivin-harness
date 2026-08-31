@@ -2,9 +2,9 @@
 
 > Этот файл генерируется из `slivin_harness/workflow.py`. Не редактируйте таблицы вручную; запустите `./py tools/render_workflow_docs.py`.
 
-- Harness: **0.8.0a6**
-- Workflow schema: **workflow.v3**
-- Реализуемая фаза: **phase4-implementer-controller-verification**
+- Harness: **0.8.0a8**
+- Workflow schema: **workflow.v4**
+- Реализуемая фаза: **phase5-contract-runtime-reproducibility**
 
 ## Понятная схема
 
@@ -40,7 +40,7 @@
 | 6 | `evaluator` | Blind Evaluator | Независимо пытается опровергнуть полноту и корректность candidate. | нет | EVALUATION_PASS / EVALUATION_SKIPPED_FAST | COMPATIBILITY_IMPLEMENTED |
 | 7 | `final_gate` | Final Gate / result handoff | Сверяет identity доказательств и безопасно выдаёт принятый result. | нет | HARNESS_TASK_PASS / HARNESS_BENCHMARK_PASS | COMPATIBILITY_IMPLEMENTED |
 
-`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на новый Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 4 Runtime честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED` только для local-only плана; обязательный runtime proof блокируется capability gate до Implementer.
+`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на новый Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 5 Runtime честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED` только для local-only плана; обязательный runtime proof блокируется capability gate до Implementer.
 
 ## Разрешённые петли
 
@@ -85,8 +85,8 @@ attempt_id
 | --- | --- | --- | :---: | --- |
 | `TASK_CONTRACT_CHANGED` | `planner` | `planner` | да | Изменение пользовательского контракта инвалидирует всё техническое reasoning. |
 | `REPLAN_REQUIRED` | `planner` | `planner` | да | Ошибка технической модели требует нового независимого planning attempt. |
-| `CONTRACT_EXPANDED` | `implementer` | `implementer` | нет | Новый consumer/risk меняет Definition of Done и обнуляет downstream evidence. |
-| `CHECK_REGISTERED` | `implementer` | `implementer` | нет | Новая authoritative проверка должна войти в self-verify и все последующие gates. |
+| `CONTRACT_EXPANDED` | `implementation_contract` | `implementation_contract` | нет | Новый consumer/risk меняет Definition of Done и обнуляет downstream evidence. |
+| `CHECK_REGISTERED` | `implementation_contract` | `implementation_contract` | нет | Новая authoritative проверка должна войти в self-verify и все последующие gates. |
 | `CANDIDATE_CHANGED` | `implementer` | `implementer` | нет | Любое изменение candidate делает прежние проверки устаревшими. |
 | `DEPENDENCY_MANIFEST_CHANGED` | `implementer` | `implementer` | нет | Изменение dependency declaration требует rebuild runtime и повторного evidence. |
 | `RUNTIME_ENV_CHANGED` | `implementer` | `implementer` | нет | Evidence другого runtime environment не переносится автоматически. |
@@ -95,7 +95,7 @@ attempt_id
 | `HIDDEN_GRADER_CHANGED` | `final_gate` | `final_gate` | нет | Изменение hidden grader требует новой calibration перед benchmark final gate. |
 | `CANDIDATE_CHANGED_AFTER_EVALUATION` | `implementer` | `implementer` | нет | Candidate mutation после evaluation инвалидирует implementation evidence и все gates. |
 
-## Что именно реализует Phase 4
+## Что именно реализует Phase 5
 
 ```text
 machine-readable workflow и versioned Run State
@@ -104,7 +104,7 @@ machine-readable workflow и versioned Run State
 + PLANNER planner.v4
 + IMPLEMENTATION CONTRACT implementation-contract.v3
 + typed VERIFICATION PLAN verification-plan.v1
-+ IMPLEMENTER implementer.v2
++ IMPLEMENTER implementer.v3
 + Controller-private typed check registry
 + revision-bound self-verification receipts
 + inactivity watchdog с active-tool awareness
@@ -112,7 +112,10 @@ machine-readable workflow и versioned Run State
 + candidate freeze до/после deterministic suite
 + changed-test coverage guard
 + progress/no-progress repair guard
-+ generated WORKFLOW.md / workflow.v3.json
++ transactional Contract / Verification Plan expansion
++ canonical .worktreeinclude exposure policy
++ worktree-local project-runtime bootstrap and drift reconciliation
++ generated WORKFLOW.md / workflow.v4.json
 ```
 
-Phase 4 **не заявляет полностью готовыми** автоматическую перекомпиляцию active Contract/Verification Plan из discoveries, worktree-local `.venv` bootstrap/rebuild, universal OS-enforced Controller subprocess sandbox, Runtime executor, двухфазный Evaluator, clean-worktree semantic replan или финальную delivery transaction. Execution Broker сохраняет фактический статус `ENFORCED` / `ADVISORY` / `UNAVAILABLE` вместо ложного заявления об изоляции.
+Phase 5 **не заявляет полностью готовыми** universal OS-enforced Controller subprocess sandbox, Runtime executor, двухфазный Evaluator, clean-worktree semantic replan или финальную delivery transaction. Execution Broker сохраняет фактический статус `ENFORCED` / `ADVISORY` / `UNAVAILABLE` вместо ложного заявления об изоляции.

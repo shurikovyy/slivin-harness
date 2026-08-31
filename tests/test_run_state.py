@@ -138,7 +138,7 @@ class RunStateTests(unittest.TestCase):
             path=root / "run_state.json",
             task_id="TASK",
             harness_version="test",
-            workflow_version="workflow.v3",
+            workflow_version="workflow.v4",
             mode=WorkflowMode.PRODUCTION,
             pipeline_profile=PipelineProfile.FULL,
         )
@@ -197,11 +197,16 @@ class RunStateTests(unittest.TestCase):
             payload["stages"]["deterministic_checks"]["state"],
             StageState.INVALIDATED.value,
         )
-        self.assertEqual(payload["cursor_stage"], StageId.IMPLEMENTATION_CONTRACT.value)
+        self.assertEqual(payload["cursor_stage"], StageId.PLANNER.value)
         self.assertIsNone(payload["stages"]["implementer"]["result_code"])
         self.assertEqual(
             payload["stages"]["implementer"]["invalidation"]["trigger"],
             InvalidationTrigger.CONTRACT_EXPANDED.value,
+        )
+        state.begin_stage(StageId.IMPLEMENTATION_CONTRACT)
+        state.pass_stage(
+            StageId.IMPLEMENTATION_CONTRACT,
+            StageResultCode.IMPLEMENTATION_CONTRACT_READY,
         )
         state.begin_stage(StageId.IMPLEMENTER)
 

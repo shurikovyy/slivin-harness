@@ -1,7 +1,7 @@
 {
-  "schema_version": "workflow.v3",
-  "harness_version": "0.8.0a6",
-  "phase": "phase4-implementer-controller-verification",
+  "schema_version": "workflow.v4",
+  "harness_version": "0.8.0a8",
+  "phase": "phase5-contract-runtime-reproducibility",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",
     "execution_broker": "execution-broker.v1"
@@ -279,16 +279,16 @@
     },
     {
       "trigger": "CONTRACT_EXPANDED",
-      "invalidate_from": "implementer",
-      "restart_at": "implementer",
+      "invalidate_from": "implementation_contract",
+      "restart_at": "implementation_contract",
       "new_attempt_required": false,
       "delivery_only": false,
       "reason": "Новый consumer/risk меняет Definition of Done и обнуляет downstream evidence."
     },
     {
       "trigger": "CHECK_REGISTERED",
-      "invalidate_from": "implementer",
-      "restart_at": "implementer",
+      "invalidate_from": "implementation_contract",
+      "restart_at": "implementation_contract",
       "new_attempt_required": false,
       "delivery_only": false,
       "reason": "Новая authoritative проверка должна войти в self-verify и все последующие gates."

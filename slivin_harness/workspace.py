@@ -12,6 +12,7 @@ from pathlib import Path
 
 WORKTREE_EXCLUDES = [
     ".harness_tmp/",
+    ".venv/",
     ".harness_git_excludes",
     "__pycache__/",
     "*.py[cod]",
@@ -155,6 +156,50 @@ def _is_reparse_point(path: Path) -> bool:
     return bool(flag and attrs & flag)
 
 
+
+def _canonical_is_within(root: Path, candidate: Path) -> bool:
+    try:
+        root_resolved = root.resolve(strict=False)
+        candidate_resolved = candidate.resolve(strict=False)
+        common = os.path.commonpath([str(root_resolved), str(candidate_resolved)])
+        return os.path.normcase(common) == os.path.normcase(str(root_resolved))
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def assert_safe_runtime_path(
+    root: Path,
+    path: Path,
+    *,
+    include_leaf: bool = True,
+) -> None:
+    """Reject path escape through a symlink/junction in any ancestor.
+
+    Checking only the leaf is insufficient: ``ignored/link/.env`` can look like
+    a regular file while ``link`` redirects outside the repository.  Exposure
+    and restore operations must validate every existing component before they
+    read or write through it.
+    """
+
+    root = Path(root).resolve(strict=False)
+    path = Path(path)
+    try:
+        rel = path.absolute().relative_to(root.absolute())
+    except ValueError as exc:
+        raise RuntimeError(f"Runtime path is outside its root: {path}") from exc
+    parts = rel.parts if include_leaf else rel.parts[:-1]
+    current = root
+    for part in parts:
+        current = current / part
+        if current.is_symlink() or _is_reparse_point(current):
+            raise RuntimeError(
+                "Refusing runtime path through symlink/junction/reparse point: "
+                + str(current)
+            )
+    probe = path if include_leaf else path.parent
+    if not _canonical_is_within(root, probe):
+        raise RuntimeError(f"Runtime path escaped its root after resolution: {path}")
+
 def _assert_regular_tree(path: Path) -> None:
     candidates = [path]
     if path.is_dir():
@@ -176,6 +221,23 @@ def _make_worktree_excludes(workspace: Path, exposed_paths: list[str]) -> Path:
         rel = _safe_relative_path(raw).as_posix()
         patterns.append(rel + "/" if (workspace / rel).is_dir() else rel)
     path.write_text("\n".join(dict.fromkeys(patterns)) + "\n", encoding="utf-8", newline="\n")
+    return path
+
+
+def add_worktree_excludes(workspace: Path, raw_paths: list[str]) -> Path:
+    """Extend the managed worktree exclude file with runtime-owned paths."""
+
+    path = workspace / ".harness_git_excludes"
+    existing = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    patterns = list(existing)
+    for raw in raw_paths:
+        rel = _safe_relative_path(raw).as_posix().rstrip("/")
+        patterns.append(rel + "/")
+    path.write_text(
+        "\n".join(dict.fromkeys(item for item in patterns if item)) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     return path
 
 
@@ -206,9 +268,11 @@ def _copy_exposed_paths(
         rel = _safe_relative_path(raw)
         source = source_repo / rel
         target = workspace / rel
-        if not source.exists():
+        if not source.exists() and not source.is_symlink():
             print("WORKSPACE_EXPOSE_MISSING:", rel.as_posix())
             continue
+        assert_safe_runtime_path(source_repo, source, include_leaf=True)
+        assert_safe_runtime_path(workspace, target, include_leaf=False)
         if _run_git(
             source_repo,
             "ls-files",
@@ -229,6 +293,9 @@ def _copy_exposed_paths(
                 + examples
                 + suffix
             )
+        if target.exists():
+            print("WORKSPACE_EXPOSE_EXISTS_SKIP:", rel.as_posix())
+            continue
         target.parent.mkdir(parents=True, exist_ok=True)
         if source.is_dir():
             if target.exists():
@@ -240,6 +307,67 @@ def _copy_exposed_paths(
         print("WORKSPACE_EXPOSE_COPIED:", rel.as_posix())
     return tuple(copied)
 
+
+
+def _worktreeinclude_paths(source_repo: Path) -> tuple[str, ...]:
+    """Enumerate ignored regular files selected by repository .worktreeinclude.
+
+    The file is an owner-controlled repository policy.  It can authorize sensitive
+    ignored files such as .env without a second task-local opt-in, but it can never
+    expose tracked files, symlinks/junctions, or paths outside the repository.
+    """
+
+    include = source_repo / ".worktreeinclude"
+    if not include.is_file():
+        return ()
+    result = _run_git(
+        source_repo,
+        "ls-files",
+        "--others",
+        "--ignored",
+        "-z",
+        f"--exclude-from={include}",
+        "--",
+    )
+    values = [item for item in str(result.stdout).split("\0") if item]
+    selected: list[str] = []
+    for raw in values:
+        rel = _safe_relative_path(raw)
+        source = source_repo / rel
+        if not source.exists() and not source.is_symlink():
+            continue
+        assert_safe_runtime_path(source_repo, source, include_leaf=True)
+        if _run_git(
+            source_repo,
+            "ls-files",
+            "--error-unmatch",
+            "--",
+            rel.as_posix(),
+            check=False,
+        ).returncode == 0:
+            continue
+        if _run_git(
+            source_repo,
+            "check-ignore",
+            "-q",
+            "--",
+            rel.as_posix(),
+            check=False,
+        ).returncode != 0:
+            raise RuntimeError(
+                ".worktreeinclude may expose only repository-ignored paths: "
+                + rel.as_posix()
+            )
+        _assert_regular_tree(source)
+        if source.is_dir():
+            # ls-files normally returns files, but fail closed if Git behavior or
+            # a future pattern yields a directory object.
+            raise RuntimeError(
+                ".worktreeinclude must resolve to regular files, not directories: "
+                + rel.as_posix()
+            )
+        selected.append(rel.as_posix())
+    return tuple(sorted(dict.fromkeys(selected)))
 
 def _remove_worktree(source_repo: Path, workspace: Path) -> None:
     _run_git(source_repo, "worktree", "remove", "--force", str(workspace), check=False)
@@ -291,9 +419,12 @@ def prepare_workspace_session(
         raise RuntimeError("copy_untracked must be an array of strings")
     configured_exposed = list(raw_exposed)
     allow_sensitive_copy = bool(workspace_cfg.get("allow_sensitive_copy", False))
+    repository_included = list(_worktreeinclude_paths(source_repo))
 
     source_status = _status_porcelain(source_repo)
-    effective_status = _status_excluding_allowed_untracked(source_status, configured_exposed)
+    effective_status = _status_excluding_allowed_untracked(
+        source_status, [*configured_exposed, *repository_included]
+    )
     if bool(project_cfg.get("require_clean_source", True)) and effective_status.strip():
         raise RuntimeError(
             "Source repository is not clean. Configured exposed untracked paths are "
@@ -326,12 +457,19 @@ def prepare_workspace_session(
     _run_git(source_repo, "config", "extensions.worktreeConfig", "true")
     _run_git(source_repo, "worktree", "add", "--detach", str(workspace), base_sha)
     try:
-        copied = _copy_exposed_paths(
+        canonical_copied = _copy_exposed_paths(
             source_repo,
             workspace,
-            configured_exposed,
+            repository_included,
+            allow_sensitive_copy=True,
+        )
+        manual_copied = _copy_exposed_paths(
+            source_repo,
+            workspace,
+            [item for item in configured_exposed if _safe_relative_path(item).as_posix() not in set(canonical_copied)],
             allow_sensitive_copy=allow_sensitive_copy,
         )
+        copied = tuple(dict.fromkeys([*canonical_copied, *manual_copied]))
         excludes = _make_worktree_excludes(workspace, list(copied))
         _run_git(workspace, "config", "--worktree", "core.excludesFile", str(excludes))
         status_text = _status_porcelain(workspace)

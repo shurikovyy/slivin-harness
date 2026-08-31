@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class Phase4ExecutableIntegrationTests(unittest.TestCase):
     def test_release_version_and_protocol_are_phase4(self) -> None:
-        self.assertEqual(slivin_harness.__version__, "0.8.0a6")
+        self.assertEqual(slivin_harness.__version__, "0.8.0a8")
         implementer = (ROOT / "slivin_harness" / "implementer.py").read_text(encoding="utf-8")
-        self.assertIn("implementer.v2", implementer)
+        self.assertIn("implementer.v3", implementer)
         self.assertIn("REPLAN_REQUIRED", implementer)
         self.assertIn("NEEDS_USER_DECISION", implementer)
 

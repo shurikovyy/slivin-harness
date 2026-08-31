@@ -1,21 +1,20 @@
-# Windows setup для Slivin Harness 0.8.0a6
+# Windows setup для Slivin Harness 0.8.0a8
 
-## Поддерживаемая среда
-
-Целевая пользовательская среда:
+## Целевая среда
 
 ```text
 Windows 10/11
 Git for Windows / Git Bash
 Codex CLI / App Server
-локальный Python для Harness
-project-specific toolchain из harness.local.toml
+Python для Harness
+configured bootstrap Python проекта
+project-specific Node/Jest при необходимости
 ```
 
 ## Проверка release
 
 ```bash
-cd ~/Tools/slivin-harness-080a6-phase4
+cd ~/Tools/slivin-harness-080a8-phase5
 ./py -c "import slivin_harness; print(slivin_harness.__version__)"
 ./py tools/self_check.py
 ```
@@ -23,20 +22,69 @@ cd ~/Tools/slivin-harness-080a6-phase4
 Ожидаемо:
 
 ```text
-0.8.0a6
-DOCS_SYNC_PASS harness=0.8.0a6 ...
+0.8.0a8
+DOCS_SYNC_PASS harness=0.8.0a8 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
+## Python 3.12 проекта
+
+Пример `harness.local.toml`:
+
+```toml
+[projects.sa_icover.runtime]
+bootstrap_python = "C:/Users/Slivin.Aleksandr/AppData/Local/Programs/Python/Python312/python.exe"
+expected_python = "3.12"
+venv = ".venv"
+dependency_files = ["requirements.txt"]
+```
+
+Harness сам выполняет эквивалент:
+
+```bash
+"$PY312" -m venv "$WORKSPACE/.venv"
+"$WORKSPACE/.venv/Scripts/python.exe" -m pip install -r requirements.txt
+"$WORKSPACE/.venv/Scripts/python.exe" -m pip check
+```
+
+Controller использует абсолютный executable; activation через `source` не требуется. `.venv` каждой worktree изолирована от основной project `.venv` и других parallel tasks.
+
+## Worktree runtime path на native Windows
+
+`tempfile`, NTFS и Windows path canonicalization могут представить один и тот же каталог разными строками. Поэтому принадлежность `project_python` worktree больше не проверяется через:
+
+```text
+str(project_python).startswith(str(workspace))
+```
+
+Такое сравнение лексическое и может дать `False` для эквивалентных путей. Проверяется фактический runtime-инвариант:
+
+```text
+project_python entry point
+→ его parent directory канонически находится
+  внутри Controller-owned <worktree>/.venv
+```
+
+Сам runtime-контракт не ослаблен: project checks по-прежнему запускаются через абсолютный entry point собственной `.venv` worktree.
+
+## `.worktreeinclude`
+
+Repository-owned ignored runtime files можно перечислить в `.worktreeinclude`:
+
+```gitignore
+.env
+.env.local
+```
+
+Harness копирует их в managed worktree, но не включает в candidate. Symlink/junction/reparse traversal отклоняется на любом компоненте пути, а не только на leaf. Existing worktree files не перезаписываются.
+
 ## Git executable bit на NTFS
 
-Git/NTFS может не показывать chmod-only изменение. Тест candidate identity сначала делает capability probe. Если mode-only diff недоступен, тест ожидаемо `skip`; content/path/deletion identity продолжает проверяться.
+Git/NTFS может не показывать chmod-only изменение. Candidate identity test сначала делает capability probe. Если mode-only diff недоступен, тест ожидаемо `skip`; content/path/deletion identity продолжает проверяться.
 
 ## Canonical paths
 
-Начиная с 0.8.0a4 Controller Plane и Execution Broker сравнивают Windows пути по каноническому расположению, а не через лексический `Path.is_relative_to()`.
-
-Проверяются:
+Controller Plane и Execution Broker сравнивают Windows paths по каноническому расположению. Проверяются:
 
 ```text
 relative escape ..
@@ -47,35 +95,29 @@ private-root aliases
 sibling with similar prefix
 ```
 
-## Phase 4 artifacts
+## Private artifacts
 
 Authoritative artifacts включают:
 
 ```text
-task_contract_01.json
-plan_01.json
-implementation_contract_01.json
-verification_plan_01.json
-capability_gate_01.json
+implementation_contract_*.json
+verification_plan_*.json
+capability_gate_*.json
+project_runtime_*.json
 check_registry.json
-self_verify_receipt.json
-controller_checks_*.json
+self_verify_receipt_current.json
 ```
 
-Они хранятся в private Controller plane, а не внутри agent-writable worktree.
+Они находятся в `RUN_DIR/controller_private`, не в agent-writable worktree.
 
-## App Server sandbox boundary
+## App Server / subprocess boundary
 
-Phase 4 сохраняет честный enforcement status из Phase 2. Там, где native Windows restricted runner ещё не реализован, policy остаётся `ADVISORY`, а не ложно объявляется `ENFORCED`.
+Execution Broker сохраняет фактический enforcement. Где native Windows restricted runner ещё не реализован, policy остаётся `ADVISORY`, а не объявляется `ENFORCED`.
 
 ## Runtime capabilities
 
-Запись capability в `harness.local.toml` не включает несуществующий executor. До отдельной Runtime-фазы Browser/test-external/prod-observe proof будет заблокирован перед Implementer.
+Запись capability в config не включает отсутствующий executor. Browser/test-external/prod-observe proof будет блокирован до соответствующей Runtime-фазы.
 
-## Project Python
+## Перенос local config
 
-Phase 4 ещё не автоматизирует утверждённый per-worktree `.venv` bootstrap. Используется существующий resolver toolchain. До внедрения runtime bootstrap продолжайте указывать рабочий project Python в локальном project profile.
-
-## Локальная конфигурация
-
-`harness.local.toml` не входит в ZIP. После распаковки перенесите его из предыдущей установки. Не копируйте `runs`, `.git`, `.venv`, `.harness_tmp` или Controller private artifacts между версиями.
+`harness.local.toml` не входит в ZIP. Переносите только его; не копируйте `runs`, `.git`, `.venv`, `.harness_tmp` или Controller private artifacts между версиями.

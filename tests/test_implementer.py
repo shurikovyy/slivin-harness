@@ -16,6 +16,7 @@ from slivin_harness.implementer import (
 )
 from task_runner import (
     build_dynamic_check_specs,
+    build_trusted_check_id_specs,
     candidate_content_fingerprint,
     prepare_self_verify_runner,
     run_implementer_report,
@@ -210,6 +211,16 @@ class ImplementerContractTests(unittest.TestCase):
         self.assertEqual(len(specs), 1)
         self.assertIn("thing.test.cjs", specs[0]["name"])
         self.assertTrue(any("not test-like" in note for note in notes))
+
+    def test_trusted_check_id_must_resolve_to_controller_owned_spec(self) -> None:
+        specs, notes = build_trusted_check_id_specs(
+            ["git.diff-check"],
+            base_specs=[],
+        )
+        self.assertEqual(specs[0]["command"], ["git", "diff", "--check"])
+        self.assertEqual(notes, [])
+        with self.assertRaisesRegex(RuntimeError, "Unknown trusted check id"):
+            build_trusted_check_id_specs(["looks.safe"], base_specs=[])
 
 
 if __name__ == "__main__":

@@ -1,5 +1,20 @@
 # История и дальнейший маршрут
 
+## Phase 5 portability — 0.8.0a8
+
+Native Windows exposed one remaining lexical-path assumption in the Phase 5 project-runtime tests. `ProjectRuntimeManager` already canonicalized the worktree and built `.venv` inside it, but the test compared the serialized Python path with the unresolved `tempfile` workspace through string `startswith()`. Equivalent NTFS/temp paths can have different lexical spellings, so the assertion failed although the runtime was correctly worktree-local.
+
+The test now proves the actual ownership invariant: the serialized Python entry point belongs to the Controller-owned worktree `.venv`. A platform-independent alias regression covers the same class of mismatch. `project-runtime.v1` is unchanged.
+
+## Phase 5 — 0.8.0a7
+
+Phase 5 closed two gaps left explicit in 0.8.0a6. First, material discoveries and typed checks now change the active Definition of Done instead of remaining report prose: Controller revises Implementation Contract and Verification Plan together, repeats owner/capability gates and requires the same Implementer to verify the new revision. Second, Python evidence can be bound to a disposable worktree-local `.venv`; dependency changes or hidden package drift trigger a clean rebuild before completion.
+
+`.worktreeinclude` became the canonical repository policy for ignored runtime files required in managed worktrees. These files are not candidate output and cannot silently make a task pass through a temporary `.env` edit.
+Phase 5 also made typed verification fail-closed: a registered path/ID must resolve to a real trusted check before it can revise the Verification Plan. Runtime-file paths reject symlink/junction ancestors, and sensitive comparisons use private keyed HMACs.
+
+Machine phase id: `phase5-contract-runtime-reproducibility`. Runtime scenario executors and the two-phase Evaluator remain subsequent phases.
+
 ## Phase 4 — 0.8.0a6
 
 Phase 4 перевела writable execution loop на `implementer.v2`, добавила Controller-private typed check registry, revision-bound self-verification receipts, activity-based watchdog, deterministic check classifications и candidate freeze guards. Эта фаза напрямую закрывает два исторических execution gaps Matrix: потерю полезной работы из-за фиксированного 900-секундного timeout и слишком позднее подключение найденных consumer tests.

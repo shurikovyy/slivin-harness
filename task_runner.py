@@ -42,6 +42,13 @@ from slivin_harness.phase4 import (
     fingerprint_workspace_candidate,
     git_changed_paths,
 )
+from slivin_harness.phase5 import (
+    Phase5ContractError,
+    ProjectRuntimeConfig,
+    ProjectRuntimeManager,
+    ProjectRuntimeState,
+    expand_contract_and_verification_plan,
+)
 from slivin_harness.protocol import (
     ArtifactContractError,
     EVALUATOR_PROTOCOL_VERSION,
@@ -86,7 +93,9 @@ from slivin_harness.workflow import (
 )
 from slivin_harness.workspace import (
     WorkspaceSession,
+    add_worktree_excludes,
     apply_candidate_to_source,
+    assert_safe_runtime_path,
     build_candidate_patch,
     prepare_workspace_session,
 )
@@ -94,6 +103,7 @@ from slivin_harness.workspace import (
 configure_utf8_stdio()
 HARNESS_ROOT = Path(__file__).resolve().parent
 DEFAULT_CODEX_NAMES = ("codex.cmd", "codex")
+TRUSTED_CHECK_IDS = ("git.diff-check",)
 
 IMPLEMENTER_INSTRUCTIONS = """
 Ты Implementer внутри Slivin Harness.
@@ -112,7 +122,7 @@ IMPLEMENTER_INSTRUCTIONS = """
 - добавь contract-oriented regression tests, а не проверку конкретной формы patch;
 - обязательно запусти перед завершением Harness-owned SELF_VERIFY_COMMAND: он использует тот же trusted toolchain и те же repair checks, что затем независимо повторит Controller;
 - typed Verification Plan задаёт обязательный уровень доказательства; не подменяй runtime proof локальным тестом;
-- если при исследовании найдены дополнительные существующие test files, зарегистрируй их как typed `registered_checks`/`additional_check_paths`; произвольные Controller shell-команды запрещены;
+- если при исследовании найдены дополнительные существующие test files, зарегистрируй их как typed `registered_checks`/`additional_check_paths`; trusted check ID сейчас только `git.diff-check`, произвольные/неизвестные Controller команды и IDs запрещены;
 - если найден material consumer/risk вне active Contract, верни его в `discovered_obligations`; не ослабляй и не редактируй Contract самостоятельно;
 - temp/cache размещай в .harness_tmp;
 - если две разные попытки записи завершаются Permission denied/Access denied, не повторяй их: зафиксируй инфраструктурную блокировку;
@@ -175,6 +185,10 @@ class CheckResult:
     @property
     def passed(self) -> bool:
         return self.classification is CheckClassification.PASS
+
+
+class HarnessControlledStop(RuntimeError):
+    """A correctly routed BLOCKED/decision outcome, not an internal Harness crash."""
 
 
 class RunRecorder:
@@ -427,6 +441,121 @@ def validate_toolchain(toolchain: dict[str, str]) -> None:
         path = Path(raw)
         if not path.exists():
             raise RuntimeError(f"Toolchain entry does not exist: {name}={path}")
+
+
+def resolve_project_runtime_config(
+    local_config: dict,
+    *,
+    project_name: str | None,
+    source_repo: Path | None,
+) -> ProjectRuntimeConfig | None:
+    if not project_name:
+        return None
+    project = local_config.get("projects", {}).get(project_name, {})
+    if not isinstance(project, dict):
+        return None
+    raw = project.get("runtime")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"[projects.{project_name}.runtime] must be a table")
+    allowed = {
+        "enabled",
+        "bootstrap_python",
+        "expected_python",
+        "venv",
+        "dependency_files",
+        "pip_install_args",
+    }
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise RuntimeError(
+            f"Unknown [projects.{project_name}.runtime] fields: {', '.join(unknown)}"
+        )
+    if raw.get("enabled", True) is False:
+        return None
+    bootstrap = raw.get("bootstrap_python")
+    if not isinstance(bootstrap, str) or not bootstrap.strip():
+        raise RuntimeError(
+            f"[projects.{project_name}.runtime] requires bootstrap_python"
+        )
+    expected = raw.get("expected_python")
+    if not isinstance(expected, str) or not expected.strip():
+        raise RuntimeError(
+            f"[projects.{project_name}.runtime] requires expected_python, e.g. '3.12'"
+        )
+    dependency_files = raw.get("dependency_files", ["requirements.txt"])
+    if not isinstance(dependency_files, list) or not all(
+        isinstance(item, str) for item in dependency_files
+    ):
+        raise RuntimeError("runtime.dependency_files must be an array of strings")
+    pip_args = raw.get("pip_install_args", [])
+    if not isinstance(pip_args, list) or not all(isinstance(item, str) for item in pip_args):
+        raise RuntimeError("runtime.pip_install_args must be an array of strings")
+    venv = raw.get("venv", ".venv")
+    if not isinstance(venv, str):
+        raise RuntimeError("runtime.venv must be a string")
+    bootstrap_path = _resolve_tool_path(str(bootstrap), project_root=source_repo)
+    return ProjectRuntimeConfig(
+        bootstrap_python=bootstrap_path,
+        expected_python=expected,
+        venv_relative=venv,
+        dependency_files=tuple(dependency_files),
+        pip_install_args=tuple(pip_args),
+    )
+
+
+def exposed_runtime_file_snapshot(
+    session: WorkspaceSession,
+    *,
+    control_plane: ControllerPlane,
+) -> dict[str, str]:
+    """Fingerprint runtime-only files with a Controller-private keyed HMAC."""
+
+    result: dict[str, str] = {}
+    for raw in session.exposed_paths:
+        root = session.workspace / raw
+        if root.is_file():
+            rel = raw.replace("\\", "/")
+            result[rel] = control_plane.keyed_fingerprint(
+                root.read_bytes(), context=f"runtime-file:{rel}"
+            )
+        elif root.is_dir():
+            for path in sorted(root.rglob("*")):
+                if path.is_file():
+                    rel = path.relative_to(session.workspace).as_posix()
+                    result[rel] = control_plane.keyed_fingerprint(
+                        path.read_bytes(), context=f"runtime-file:{rel}"
+                    )
+    return result
+
+
+def restore_exposed_runtime_files(session: WorkspaceSession) -> None:
+    """Restore runtime-only files from the unchanged source checkout.
+
+    Files exposed through `.worktreeinclude` or the explicit local override are
+    runtime inputs, not candidate output.  Restoring them is Controller-owned:
+    the agent never receives their previous contents through a prompt or log.
+    """
+
+    if session.source_repo is None:
+        return
+    for raw in session.exposed_paths:
+        source = session.source_repo / raw
+        target = session.workspace / raw
+        assert_safe_runtime_path(session.source_repo, source, include_leaf=True)
+        assert_safe_runtime_path(session.workspace, target, include_leaf=False)
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        elif target.exists() or target.is_symlink():
+            target.unlink()
+        if source.is_dir():
+            shutil.copytree(source, target)
+        elif source.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        else:
+            raise RuntimeError(f"Runtime-only source path disappeared: {raw}")
 
 
 def _run_git(workspace: Path, *args: str) -> str:
@@ -796,6 +925,47 @@ def build_dynamic_check_specs(
     return specs, notes
 
 
+
+def build_trusted_check_id_specs(
+    ids: list[str],
+    *,
+    base_specs: list[dict],
+) -> tuple[list[dict], list[str]]:
+    """Resolve Controller-owned check IDs to concrete trusted commands.
+
+    A syntactically safe ID is not enough: every accepted ID must map to a
+    concrete Harness-owned specification.  Otherwise an agent could add a
+    label to the Verification Plan without adding an executable proof.
+    """
+
+    specs: list[dict] = []
+    notes: list[str] = []
+    seen: set[str] = set()
+    for raw in ids:
+        value = str(raw)
+        if value in seen:
+            continue
+        seen.add(value)
+        if value == "git.diff-check":
+            spec = {
+                "name": "Trusted check: git.diff-check",
+                "feedback": "repair",
+                "command": ["git", "diff", "--check"],
+                "timeout_seconds": 30,
+            }
+        else:
+            raise RuntimeError(f"Unknown trusted check id: {value!r}")
+        command_key = tuple(str(part) for part in spec["command"])
+        already = any(
+            tuple(str(part) for part in base.get("command", [])) == command_key
+            for base in base_specs
+        )
+        if already:
+            notes.append(f"TRUSTED_CHECK_ALREADY_COVERED {value}")
+        else:
+            specs.append(spec)
+    return specs, notes
+
 def run_check(
     spec: dict,
     *,
@@ -1143,12 +1313,15 @@ Implementation Contract остаётся обязательным после rep
 
 
 def build_implementation_continuation_prompt(
-    *, implementation_contract: dict, self_verify_command: list[str]
+    *,
+    implementation_contract: dict,
+    self_verify_command: list[str],
+    verification_plan: dict | None = None,
+    reason: str = "Previous Implementer turn was interrupted by inactivity watchdog.",
 ) -> str:
     return f"""
-Предыдущий Implementer turn был прерван inactivity watchdog. Уже внесённые изменения в workspace
-сохранены, thread и исходный task остаются теми же. НЕ начинай исследование заново и не
-откатывай подтверждённую работу.
+{reason} Уже внесённые изменения в workspace сохранены, thread и исходный task остаются теми же.
+НЕ начинай исследование заново и не откатывай подтверждённую работу.
 
 1. Сначала посмотри текущий `git diff`/status и продолжи только незавершённые пункты.
 2. Особое внимание удели ещё не доказанным risks/consumers из Implementation Contract.
@@ -1157,6 +1330,9 @@ def build_implementation_continuation_prompt(
 
 Implementation Contract:
 {json.dumps(implementation_contract, ensure_ascii=False, indent=2)}
+
+Verification Plan:
+{json.dumps(verification_plan, ensure_ascii=False, indent=2) if verification_plan is not None else "(unchanged)"}
 
 SELF_VERIFY_COMMAND:
 {_display_command(self_verify_command)}
@@ -1655,10 +1831,68 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
 
+        runtime_manager: ProjectRuntimeManager | None = None
+        runtime_state: ProjectRuntimeState | None = None
+        try:
+            runtime_config = resolve_project_runtime_config(
+                local_config,
+                project_name=session.project_name,
+                source_repo=session.source_repo,
+            )
+            if runtime_config is not None:
+                add_worktree_excludes(workspace, [runtime_config.venv_relative])
+                runtime_manager = ProjectRuntimeManager(
+                    workspace=workspace,
+                    config=runtime_config,
+                    environment=execution_broker.environment_for(ExecutionRole.RUNTIME),
+                )
+                print("=== PROJECT RUNTIME BOOTSTRAP ===")
+                runtime_state = runtime_manager.build(clean=True)
+                recorder.write_authoritative_json(
+                    "project_runtime_01.json", runtime_state.to_dict()
+                )
+                run_state.bump_revision(
+                    RevisionKind.RUNTIME_ENVIRONMENT,
+                    artifact="project_runtime_01.json",
+                )
+            else:
+                run_state.bump_revision(
+                    RevisionKind.RUNTIME_ENVIRONMENT,
+                    artifact="preflight.json",
+                )
+        except (Phase5ContractError, RuntimeError) as exc:
+            recorder.write_authoritative_json(
+                "project_runtime_error.json",
+                {
+                    "schema_version": "project-runtime-error.v1",
+                    "reason_code": "PROJECT_RUNTIME_BOOTSTRAP_FAILED",
+                    "message": str(exc),
+                },
+            )
+            run_state.route_stage(
+                StageId.INTAKE_PREFLIGHT,
+                outcome=WorkflowOutcome.BLOCKED,
+                result_code=StageResultCode.BLOCKED,
+                reason_code="PROJECT_RUNTIME_BOOTSTRAP_FAILED",
+                artifacts=("project_runtime_error.json",),
+            )
+            print("HARNESS_TASK_STOPPED: PROJECT_RUNTIME_BOOTSTRAP_FAILED", exc)
+            return 2
+
         preflight = capture_preflight(workspace)
         recorder.write_authoritative_json("preflight.json", preflight)
         repo_context = collect_repo_context(workspace)
         recorder.write_json("repo_context.json", repo_context)
+        local_runtime_files_baseline = exposed_runtime_file_snapshot(
+            session, control_plane=recorder.control_plane
+        )
+        recorder.write_private_json(
+            "local_runtime_files_snapshot.json",
+            {
+                "schema_version": "local-runtime-files.v1",
+                "keyed_hmac_sha256": local_runtime_files_baseline,
+            },
+        )
 
         project_root = session.source_repo or workspace
         toolchain = resolve_toolchain(
@@ -1667,11 +1901,9 @@ def main(argv: list[str] | None = None) -> int:
             project_name=session.project_name,
             project_root=project_root,
         )
+        if runtime_state is not None:
+            toolchain["project_python"] = runtime_state.project_python
         validate_toolchain(toolchain)
-        run_state.bump_revision(
-            RevisionKind.RUNTIME_ENVIRONMENT,
-            artifact="preflight.json",
-        )
         repair_specs, heldout_specs = split_checks(manifest["checks"])
         risk = manifest.get("risk", "medium")
         timeout = manifest.get("turn_timeout_seconds", 900)
@@ -1935,42 +2167,73 @@ def main(argv: list[str] | None = None) -> int:
             dynamic_specs: list[dict] = []
             dynamic_notes: list[str] = []
             implementation_report_index = 0
+            implementation_contract_index = 1
+            verification_plan_index = 1
+            capability_gate_index = 1
+            project_runtime_index = 1 if runtime_state is not None else 0
+            active_contract_artifact = "implementation_contract_01.json"
+            active_verification_artifact = "verification_plan_01.json"
+            active_capability_artifact = "capability_gate_01.json"
             # Authoritative typed registry lives in the Controller-private plane,
             # never in the agent-writable workspace.
             check_registry = CheckRegistry(
                 recorder.private_root / "check_registry.json",
                 workspace=workspace,
+                trusted_check_ids=TRUSTED_CHECK_IDS,
             )
 
             def active_repair_specs() -> list[dict]:
                 return list(repair_specs) + list(dynamic_specs)
 
+            def active_task_check_keys() -> list[str]:
+                return [
+                    f"{item.kind}:{item.value}"
+                    for item in check_registry.references()
+                ]
+
             def register_report_checks(report: dict) -> bool:
                 nonlocal dynamic_specs
                 digest_before = check_registry.digest()
-                for value in report.get("additional_check_paths", []):
-                    check_registry.register_path(str(value))
+                requested_paths = [str(value) for value in report.get("additional_check_paths", [])]
+                requested_ids: list[str] = []
                 for item in report.get("registered_checks", []):
                     if not isinstance(item, dict):
                         continue
                     if item.get("kind") == "path":
-                        check_registry.register_path(str(item.get("value", "")))
+                        requested_paths.append(str(item.get("value", "")))
                     elif item.get("kind") == "check_id":
-                        check_registry.register_id(str(item.get("value", "")))
-                registered_paths = [
-                    item.value
-                    for item in check_registry.references()
-                    if item.kind == "path"
-                ]
-                discovered, notes = build_dynamic_check_specs(
-                    registered_paths,
+                        requested_ids.append(str(item.get("value", "")))
+
+                # Resolve every request before making it authoritative.  A
+                # registry entry that has no executable trusted spec would be
+                # false verification evidence.
+                path_specs, path_notes = build_dynamic_check_specs(
+                    requested_paths,
                     workspace=workspace,
                     toolchain=toolchain,
                     base_specs=repair_specs,
                 )
+                unsupported = [
+                    note for note in path_notes if note.startswith("UNSUPPORTED_DYNAMIC_CHECK")
+                ]
+                if unsupported:
+                    raise Phase5ContractError("; ".join(unsupported))
+                id_specs, id_notes = build_trusted_check_id_specs(
+                    requested_ids,
+                    base_specs=repair_specs,
+                )
+
+                for value in requested_paths:
+                    check_registry.register_path(value)
+                for value in requested_ids:
+                    check_registry.register_id(value)
+
                 before = len(dynamic_specs)
-                dynamic_specs = merge_dynamic_specs(dynamic_specs, discovered)
-                for note in notes:
+                dynamic_specs = merge_dynamic_specs(
+                    dynamic_specs,
+                    [*path_specs, *id_specs],
+                )
+                for note in [*path_notes, *id_notes]:
                     if note not in dynamic_notes:
                         dynamic_notes.append(note)
                         print(note)
@@ -1990,61 +2253,297 @@ def main(argv: list[str] | None = None) -> int:
             )
 
 
+            def recompile_active_definition(
+                *,
+                discoveries: list[dict],
+                registry_changed: bool,
+                detail: str,
+            ) -> bool:
+                """Atomically expand Contract + Verification Plan and re-run Step 2 gates."""
+
+                nonlocal implementation_contract
+                nonlocal verification_plan
+                nonlocal implementation_contract_index
+                nonlocal verification_plan_index
+                nonlocal capability_gate_index
+                nonlocal active_contract_artifact
+                nonlocal active_verification_artifact
+                nonlocal active_capability_artifact
+
+                expansion = expand_contract_and_verification_plan(
+                    implementation_contract=implementation_contract,
+                    previous_verification_plan=verification_plan,
+                    discoveries=discoveries,
+                    project_checks=repair_specs,
+                    task_checks=active_task_check_keys(),
+                )
+                contract_changed = (
+                    expansion.implementation_contract["fingerprint"]
+                    != implementation_contract["fingerprint"]
+                )
+                plan_changed = (
+                    expansion.verification_plan["fingerprint"]
+                    != verification_plan["fingerprint"]
+                )
+                if not contract_changed and not plan_changed:
+                    return False
+
+                trigger = (
+                    InvalidationTrigger.CONTRACT_EXPANDED
+                    if contract_changed
+                    else InvalidationTrigger.CHECK_REGISTERED
+                )
+                run_state.invalidate(trigger, detail=detail)
+                run_state.begin_stage(StageId.IMPLEMENTATION_CONTRACT)
+
+                if contract_changed:
+                    implementation_contract = expansion.implementation_contract
+                    implementation_contract_index += 1
+                    contract_artifact = (
+                        f"implementation_contract_{implementation_contract_index:02d}.json"
+                    )
+                    recorder.write_authoritative_json(
+                        contract_artifact, implementation_contract
+                    )
+                    run_state.bump_revision(
+                        RevisionKind.IMPLEMENTATION_CONTRACT,
+                        artifact=contract_artifact,
+                    )
+                    active_contract_artifact = contract_artifact
+                else:
+                    contract_artifact = active_contract_artifact
+
+                verification_plan = expansion.verification_plan
+                verification_plan_index += 1
+                plan_artifact = f"verification_plan_{verification_plan_index:02d}.json"
+                recorder.write_authoritative_json(plan_artifact, verification_plan)
+                run_state.bump_revision(
+                    RevisionKind.VERIFICATION_PLAN,
+                    artifact=plan_artifact,
+                )
+                active_verification_artifact = plan_artifact
+
+                # Re-run owner and capability gates against the newly active
+                # Definition of Done.  A new proof requirement is not allowed to
+                # bypass the pre-Implementer capability boundary.
+                enforce_allowed_paths(collect_changed_paths(workspace), allowed_paths)
+                if plan is not None and not plan["owner_boundary_assessment"]["compatible"]:
+                    run_state.route_stage(
+                        StageId.IMPLEMENTATION_CONTRACT,
+                        outcome=WorkflowOutcome.BLOCKED,
+                        result_code=StageResultCode.BLOCKED,
+                        reason_code="OWNER_BOUNDARY_CONFLICT",
+                        artifacts=(contract_artifact, plan_artifact),
+                    )
+                    raise HarnessControlledStop("OWNER_BOUNDARY_CONFLICT")
+
+                current_capabilities = available_capabilities(
+                    toolchain=toolchain,
+                    configured=declared_capabilities,
+                )
+                capability_gate_index += 1
+                capability_artifact = f"capability_gate_{capability_gate_index:02d}.json"
+                capability_record = {
+                    "schema_version": "capability-gate.v1",
+                    "declared": declared_capabilities,
+                    "available": sorted(current_capabilities),
+                    "required": list(verification_plan["required_capabilities"]),
+                }
+                capability_record["missing"] = required_capability_gaps(
+                    verification_plan,
+                    available=current_capabilities,
+                )
+                recorder.write_authoritative_json(
+                    capability_artifact, capability_record
+                )
+                active_capability_artifact = capability_artifact
+                if capability_record["missing"]:
+                    run_state.route_stage(
+                        StageId.IMPLEMENTATION_CONTRACT,
+                        outcome=WorkflowOutcome.BLOCKED,
+                        result_code=StageResultCode.BLOCKED,
+                        reason_code="REQUIRED_CAPABILITY_MISSING",
+                        artifacts=(
+                            contract_artifact,
+                            plan_artifact,
+                            capability_artifact,
+                        ),
+                    )
+                    raise HarnessControlledStop(
+                        "REQUIRED_CAPABILITY_MISSING: "
+                        + ", ".join(capability_record["missing"])
+                    )
+
+                expansion_artifact = (
+                    f"contract_expansion_{verification_plan_index:02d}.json"
+                )
+                recorder.write_authoritative_json(
+                    expansion_artifact,
+                    {
+                        **expansion.summary(),
+                        "detail": detail,
+                        "check_registry_digest": check_registry.digest(),
+                        "task_checks": active_task_check_keys(),
+                    },
+                )
+                run_state.pass_stage(
+                    StageId.IMPLEMENTATION_CONTRACT,
+                    StageResultCode.IMPLEMENTATION_CONTRACT_READY,
+                    artifacts=(
+                        contract_artifact,
+                        plan_artifact,
+                        capability_artifact,
+                        expansion_artifact,
+                    ),
+                )
+                print(
+                    "ACTIVE_DEFINITION_EXPANDED:",
+                    f"contract_items={len(implementation_contract['items'])}",
+                    f"task_checks={len(active_task_check_keys())}",
+                )
+                return True
+
+            def continue_implementer(
+                *,
+                reason: str,
+                label: str,
+            ) -> tuple[dict, str]:
+                nonlocal implementation_report_index
+                run_state.begin_stage(StageId.IMPLEMENTER)
+                _, next_stamp, next_command = prepare_self_verify_runner(
+                    workspace=workspace,
+                    specs=active_repair_specs(),
+                    toolchain=toolchain,
+                )
+                implementation_report_index += 1
+                next_report = run_implementer_report(
+                    codex,
+                    thread_id=implementer_thread,
+                    prompt=build_implementation_continuation_prompt(
+                        implementation_contract=implementation_contract,
+                        verification_plan=verification_plan,
+                        self_verify_command=next_command,
+                        reason=reason,
+                    ),
+                    timeout=timeout,
+                    label=label,
+                    implementation_contract=implementation_contract,
+                    self_verify_command=next_command,
+                    workspace=workspace,
+                    stamp_path=next_stamp,
+                    plan=plan,
+                    control_plane=recorder.control_plane,
+                    run_state=run_state,
+                    check_registry_digest=check_registry.digest(),
+                )
+                next_artifact = (
+                    f"implementation_report_{implementation_report_index:02d}.json"
+                )
+                recorder.write_json(next_artifact, next_report)
+                observe_candidate(label.replace(" ", "_"))
+                return next_report, next_artifact
+
+            def reconcile_project_runtime() -> tuple[bool, str]:
+                nonlocal runtime_state
+                nonlocal project_runtime_index
+                if runtime_manager is None or runtime_state is None:
+                    return False, ""
+                reconciliation = runtime_manager.reconcile(runtime_state)
+                runtime_state = reconciliation.state
+                toolchain["project_python"] = runtime_state.project_python
+                if not reconciliation.changed:
+                    return False, ""
+
+                trigger = (
+                    InvalidationTrigger.DEPENDENCY_MANIFEST_CHANGED
+                    if "DEPENDENCY_MANIFEST_CHANGED" in reconciliation.reasons
+                    else InvalidationTrigger.RUNTIME_ENV_CHANGED
+                )
+                run_state.invalidate(
+                    trigger,
+                    detail=", ".join(reconciliation.reasons),
+                )
+                project_runtime_index += 1
+                runtime_artifact = f"project_runtime_{project_runtime_index:02d}.json"
+                recorder.write_authoritative_json(
+                    runtime_artifact, runtime_state.to_dict()
+                )
+                run_state.bump_revision(
+                    RevisionKind.RUNTIME_ENVIRONMENT,
+                    artifact=runtime_artifact,
+                )
+                return True, (
+                    "Project runtime was rebuilt from the authoritative dependency "
+                    "declarations because: "
+                    + ", ".join(reconciliation.reasons)
+                    + ". Previous self-verification is stale."
+                )
+
             def stabilize_implementer_report(report: dict, *, label: str) -> tuple[dict, str]:
-                """Ensure newly registered typed checks are included before COMPLETE."""
+                """Close discoveries, checks and runtime drift before accepting COMPLETE."""
+
                 nonlocal implementation_report_index
                 artifact = f"implementation_report_{implementation_report_index:02d}.json"
                 while report.get("status") == ImplementerStatus.COMPLETE.value:
-                    discoveries = report.get("discovered_obligations", [])
-                    if discoveries:
-                        recorder.write_private_json(
-                            f"discovered_obligations_{implementation_report_index:02d}.json",
-                            {
-                                "schema_version": "discovered-obligations.v1",
-                                "items": discoveries,
-                                "status": "REQUIRES_CONTRACT_EXPANSION",
-                            },
-                        )
-                        raise Phase4ContractError(
-                            "CONTRACT_EXPANSION_REQUIRED_PHASE4: discovered obligations "
-                            "must be compiled into the active Contract before COMPLETE"
-                        )
-                    if not register_report_checks(report):
-                        return report, artifact
-
-                    run_state.invalidate(
-                        InvalidationTrigger.CHECK_REGISTERED,
-                        detail="Implementer registered a new typed Controller check",
-                    )
-                    run_state.begin_stage(StageId.IMPLEMENTER)
-                    current_specs = active_repair_specs()
-                    _, next_stamp, next_command = prepare_self_verify_runner(
-                        workspace=workspace,
-                        specs=current_specs,
-                        toolchain=toolchain,
-                    )
-                    implementation_report_index += 1
-                    report = run_implementer_report(
-                        codex,
-                        thread_id=implementer_thread,
-                        prompt=build_implementation_continuation_prompt(
-                            implementation_contract=implementation_contract,
-                            self_verify_command=next_command,
+                    registry_changed = register_report_checks(report)
+                    discoveries = list(report.get("discovered_obligations", []))
+                    definition_changed = recompile_active_definition(
+                        discoveries=discoveries,
+                        registry_changed=registry_changed,
+                        detail=(
+                            "Implementer discovered material obligations and/or "
+                            "registered typed Controller checks"
                         ),
-                        timeout=timeout,
-                        label=f"{label} REGISTERED CHECKS",
-                        implementation_contract=implementation_contract,
-                        self_verify_command=next_command,
-                        workspace=workspace,
-                        stamp_path=next_stamp,
-                        plan=plan,
-                        control_plane=recorder.control_plane,
-                        run_state=run_state,
-                        check_registry_digest=check_registry.digest(),
                     )
-                    artifact = f"implementation_report_{implementation_report_index:02d}.json"
-                    recorder.write_json(artifact, report)
-                    observe_candidate("IMPLEMENTER_REGISTERED_CHECKS")
+                    if definition_changed:
+                        report, artifact = continue_implementer(
+                            reason=(
+                                "Controller expanded the active Implementation Contract "
+                                "and Verification Plan. Close every newly active item and "
+                                "run the current self-verification before COMPLETE."
+                            ),
+                            label=f"{label} CONTRACT EXPANSION",
+                        )
+                        continue
+
+                    runtime_changed, runtime_reason = reconcile_project_runtime()
+                    if runtime_changed:
+                        report, artifact = continue_implementer(
+                            reason=runtime_reason,
+                            label=f"{label} RUNTIME REBUILD",
+                        )
+                        continue
+
+                    current_local_snapshot = exposed_runtime_file_snapshot(
+                        session, control_plane=recorder.control_plane
+                    )
+                    if current_local_snapshot != local_runtime_files_baseline:
+                        restore_exposed_runtime_files(session)
+                        restored = exposed_runtime_file_snapshot(
+                            session, control_plane=recorder.control_plane
+                        )
+                        if restored != local_runtime_files_baseline:
+                            raise Phase5ContractError(
+                                "LOCAL_RUNTIME_FILE_RESTORE_FAILED"
+                            )
+                        run_state.invalidate(
+                            InvalidationTrigger.RUNTIME_ENV_CHANGED,
+                            detail=(
+                                "Runtime-only files from .worktreeinclude/copy_untracked "
+                                "were changed and restored by Controller"
+                            ),
+                        )
+                        report, artifact = continue_implementer(
+                            reason=(
+                                "Controller restored runtime-only local files to their "
+                                "pre-implementation state. They are not part of the "
+                                "candidate, so self-verification must run again."
+                            ),
+                            label=f"{label} LOCAL RUNTIME RESTORE",
+                        )
+                        continue
+
+                    return report, artifact
                 return report, artifact
             _, stamp_path, self_verify_command = prepare_self_verify_runner(
                 workspace=workspace,
@@ -2248,16 +2747,16 @@ def main(argv: list[str] | None = None) -> int:
                         StageId.RUNTIME_VERIFICATION,
                         outcome=WorkflowOutcome.BLOCKED,
                         result_code=StageResultCode.BLOCKED,
-                        reason_code="RUNTIME_EXECUTOR_NOT_IMPLEMENTED_PHASE3",
-                        artifacts=("verification_plan_01.json",),
+                        reason_code="RUNTIME_EXECUTOR_NOT_IMPLEMENTED",
+                        artifacts=(active_verification_artifact,),
                     )
-                    print("HARNESS_TASK_STOPPED: RUNTIME_EXECUTOR_NOT_IMPLEMENTED_PHASE3")
+                    print("HARNESS_TASK_STOPPED: RUNTIME_EXECUTOR_NOT_IMPLEMENTED")
                     return 2
                 run_state.skip_stage(
                     StageId.RUNTIME_VERIFICATION,
                     StageResultCode.RUNTIME_VERIFICATION_SKIPPED,
                     reason_code="NO_RUNTIME_PROOF_REQUIRED",
-                    artifacts=("verification_plan_01.json",),
+                    artifacts=(active_verification_artifact,),
                 )
 
                 if pipeline_profile == PipelineProfile.FAST:
@@ -2469,7 +2968,9 @@ def main(argv: list[str] | None = None) -> int:
                         artifact=contract_artifact,
                     )
                     verification_plan = compile_verification_plan(
-                        implementation_contract, project_checks=repair_specs
+                        implementation_contract,
+                        project_checks=repair_specs,
+                        task_checks=active_task_check_keys(),
                     )
                     validate_verification_plan(verification_plan)
                     verification_artifact = f"verification_plan_replan_{replan_cycles:02d}.json"
@@ -2480,8 +2981,14 @@ def main(argv: list[str] | None = None) -> int:
                         RevisionKind.VERIFICATION_PLAN,
                         artifact=verification_artifact,
                     )
+                    active_contract_artifact = contract_artifact
+                    active_verification_artifact = verification_artifact
                     missing = required_capability_gaps(
-                        verification_plan, available=resolved_capabilities
+                        verification_plan,
+                        available=available_capabilities(
+                            toolchain=toolchain,
+                            configured=declared_capabilities,
+                        ),
                     )
                     if not plan["owner_boundary_assessment"]["compatible"]:
                         run_state.route_stage(
@@ -2679,6 +3186,14 @@ def main(argv: list[str] | None = None) -> int:
         print(success_code.value)
         print(f"TOTAL_ELAPSED: {time.monotonic() - started:.2f}s")
         return 0
+    except HarnessControlledStop as exc:
+        print("HARNESS_TASK_STOPPED:", exc, file=sys.stderr)
+        if session is not None:
+            print("MANAGED_WORKTREE_ON_EXIT:", session.workspace, file=sys.stderr)
+        if recorder is not None:
+            print("RUN_DIR:", recorder.root, file=sys.stderr)
+        print(f"TOTAL_ELAPSED: {time.monotonic() - started:.2f}s", file=sys.stderr)
+        return 2
     except (RuntimeError, ArtifactContractError, OSError, ValueError) as exc:
         if run_state is not None:
             try:

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.0a8 — Phase 5: native Windows project-runtime path portability
+
+- Fixed the native Windows self-check failure in `test_build_creates_worktree_runtime_and_stable_state`: equivalent temporary/worktree paths are no longer compared with lexical string `startswith()` semantics.
+- Hardened `ProjectRuntimeManager` with canonical workspace/venv containment and an explicit guard that rejects a Python entry-point directory escaping the worktree venv.
+- Kept the external runtime contract unchanged: `project_python` remains the worktree-local `.venv` entry point, even when the underlying filesystem exposes the worktree through another canonical spelling.
+- Added a platform-independent lexical-alias regression that reproduces the same class of path mismatch without relying on Windows-only behavior.
+- Updated Windows and Phase 5 documentation. Serialized contracts remain `project-runtime.v1`, `workflow.v4`, and `candidate.v1`; this is a test portability/correctness release, not a protocol change.
+
+## 0.8.0a7 — Phase 5: transactional Contract expansion and reproducible project runtime
+
+- Upgraded writable reporting to `implementer.v3`; discovered consumers/risks must include a typed `required_proof` and are compiled by Controller into `CONSUMER-DISCOVERED-*` / `RISK-DISCOVERED-*` items.
+- Added atomic active Definition-of-Done expansion: Contract and Verification Plan revisions are rebuilt together, Step 2 owner/capability gates are repeated, and stale self-verification evidence is invalidated.
+- Connected typed check registration to Verification Plan revisions; a new check ID/path changes the authoritative proof plan even when candidate bytes do not change.
+- Added repository-owned `.worktreeinclude` support for ignored local runtime files, including `.env` without a duplicate sensitive opt-in; copied files remain outside candidate/patch identity and are restored if modified.
+- Hardened typed check registration so every path/ID resolves to an executable Controller-owned spec (`git.diff-check` is the current built-in ID); unknown IDs and unsupported test paths fail closed.
+- Hardened runtime-file handling against symlink/junction ancestors and replaced plain sensitive-file hashes with Controller-private path-bound HMAC fingerprints.
+- Added optional `project-runtime.v1`: configured bootstrap Python creates a worktree-local `.venv`, installs declared requirements, runs `pip check`, and becomes authoritative `PROJECT_PYTHON`.
+- Added runtime reconciliation before `COMPLETE`; dependency declaration changes or hidden package drift force a clean rebuild, runtime revision bump, and fresh self-verification.
+- Bumped canonical workflow to `workflow.v4`, added `docs/PHASE5_CONTRACT_RUNTIME.md`, and added unit/integration regressions for expansion, capability re-gating, runtime rebuild and `.worktreeinclude` behavior.
+- Kept remaining alpha boundaries explicit: Runtime scenario executors, two-phase Evaluator, clean-worktree semantic replan, universal OS-enforced check sandbox and final delivery critical section are not claimed complete.
+
 ## 0.8.0a6 — Phase 4: Implementer and deterministic Controller verification
 
 - Upgraded the writable protocol to `implementer.v2` with `COMPLETE`, `REPLAN_REQUIRED`, `BLOCKED`, and `NEEDS_USER_DECISION`; non-COMPLETE outcomes require concrete reason/evidence without a fake per-item blocked ledger.

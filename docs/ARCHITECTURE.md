@@ -1,13 +1,13 @@
-# Архитектура Slivin Harness 0.8.0a6 — Phase 4
+# Архитектура Slivin Harness 0.8.0a8 — Phase 5
 
-## Назначение Phase 4
+## Назначение Phase 5
 
-Machine phase id: `phase4-implementer-controller-verification`.
+Machine phase id: `phase5-contract-runtime-reproducibility`.
 
-Phase 1 ввела каноническую Step 0–7 state machine. Phase 2 вынесла authoritative Controller state из agent-writable worktree и централизовала execution policy. Phase 3 подключила User Task Contract, Planner v4, Implementation Contract v3 и typed Verification Plan. Phase 4 связывает этот фундамент с writable Implementer v2, Controller-private typed check registry, activity watchdog и независимыми deterministic Controller checks.
+Phase 1 ввела каноническую Step 0–7 state machine. Phase 2 вынесла authoritative Controller state из agent-writable worktree и централизовала execution policy. Phase 3 подключила User Task Contract, Planner v4, Implementation Contract v3 и typed Verification Plan. Phase 4 связала этот фундамент с writable Implementer, typed check registry, activity watchdog и независимыми deterministic Controller checks. Phase 5 замыкает open-world feedback: discoveries/checks транзакционно пересобирают active Contract и Verification Plan, а Python evidence привязывается к воспроизводимой worktree-local `.venv`.
 
 ```text
-workflow.v3
+workflow.v4
 run-state.v1
 candidate.v1
 controller-plane.v1
@@ -19,7 +19,7 @@ implementation-contract.v3
 verification-plan.v1
 ```
 
-## Реальный pipeline Phase 4
+## Реальный pipeline Phase 5
 
 ```text
 MANIFEST version = 2
@@ -38,7 +38,7 @@ owner-boundary gate
         ↓
 capability gate
         ↓
-Implementer v2
+Implementer v3
         ↓
 typed check registration + revision-bound SELF VERIFY
         ↓
@@ -222,7 +222,7 @@ Plan validator сверяет summaries с фактическими requirement 
 
 ## Capability gate
 
-Phase 4 предоставляет существующие local capabilities и подключает их к typed check registry:
+Phase 5 предоставляет существующие local capabilities и подключает их к typed check registry:
 
 ```text
 GIT
@@ -247,27 +247,62 @@ Agent scratch в `.harness_tmp` не является доказательств
 ## Версии
 
 ```text
-Harness                     0.8.0a6
+Harness                     0.8.0a8
 Manifest                    version = 2
-Workflow                    workflow.v3
+Workflow                    workflow.v4
 Run State                   run-state.v1
 Candidate                   candidate.v1
 Controller plane            controller-plane.v1
 Execution Broker            execution-broker.v1
 Task Contract               task-contract.v1
 Planner                     planner.v4
-Implementer                 implementer.v2
+Implementer                 implementer.v3
 Implementation Contract     implementation-contract.v3
 Verification Plan           verification-plan.v1
+Project runtime             project-runtime.v1
+Contract expansion          contract-expansion.v1
+Phase 5 controller          phase5-contract-runtime.v1
 Evaluator                   evaluator.v4
 ```
 
-## Implementer v2 и deterministic Controller verification
+## Implementer and deterministic Controller verification
 
-Authoritative check registry, revision bindings, self-verification receipts и Controller check records находятся в `RUN_DIR/controller_private`. Agent-writable `.harness_tmp` остаётся scratch и не является источником окончательной истины. Implementer может предложить typed test path или trusted check ID, но не произвольную authoritative shell-команду.
+Authoritative check registry, revision bindings, self-verification receipts and Controller check records remain in `RUN_DIR/controller_private`. Agent-writable `.harness_tmp` is scratch, not final evidence. Implementer may request a typed test path/check ID, but not an arbitrary authoritative shell command.
 
-Self-verification receipt относится одновременно к candidate, revision vector, runtime environment, attempt и check-registry digest. Controller независимо повторяет проверки, фиксирует candidate до/после suite и различает behavioral failure, timeout, infrastructure error и mutation candidate. Активная работа Implementer регулируется inactivity watchdog, а не коротким total wall-clock deadline.
+A self-verification receipt binds candidate, revision vector, runtime environment, attempt and check-registry digest. Controller independently repeats checks, freezes candidate before/after the suite and distinguishes behavioral failure, timeout, infrastructure error and candidate mutation. Active Implementer work is governed by inactivity rather than a short total wall-clock deadline.
 
-## Границы Phase 4 alpha
+## Transactional Contract expansion
 
-Phase 4 не объявляет полностью готовыми автоматическую перекомпиляцию active Contract/Verification Plan из discoveries, worktree-local `.venv` bootstrap/rebuild, universal OS-enforced Controller subprocess sandbox, runtime executors, двухфазный Evaluator, clean-worktree semantic replan или новую Final Gate delivery transaction. Execution Broker сохраняет фактический статус `ENFORCED` / `ADVISORY` / `UNAVAILABLE` вместо ложного заявления об изоляции.
+```text
+Implementer COMPLETE proposal
+        ↓
+discovered consumer/risk or registered typed check
+        ↓
+Controller validates the request
+        ↓
+CONTRACT_EXPANDED / CHECK_REGISTERED
+        ↓
+Step 2 and downstream evidence invalidated
+        ↓
+Implementation Contract revision + Verification Plan revision
+        ↓
+owner-boundary gate + capability gate
+        ↓
+same Implementer closes the new active Definition of Done
+```
+
+Existing obligations are immutable. Duplicate discoveries are idempotent. A material discovery is retained even above the soft 14-item review threshold. New non-local proof profiles are never accepted merely as prose: they become typed capabilities and can block Step 2 before continuation.
+
+## Worktree-local runtime
+
+Optional project configuration defines bootstrap Python, expected version, `.venv` location and dependency declarations. Controller builds the environment inside the managed worktree, installs requirements, runs `pip check`, records a package snapshot and overrides `PROJECT_PYTHON` with that exact executable.
+
+At every `COMPLETE` proposal Controller reconciles dependency hashes and installed packages. An undeclared `pip install` or changed requirements causes a clean rebuild, runtime revision bump and fresh self-verification. Harness Python is never a silent fallback for project checks.
+
+## Repository local files
+
+`.worktreeinclude` is the canonical repository policy for ignored runtime files required by new worktrees. Matching ignored files are copied without a second sensitive opt-in, excluded from candidate/patch identity and privately snapshotted. Any modification is restored from the unchanged source checkout before a new self-verification.
+
+## Границы Phase 5 alpha
+
+Phase 5 does not claim a universal OS-enforced Controller subprocess sandbox, `LIVE_LOCAL` / `TEST_EXTERNAL` / `PROD_OBSERVE` scenario executors, two-phase Blind Evaluator, clean-worktree semantic replan or final delivery critical section. Execution Broker preserves the actual `ENFORCED` / `ADVISORY` / `UNAVAILABLE` level instead of overstating isolation.

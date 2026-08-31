@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a6 — Phase 4
+# Модель качества Slivin Harness 0.8.0a8 — Phase 5
 
 ## Основная формула
 
@@ -7,45 +7,49 @@ explicit user intent
 → доказанная technical model
 → load-bearing Definition of Done
 → typed proof requirements
-→ implementation
-→ independent verification
+→ smallest complete implementation
+→ reproducible project runtime
+→ independent Controller verification
 ```
 
-Phase 3 реализовала первые четыре звена как structured artifacts. Phase 4 добавляет writable Implementer v2, revision-bound self-verification и независимые deterministic Controller checks.
+Phase 5 не добавляет reviewer. Она гарантирует, что уже найденные требования, проверки и runtime действительно становятся активным Definition of Done до `COMPLETE`.
 
-## Что теперь нельзя потерять между этапами
+## Что нельзя потерять
 
-### User acceptance
+### User acceptance и preservation
 
-Explicit acceptance копируется в `ACCEPTANCE-1` напрямую из `task-contract.v1`. Planner может добавить technical mapping, но не заменить product outcome.
+`task-contract.v1` остаётся высшим product contract. Explicit acceptance копируется в `ACCEPTANCE-1`, explicit preservation/forbidden — в `PRESERVE-1`. Planner может добавить техническую конкретизацию, но не заменить исходный outcome.
 
-### User preservation
+### Consumers, state и risks
 
-Explicit preservation, forbidden и owner boundaries попадают в `PRESERVE-1`. Они не становятся необязательными заметками Planner.
+Material consumer/risk получает отдельный Contract item с собственным typed proof. Stateful change использует один компактный `STATE-1`, объединяющий representation, authority, lifecycle и reachable boundaries.
 
-### Consumers и risks
+### Discoveries после Planner
 
-Каждый material consumer и risk получает отдельный Contract item с собственным required proof. Это защищает от ситуации:
+Implementation Contract — open-world minimum. Если Implementer находит нового consumer/risk, `implementer.v3` обязан вернуть structured discovery. Controller транзакционно:
 
 ```text
-Planner нашёл проблему
-→ Implementer забыл её при написании patch
+валидирует discovery
+→ расширяет Contract
+→ пересобирает Verification Plan
+→ повторяет owner/capability gates
+→ инвалидирует прежний self-verify
+→ возвращает тому же Implementer новую revision
 ```
 
-### Stateful semantics
+Новый typed check проходит тот же путь. Candidate может не измениться, но старое evidence всё равно устаревает, потому что Definition of Done изменился.
 
-Если Planner считает задачу stateful, один `STATE-1` объединяет representation, authority, lifecycle и reachable boundaries. Отдельные REP/AUTH/LIFE реестры не возвращаются.
+## Typed proof model
 
-## Typed proof вместо свободного текста
-
-`verification-plan.v1` отвечает на два вопроса:
+`verification-plan.v1` отвечает:
 
 ```text
-каким уровнем нужно доказывать requirement?
-какие capabilities для этого обязательны?
+какой observable claim доказывается?
+какой proof profile нужен?
+какие capabilities обязательны?
 ```
 
-Уровни:
+Профили:
 
 ```text
 LOCAL_DETERMINISTIC
@@ -54,88 +58,120 @@ TEST_EXTERNAL
 PROD_OBSERVE
 ```
 
-Requirement может иметь несколько профилей одновременно. Это важно: Browser flow и fresh external readback не являются взаимозаменяемыми доказательствами.
+Несколько профилей могут быть обязательны одновременно. Browser и fresh external readback не заменяют друг друга.
 
-## Fail-closed capability gate
+## Fail-closed gates
 
-Если required proof невозможно исполнить, Harness блокируется до Implementer:
+До продолжения writable работы Controller повторно проверяет:
+
+```text
+owner boundaries;
+required capabilities;
+Contract/Plan consistency.
+```
+
+Новый runtime requirement при отсутствующем executor приводит к:
 
 ```text
 REQUIRED_CAPABILITY_MISSING
 ```
 
-Это лучше, чем:
+а не к тихому снижению proof до unit-test.
+
+## Reproducible Python evidence
+
+При настроенном project runtime каждая managed worktree получает собственную `.venv` от configured bootstrap Python и dependency declarations.
+
+Controller записывает:
 
 ```text
-Implementer сделал candidate
-→ unit tests зелёные
-→ обязательный runtime proof тихо пропущен
+bootstrap/project Python versions;
+dependency declaration digest;
+pip check;
+pip freeze --all digest;
+runtime_id.
 ```
 
-## Что Phase 4 доказывает
+Перед каждым `COMPLETE` проверяется drift. Изменённый `requirements.txt` или скрытый `pip install` вызывает clean rebuild, новую runtime revision и повторный self-verify. Harness Python не используется как silent fallback для project tests.
 
-Phase 4 механически доказывает:
+## Runtime-only local files
+
+`.worktreeinclude` является repository-owned policy для ignored runtime files. Такие файлы:
 
 ```text
-raw request сохранён;
-explicit claims имеют verbatim source;
-Planner artifact соответствует planner.v4;
-BUG/FEATURE diagnosis структурирован;
-Task Contract не потерян при Contract compilation;
-Contract items имеют typed proof;
-Verification Plan согласован с Contract;
-capability summary не подменён;
-owner conflict и missing capability останавливают writable pipeline.
+копируются в worktree;
+не входят в candidate/patch;
+приватно fingerprinted;
+восстанавливаются Controller при изменении;
+требуют нового self-verify после восстановления.
 ```
 
-## Что Phase 4 ещё не доказывает
+Это исключает ложный PASS, полученный только изменением `.env`.
 
-Пока не реализованы:
+## Независимые Controller checks
+
+Self-verification остаётся development feedback. Controller отдельно запускает trusted checks, классифицирует:
 
 ```text
-полноценный runtime proof;
-restricted OS-level execution всех agent-written tests;
-open-world Contract expansion во время Implementer;
-двухфазная blind evaluation;
-clean-worktree semantic replan;
-новая result-delivery transaction.
+CHECK_PASS
+CHECK_FAIL
+CHECK_TIMEOUT
+CHECK_INFRA_ERROR
+CHECK_MUTATED_CANDIDATE
 ```
 
-Поэтому `0.8.0a6` — промежуточная alpha-фаза, а не завершённый Quality Core.
-
-## Compatibility layers
-
-```text
-implementer.v2
-evaluator.v4
-manifest version = 2
-```
-
-остаются для постепенного внедрения. Их наличие не означает, что утверждённые будущие Step 3–7 контракты уже полностью выполнены.
+и связывает evidence с теми же candidate, Contract, Verification Plan, runtime, attempt и check-registry digest.
 
 ## Anti-monster rules
 
-1. Поле существует только при downstream consequence.
+1. Отдельное поле существует только при downstream consequence.
 2. Task Contract не содержит repository reasoning.
 3. Planner context не превращается целиком в obligations.
-4. Contract item count имеет soft threshold, но correctness не обрезается.
-5. Runtime включается по required proof, а не по общей метке риска.
-6. Missing executor блокирует задачу честно.
+4. Contract size 14 — soft review threshold, а не correctness cutoff.
+5. Duplicate discoveries idempotent.
+6. Runtime включается по required proof, а не по общей метке риска.
+7. Нет нового agent layer для Contract expansion или runtime reconciliation.
+8. Нереализованный executor блокирует задачу честно.
 
-## Критерий Phase 4
+## Что Phase 5 доказывает
 
 ```text
-task-contract.v1 valid
-planner.v4 valid
-implementation-contract.v3 valid
-verification-plan.v1 valid
-owner/capability gate выполнен
-pipeline integration tests PASS
-docs-sync PASS
+Task Contract и Planner artifacts валидны;
+active Contract содержит user + Planner + discovered obligations;
+Verification Plan соответствует active Contract и typed checks;
+owner/capability gates повторены после expansion;
+self-verify receipt относится к активным revisions;
+project tests используют worktree-local runtime, если он настроен;
+hidden package drift не переживает clean rebuild;
+runtime-only files не становятся candidate, а сравниваются по private keyed HMAC;
+Controller checks независимо проходят на frozen candidate.
 ```
 
-## Phase 4 evidence boundaries
+## Что Phase 5 ещё не доказывает
 
-Machine phase id: `phase4-implementer-controller-verification`. Self-verification is development feedback, not final authority. A receipt is valid only for the same candidate, Task/Plan/Contract/Verification revisions, runtime environment, attempt, and check-registry digest. Controller checks are rerun independently and classify behavior failures separately from timeout, infrastructure failure, and candidate mutation. Changed tests must be covered by a project suite or typed task-check registration. Small fixed repair-cycle counts are not correctness gates; progress/no-progress is observed instead.
+Пока не реализованы полностью:
 
-Phase 4 alpha boundary: automatic Contract/Verification Plan recompilation from discoveries, worktree-local environment rebuild, and universal OS-enforced Controller subprocess isolation are not yet claimed as complete.
+```text
+universal OS-enforced execution agent-written tests;
+LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE scenarios;
+two-phase Blind Evaluator;
+clean-worktree semantic replan;
+final delivery critical section.
+```
+
+Поэтому `0.8.0a8` — alpha quality-core, а не завершённый production orchestrator.
+
+## Версии
+
+```text
+manifest version = 2
+task-contract.v1
+planner.v4
+implementer.v3
+implementation-contract.v3
+verification-plan.v1
+project-runtime.v1
+contract-expansion.v1
+evaluator.v4
+workflow.v4
+```

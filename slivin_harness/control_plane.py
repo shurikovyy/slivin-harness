@@ -197,6 +197,22 @@ class ControllerPlane:
     def _receipt_key(self) -> bytes:
         return self._secret_path.read_bytes()
 
+    def keyed_fingerprint(self, payload: bytes, *, context: str) -> str:
+        """Return a private domain-separated HMAC fingerprint.
+
+        Sensitive runtime inputs such as `.env` must be compared without
+        publishing a reusable plain SHA-256 digest that could support offline
+        guessing of low-entropy values.  The key never leaves the Controller
+        private plane and `context` prevents digest reuse across paths/types.
+        """
+
+        if not isinstance(payload, bytes):
+            raise TypeError("payload must be bytes")
+        if not isinstance(context, str) or not context:
+            raise ValueError("context must be a non-empty string")
+        message = context.encode("utf-8") + b"\0" + payload
+        return hmac.new(self._receipt_key(), message, hashlib.sha256).hexdigest()
+
     def issue_self_verify_receipt(
         self,
         *,

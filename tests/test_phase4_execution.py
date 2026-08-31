@@ -22,7 +22,7 @@ from slivin_harness.phase4 import (
 )
 
 
-class ImplementerProtocolV2Tests(unittest.TestCase):
+class ImplementerProtocolV3Tests(unittest.TestCase):
     def setUp(self) -> None:
         self.items = [
             {"id": "ACCEPTANCE-1", "kind": "acceptance", "allow_not_affected": False},
@@ -31,7 +31,7 @@ class ImplementerProtocolV2Tests(unittest.TestCase):
 
     def test_complete_requires_full_contract_and_receipt(self) -> None:
         report = {
-            "protocol_version": "implementer.v2",
+            "protocol_version": "implementer.v3",
             "status": "COMPLETE",
             "summary": "done",
             "contract_evidence": [
@@ -52,7 +52,7 @@ class ImplementerProtocolV2Tests(unittest.TestCase):
             ImplementerStatus.NEEDS_USER_DECISION.value,
         ):
             report = {
-                "protocol_version": "implementer.v2",
+                "protocol_version": "implementer.v3",
                 "status": status,
                 "summary": "cannot finish",
                 "reason": "concrete reason",
@@ -62,7 +62,7 @@ class ImplementerProtocolV2Tests(unittest.TestCase):
 
     def test_non_consumer_cannot_be_not_affected(self) -> None:
         report = {
-            "protocol_version": "implementer.v2",
+            "protocol_version": "implementer.v3",
             "status": "COMPLETE",
             "summary": "done",
             "contract_evidence": [
@@ -86,7 +86,11 @@ class CheckRegistryTests(unittest.TestCase):
             workspace.mkdir()
             (workspace / "tests").mkdir()
             (workspace / "tests" / "test_example.py").write_text("def test_x(): pass\n")
-            registry = CheckRegistry(private / "check_registry.json", workspace=workspace)
+            registry = CheckRegistry(
+                private / "check_registry.json",
+                workspace=workspace,
+                trusted_check_ids={"project:smoke"},
+            )
             registry.register_path("tests/test_example.py")
             registry.register_path("tests/test_example.py")
             registry.register_id("project:smoke")
@@ -107,6 +111,8 @@ class CheckRegistryTests(unittest.TestCase):
                 registry.register_path("../outside.py")
             with self.assertRaises(Phase4ContractError):
                 registry.register_id("rm -rf /;")
+            with self.assertRaisesRegex(Phase4ContractError, "Unknown trusted check id"):
+                registry.register_id("project:safe-but-unknown")
 
 
 class ReceiptTests(unittest.TestCase):

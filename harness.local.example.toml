@@ -19,12 +19,22 @@ result_mode = "keep_worktree"
 require_clean_source = true
 
 [projects.example.toolchain]
+# Compatibility fallback when [projects.example.runtime] is absent.
 project_python = "{project_root}/.venv/Scripts/python.exe"
 node = "C:/Users/<user>/Tools/node/node.exe"
 # jest = "{project_root}/node_modules/jest/bin/jest.js"
 
+[projects.example.runtime]
+# Optional authoritative per-worktree Python runtime.
+bootstrap_python = "C:/Users/<user>/AppData/Local/Programs/Python/Python312/python.exe"
+expected_python = "3.12"
+venv = ".venv"
+dependency_files = ["requirements.txt"]
+pip_install_args = ["--disable-pip-version-check"]
+
 [projects.example.workspace]
-# Local untracked runtime files are not copied unless listed here.
+# Prefer repository-owned .worktreeinclude for ignored runtime files such as .env.
+# copy_untracked remains a machine-local override.
 copy_untracked = []
 
 # Required only when copy_untracked intentionally includes .env, *.pem,

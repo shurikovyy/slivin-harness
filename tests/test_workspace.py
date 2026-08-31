@@ -96,6 +96,42 @@ class WorkspaceTests(unittest.TestCase):
         finally:
             remove_managed_workspace(session)
 
+    def test_worktreeinclude_copies_ignored_env_without_second_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            git(source, "init")
+            git(source, "config", "user.email", "test@example.com")
+            git(source, "config", "user.name", "Test")
+            (source / ".gitignore").write_text(".env\n", encoding="utf-8")
+            (source / ".worktreeinclude").write_text(".env\n", encoding="utf-8")
+            (source / ".env").write_text("SECRET=runtime-only\n", encoding="utf-8")
+            (source / "tracked.txt").write_text("base\n", encoding="utf-8")
+            git(source, "add", ".gitignore", ".worktreeinclude", "tracked.txt")
+            git(source, "commit", "-m", "base")
+            local = {
+                "workspace": {"root": str(root / "workspaces")},
+                "projects": {
+                    "demo": {
+                        "repo": str(source),
+                        "workspace": {"copy_untracked": [], "allow_sensitive_copy": False},
+                    }
+                },
+            }
+            session = prepare_workspace_session(
+                manifest={"project": "demo", "workspace_mode": "git_worktree"},
+                local_config=local,
+                harness_root=root,
+                task_id="WORKTREE_INCLUDE",
+            )
+            try:
+                self.assertEqual((session.workspace / ".env").read_text(encoding="utf-8"), "SECRET=runtime-only\n")
+                self.assertEqual(session.exposed_paths, (".env",))
+                self.assertEqual(git(session.workspace, "status", "--porcelain"), "")
+            finally:
+                remove_managed_workspace(session)
+
     def test_sensitive_copy_requires_opt_in_and_failed_setup_leaks_no_worktree(self) -> None:
         sandbox = Path(tempfile.mkdtemp(prefix="slivin-sensitive-"))
         source = make_source(sandbox)
@@ -142,6 +178,37 @@ class WorkspaceTests(unittest.TestCase):
                 local_config=local_config,
                 harness_root=sandbox,
                 task_id="DEMO_TASK",
+            )
+        self.assertEqual(git(source, "worktree", "list", "--porcelain"), before)
+
+    @unittest.skipIf(os.name == "nt", "Creating symlinks is not reliably permitted on Windows")
+    def test_nested_symlink_ancestor_cannot_expose_regular_file(self) -> None:
+        sandbox = Path(tempfile.mkdtemp(prefix="slivin-symlink-parent-"))
+        source = make_source(sandbox)
+        outside = sandbox / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("secret\n", encoding="utf-8")
+        os.symlink(outside, source / "local-link", target_is_directory=True)
+        before = git(source, "worktree", "list", "--porcelain")
+        local_config = {
+            "workspace": {"root": str(sandbox / "workspaces")},
+            "projects": {
+                "demo": {
+                    "repo": str(source),
+                    "require_clean_source": False,
+                    "workspace": {
+                        "copy_untracked": ["local-link/secret.txt"],
+                        "allow_sensitive_copy": True,
+                    },
+                }
+            },
+        }
+        with self.assertRaisesRegex(RuntimeError, "symlink/junction/reparse"):
+            prepare_workspace_session(
+                manifest={"project": "demo", "workspace_mode": "git_worktree"},
+                local_config=local_config,
+                harness_root=sandbox,
+                task_id="NESTED_SYMLINK",
             )
         self.assertEqual(git(source, "worktree", "list", "--porcelain"), before)
 

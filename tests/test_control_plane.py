@@ -78,6 +78,18 @@ class ControlPlaneTests(unittest.TestCase):
         path.write_text(json.dumps(data), encoding="utf-8")
         self.assertFalse(plane.verify_self_verify_receipt(binding=binding))
 
+    def test_sensitive_fingerprint_is_keyed_and_context_bound(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="slivin-private-hmac-"))
+        plane = ControllerPlane(root)
+        first = plane.keyed_fingerprint(b"TOKEN=secret\n", context="runtime-file:.env")
+        repeat = plane.keyed_fingerprint(b"TOKEN=secret\n", context="runtime-file:.env")
+        other_path = plane.keyed_fingerprint(
+            b"TOKEN=secret\n", context="runtime-file:.env.local"
+        )
+        self.assertEqual(first, repeat)
+        self.assertNotEqual(first, other_path)
+        self.assertNotEqual(first, __import__("hashlib").sha256(b"TOKEN=secret\n").hexdigest())
+
     def test_scratch_class_is_non_authoritative(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="slivin-scratch-"))
         plane = ControllerPlane(root)

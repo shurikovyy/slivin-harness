@@ -4,8 +4,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Iterable, TypeVar
 
-WORKFLOW_VERSION = "workflow.v3"
-WORKFLOW_PHASE = "phase4-implementer-controller-verification"
+WORKFLOW_VERSION = "workflow.v4"
+WORKFLOW_PHASE = "phase5-contract-runtime-reproducibility"
 
 
 class _TextEnum(str, Enum):
@@ -323,16 +323,16 @@ INVALIDATION_RULES: dict[InvalidationTrigger, InvalidationRule] = {
     ),
     InvalidationTrigger.CONTRACT_EXPANDED: InvalidationRule(
         InvalidationTrigger.CONTRACT_EXPANDED,
-        StageId.IMPLEMENTER,
-        StageId.IMPLEMENTER,
+        StageId.IMPLEMENTATION_CONTRACT,
+        StageId.IMPLEMENTATION_CONTRACT,
         False,
         False,
         "Новый consumer/risk меняет Definition of Done и обнуляет downstream evidence.",
     ),
     InvalidationTrigger.CHECK_REGISTERED: InvalidationRule(
         InvalidationTrigger.CHECK_REGISTERED,
-        StageId.IMPLEMENTER,
-        StageId.IMPLEMENTER,
+        StageId.IMPLEMENTATION_CONTRACT,
+        StageId.IMPLEMENTATION_CONTRACT,
         False,
         False,
         "Новая authoritative проверка должна войти в self-verify и все последующие gates.",
@@ -595,7 +595,7 @@ def render_workflow_markdown(*, harness_version: str) -> str:
 | ---: | --- | --- | --- | :---: | --- | --- |
 {chr(10).join(rows)}
 
-`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на новый Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 4 Runtime честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED` только для local-only плана; обязательный runtime proof блокируется capability gate до Implementer.
+`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на новый Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 5 Runtime честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED` только для local-only плана; обязательный runtime proof блокируется capability gate до Implementer.
 
 ## Разрешённые петли
 
@@ -640,7 +640,7 @@ attempt_id
 | --- | --- | --- | :---: | --- |
 {chr(10).join(invalidation_rows)}
 
-## Что именно реализует Phase 4
+## Что именно реализует Phase 5
 
 ```text
 machine-readable workflow и versioned Run State
@@ -649,7 +649,7 @@ machine-readable workflow и versioned Run State
 + PLANNER planner.v4
 + IMPLEMENTATION CONTRACT implementation-contract.v3
 + typed VERIFICATION PLAN verification-plan.v1
-+ IMPLEMENTER implementer.v2
++ IMPLEMENTER implementer.v3
 + Controller-private typed check registry
 + revision-bound self-verification receipts
 + inactivity watchdog с active-tool awareness
@@ -657,8 +657,11 @@ machine-readable workflow и versioned Run State
 + candidate freeze до/после deterministic suite
 + changed-test coverage guard
 + progress/no-progress repair guard
-+ generated WORKFLOW.md / workflow.v3.json
++ transactional Contract / Verification Plan expansion
++ canonical .worktreeinclude exposure policy
++ worktree-local project-runtime bootstrap and drift reconciliation
++ generated WORKFLOW.md / workflow.v4.json
 ```
 
-Phase 4 **не заявляет полностью готовыми** автоматическую перекомпиляцию active Contract/Verification Plan из discoveries, worktree-local `.venv` bootstrap/rebuild, universal OS-enforced Controller subprocess sandbox, Runtime executor, двухфазный Evaluator, clean-worktree semantic replan или финальную delivery transaction. Execution Broker сохраняет фактический статус `ENFORCED` / `ADVISORY` / `UNAVAILABLE` вместо ложного заявления об изоляции.
+Phase 5 **не заявляет полностью готовыми** universal OS-enforced Controller subprocess sandbox, Runtime executor, двухфазный Evaluator, clean-worktree semantic replan или финальную delivery transaction. Execution Broker сохраняет фактический статус `ENFORCED` / `ADVISORY` / `UNAVAILABLE` вместо ложного заявления об изоляции.
 """
