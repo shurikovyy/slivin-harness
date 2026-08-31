@@ -1,42 +1,51 @@
-# Практическая работа с Slivin Harness 0.8.0a8
+# Практическая работа с Slivin Harness 0.8.0a9
 
-## Установка
+## Установка и self-check
 
 ```bash
-cd ~/Tools/slivin-harness-080a7-phase5
+cd ~/Tools/slivin-harness-080a9-phase6
 ./py -c "import slivin_harness; print(slivin_harness.__version__)"
 ./py tools/self_check.py
 ```
 
-Ожидаемая версия:
+Ожидаемый финал:
 
 ```text
-0.8.0a8
+0.8.0a9
+DOCS_SYNC_PASS harness=0.8.0a9 ...
+HARNESS_SELF_CHECK_PASS
 ```
 
 ## FULL workflow
 
 ```text
-1. Manifest/project preflight
-2. .worktreeinclude + managed worktree
-3. optional worktree-local project runtime bootstrap
-4. User Task Contract
-5. fresh Planner v4
-6. Implementation Contract v3
-7. Verification Plan v1
-8. owner/capability gates
-9. Implementer v3
-10. discovery/check transaction when needed
-11. runtime reconciliation + SELF VERIFY
-12. independent Controller deterministic checks
-13. Runtime step: SKIPPED for local-only proof or BLOCKED until executor exists
-14. Evaluator v4 compatibility stage
-15. Final Gate compatibility stage
+0. Intake / Preflight
+   → managed worktree, .worktreeinclude, optional worktree-local .venv
+   → User Task Contract
+
+1. fresh Planner v4
+2. Implementation Contract v3 + Verification Plan v1
+3. Implementer v3 + Contract/check expansion + SELF VERIFY
+4. independent Controller deterministic checks
+5. Runtime Verification when the active proof requires it
+6A. fresh blind evaluator discovery
+6B. Contract/evidence audit in the same fresh evaluator thread
+7. Final Gate / held-out compatibility layer
 ```
 
-## Project runtime configuration
+Runtime is not a ritual step. A local-only Verification Plan records:
 
-Для Python-проекта добавьте один project-level profile:
+```text
+RUNTIME_VERIFICATION_SKIPPED
+reason = NO_RUNTIME_PROOF_REQUIRED
+```
+
+A runtime proof is executed only when a Contract item requires `LIVE_LOCAL`,
+`TEST_EXTERNAL` or `PROD_OBSERVE`.
+
+## Project Python runtime
+
+Configure one project-level profile:
 
 ```toml
 [projects.sa_icover.runtime]
@@ -47,132 +56,205 @@ dependency_files = ["requirements.txt"]
 pip_install_args = ["--disable-pip-version-check"]
 ```
 
-Harness создаёт `.venv` внутри каждой managed worktree и использует абсолютный:
+Harness creates the authoritative project Python inside each worktree:
 
 ```text
 <worktree>/.venv/Scripts/python.exe
 ```
 
-`source .venv/Scripts/activate` Controller не требуется.
-
-Если runtime table отсутствует, сохраняется compatibility resolver существующего `project_python`; автоматический rebuild тогда не заявляется.
+Controller does not depend on shell activation and does not silently fall back to the
+Harness Python. Dependency-manifest changes or hidden package drift trigger a clean rebuild
+before a new self-verification receipt can be accepted.
 
 ## `.worktreeinclude`
 
-В корне project repository:
+Repository-owned ignored runtime files can be listed in `.worktreeinclude`:
 
 ```gitignore
 .env
 .env.local
 ```
 
-Только matching ignored files копируются автоматически. Они не входят в patch. `.env`, явно включённый repository owner, не требует второго `allow_sensitive_copy=true`.
+Only matching ignored regular files are copied. Symlink/junction/reparse traversal is
+rejected. These files do not enter the candidate or patch. If a role changes one of them,
+Controller restores the original value and invalidates the related evidence.
 
-`copy_untracked` остаётся дополнительным local override. Sensitive path вне `.worktreeinclude` всё ещё требует explicit opt-in.
+## Runtime Verification configuration
 
-## Как читать artifacts
+The project owner configures typed scenarios in `harness.local.toml`. Scenario commands are
+Controller-owned wrappers, not free-form commands supplied by an agent.
 
-Authoritative artifacts находятся в:
+### LIVE_LOCAL example
+
+```toml
+[projects.sa_icover.runtime_verification]
+enabled = true
+
+[[projects.sa_icover.runtime_verification.scenarios]]
+id = "local-ui-flow"
+profile = "LIVE_LOCAL"
+capabilities = ["LOCAL_APP", "BROWSER_DOM", "BROWSER_NETWORK"]
+startup_command = ["{python}", "manage.py", "runserver", "127.0.0.1:{runtime_port}", "--noreload"]
+health_command = ["{python}", "tools/runtime_health.py", "{runtime_port}"]
+command = ["{python}", "tools/runtime_browser_scenario.py"]
+timeout_seconds = 300
+startup_timeout_seconds = 60
+cleanup_timeout_seconds = 60
+```
+
+### TEST_EXTERNAL example
+
+```toml
+[[projects.sa_icover.runtime_verification.scenarios]]
+id = "test-onec-write-readback"
+profile = "TEST_EXTERNAL"
+capabilities = ["TEST_EXTERNAL_WRITE", "TEST_EXTERNAL_FRESH_READ"]
+command = ["{python}", "tools/runtime_test_onec.py"]
+cleanup_command = ["{python}", "tools/runtime_test_onec_cleanup.py"]
+timeout_seconds = 300
+cleanup_timeout_seconds = 120
+preserve_env = ["ONEC_TEST_TOKEN"]
+```
+
+A non-disposable `TEST_EXTERNAL` scenario must define cleanup. The wrapper must perform:
+
+```text
+known initial state
+→ write/action
+→ fresh authoritative readback
+→ assertions
+→ cleanup + cleanup confirmation
+```
+
+### PROD_OBSERVE example
+
+```toml
+[[projects.sa_icover.runtime_verification.scenarios]]
+id = "prod-read-only-facts"
+profile = "PROD_OBSERVE"
+capabilities = ["PROD_READ_ONLY"]
+command = ["{python}", "tools/runtime_prod_observe.py"]
+read_only_enforced = true
+preserve_env = ["PROD_READ_ONLY_TOKEN"]
+```
+
+`read_only_enforced = true` is an owner assertion about a technical boundary such as a
+read-only DB role or GET-only wrapper. It does not make an arbitrary production credential
+safe. Production write verification is not part of the base Harness.
+
+## Runtime wrapper protocol
+
+Controller passes `runtime-request.v1`. The wrapper writes `runtime-result.v1` into the
+Controller-specified result path. It reports each assigned requirement as `PASS` or `FAIL`
+with concrete evidence. A valid semantic result must still exit with code `0`; non-zero,
+timeout or a missing/invalid result are classified as infrastructure failure, not product
+evidence.
+
+## Two-phase Evaluator
+
+The fresh evaluator works in two turns.
+
+### Phase A — blind discovery
+
+It sees:
+
+```text
+raw request
+User Task Contract
+sanitized preflight
+current repository/candidate
+changed paths as navigation
+```
+
+It does not see Planner reasoning, Implementation Contract, Implementer report, deterministic
+results, runtime evidence, previous findings or held-out assertions. Controller persists the
+returned `blind-audit.v1` before any additional evidence is revealed.
+
+### Phase B — Contract audit
+
+The same thread then receives only Controller-normalized artifacts:
+
+```text
+Implementation Contract
+Verification Plan
+Contract Closure Record
+deterministic evidence
+runtime PASS/SKIPPED evidence
+```
+
+Every blind finding must be `RETAINED` or `DISMISSED_WITH_EVIDENCE`. Findings use only
+`HIGH`/`MEDIUM` severity and the compact categories `DEFECT`, `CONSUMER`, `RISK`, `EVIDENCE`
+and `DOCS`.
+
+## Authoritative artifacts
+
+Controller-owned evidence is stored in:
 
 ```text
 RUN_DIR/controller_private/
 ```
 
-Типичный порядок:
+Typical Phase 6 artifacts:
 
 ```text
-task_contract_01.json
-plan_01.json
-implementation_contract_01.json
-verification_plan_01.json
-capability_gate_01.json
-project_runtime_01.json          если runtime configured
+task_contract_*.json
+plan_*.json
+implementation_contract_*.json
+verification_plan_*.json
+contract_closure_*.json
+runtime_scenarios.json
+runtime_verification_*.json
+blind_audit_*.json
+evaluation_*.json
 check_registry.json
 self_verify_receipt_current.json
 ```
 
-После discovery/check registration могут появиться:
+Public artifacts are sanitized mirrors. Agent scratch under `.harness_tmp` is never
+authoritative.
+
+## Repair and replan
 
 ```text
-implementation_contract_02.json
-verification_plan_02.json
-capability_gate_02.json
-contract_expansion_02.json
+ordinary candidate defect
+→ same Implementer
+→ self verify
+→ full deterministic checks
+→ full runtime step
+→ fresh two-phase Evaluator
 ```
-
-Их presence означает не duplicate documentation, а новую active revision Definition of Done.
-
-## Как читать discovery
-
-`implementer.v3` передаёт:
-
-```json
-{
-  "kind": "consumer",
-  "name": "Distribution",
-  "reason": "Uses the changed shared authority",
-  "required_behavior": "Stage guard remains fail-closed",
-  "required_proof": {
-    "claim": "Stage guard remains fail-closed",
-    "level": "LOCAL_DETERMINISTIC",
-    "capabilities": []
-  },
-  "evidence": ["reachable caller in static/js/distribution/index.js"]
-}
-```
-
-Controller, а не Implementer, создаёт `CONSUMER-DISCOVERED-N`.
-
-## Что происходит при runtime drift
 
 ```text
-Implementer installed an undeclared package
-или changed requirements.txt
-        ↓
-Controller detects digest/package drift
-        ↓
-destroy and rebuild worktree .venv
-        ↓
-pip install declared requirements
-        ↓
-pip check
-        ↓
-new runtime revision
-        ↓
-old self-verify stale
-        ↓
-same Implementer repeats verification
+new CONSUMER/RISK finding
+→ Controller expands Contract and Verification Plan
+→ repeats boundary/capability gates
+→ same Implementer closes the new revision
 ```
-
-## Capability gate
-
-Если active proof требует Browser/test external/prod observe, а executor ещё не реализован:
 
 ```text
-HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING ...
+wrong technical model
+→ REPLAN_REQUIRED
 ```
 
-Это корректный fail-closed result. Не снижайте proof вручную до local-only.
+Clean-worktree semantic replan remains a later hardening item; do not interpret the current
+compatibility replan path as complete anchoring isolation.
 
-## FAST compatibility profile
-
-Manifest `risk = "low"` пока сохраняет FAST compatibility pipeline. Task Contract всё равно создаётся; Planner/Evaluator могут быть skipped. Это временная совместимость manifest version 2, а не рекомендуемый production quality mode.
-
-## Workflow docs
+## Workflow documentation
 
 ```bash
 ./py tools/render_workflow_docs.py
 ./py tools/check_docs_sync.py
 ```
 
-Не редактируйте `WORKFLOW.md` и `workflow.v4.json` вручную.
+Do not edit `WORKFLOW.md` or `workflow.v5.json` manually.
 
-## Ограничения Phase 5
+## Honest Phase 6 boundaries
 
 ```text
-нет universal OS-enforced Controller sandbox;
-нет LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE executor;
-нет two-phase Evaluator;
-semantic replan ещё не получает clean fresh worktree;
-final delivery transaction ещё compatibility implementation.
+no universal browser/PostgreSQL/1C/Airflow wrappers are shipped;
+no universal OS-enforced Controller subprocess sandbox on every platform;
+no typed runtime-tool interface directly exposed to Evaluator Phase A;
+no clean-worktree semantic replan yet;
+Final Gate delivery transaction remains compatibility implementation;
+owner wrappers must avoid emitting secrets in logs/results.
 ```

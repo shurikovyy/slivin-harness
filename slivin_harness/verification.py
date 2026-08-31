@@ -496,6 +496,7 @@ def available_capabilities(
     *,
     toolchain: Mapping[str, str],
     configured: Iterable[str] = (),
+    runtime: Iterable[str] = (),
 ) -> set[str]:
     result = {Capability.DOCS_SYNC.value}
     if shutil.which("git"):
@@ -518,11 +519,16 @@ def available_capabilities(
         value = str(raw)
         if value not in allowed:
             raise RuntimeError(f"Unknown configured capability: {value}")
-        # Phase 5 records future runtime capability declarations but does not
-        # claim an executor that does not exist yet. Required runtime proof
-        # therefore remains blocked before Implementer.
+        # A bare capability declaration is not enough for runtime authority.
+        # Only local deterministic capabilities are accepted from this legacy
+        # list; runtime capabilities must come from validated Phase 6 scenarios.
         if value in phase3_implemented:
             result.add(value)
+    for raw in runtime:
+        value = str(raw)
+        if value not in allowed:
+            raise RuntimeError(f"Unknown runtime executor capability: {value}")
+        result.add(value)
     return result
 
 

@@ -1,7 +1,7 @@
 {
-  "schema_version": "workflow.v4",
-  "harness_version": "0.8.0a8",
-  "phase": "phase5-contract-runtime-reproducibility",
+  "schema_version": "workflow.v5",
+  "harness_version": "0.8.0a9",
+  "phase": "phase6-runtime-two-phase-evaluator",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",
     "execution_broker": "execution-broker.v1"
@@ -9,8 +9,20 @@
   "contract_versions": {
     "task_contract": "task-contract.v1",
     "planner": "planner.v4",
+    "implementer": "implementer.v3",
     "implementation_contract": "implementation-contract.v3",
-    "verification_plan": "verification-plan.v1"
+    "verification_plan": "verification-plan.v1",
+    "evaluator": "evaluator.v5",
+    "blind_audit": "blind-audit.v1",
+    "contract_closure": "contract-closure.v1",
+    "runtime_scenario": "runtime-scenario.v1",
+    "runtime_evidence": "runtime-evidence.v1"
+  },
+  "phase_layers": {
+    "phase5": "phase5-contract-runtime.v1",
+    "contract_expansion": "contract-expansion.v1",
+    "project_runtime": "project-runtime.v1",
+    "phase6": "phase6-runtime-evaluator.v1"
   },
   "stages": [
     {
@@ -89,7 +101,7 @@
         "RUNTIME_VERIFICATION_SKIPPED"
       ],
       "optional": true,
-      "maturity": "PLANNED"
+      "maturity": "IMPLEMENTED"
     },
     {
       "number": 6,
@@ -104,7 +116,7 @@
         "EVALUATION_SKIPPED_FAST"
       ],
       "optional": false,
-      "maturity": "COMPATIBILITY_IMPLEMENTED"
+      "maturity": "IMPLEMENTED"
     },
     {
       "number": 7,
@@ -188,6 +200,7 @@
     "CHECK_REPAIR_REQUIRED",
     "RUNTIME_VERIFICATION_PASS",
     "RUNTIME_VERIFICATION_SKIPPED",
+    "RUNTIME_REPAIR_REQUIRED",
     "EVALUATION_PASS",
     "EVALUATION_SKIPPED_FAST",
     "EVALUATOR_FINDINGS",
@@ -240,6 +253,7 @@
       "RUNTIME_START_FAIL",
       "RUNTIME_TIMEOUT",
       "RUNTIME_INFRA_ERROR",
+      "RUNTIME_INVALID_RESULT",
       "RUNTIME_READBACK_FAIL",
       "RUNTIME_CLEANUP_FAIL",
       "RUNTIME_MUTATED_CANDIDATE"

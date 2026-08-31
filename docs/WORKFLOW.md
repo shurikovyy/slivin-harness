@@ -2,9 +2,9 @@
 
 > Этот файл генерируется из `slivin_harness/workflow.py`. Не редактируйте таблицы вручную; запустите `./py tools/render_workflow_docs.py`.
 
-- Harness: **0.8.0a8**
-- Workflow schema: **workflow.v4**
-- Реализуемая фаза: **phase5-contract-runtime-reproducibility**
+- Harness: **0.8.0a9**
+- Workflow schema: **workflow.v5**
+- Реализуемая фаза: **phase6-runtime-two-phase-evaluator**
 
 ## Понятная схема
 
@@ -36,11 +36,11 @@
 | 2 | `implementation_contract` | Implementation Contract | Controller превращает load-bearing выводы в обязательный минимум результата. | нет | IMPLEMENTATION_CONTRACT_READY | IMPLEMENTED |
 | 3 | `implementer` | Implementer | Создаёт candidate, tests/docs и собственное evidence. | нет | IMPLEMENTATION_COMPLETE | COMPATIBILITY_IMPLEMENTED |
 | 4 | `deterministic_checks` | Controller deterministic checks | Независимо запускает локальные машинные проверки candidate. | нет | DETERMINISTIC_VERIFICATION_PASS | COMPATIBILITY_IMPLEMENTED |
-| 5 | `runtime_verification` | Runtime / external verification | Условно проверяет observable runtime outcome, если local checks недостаточны. | да | RUNTIME_VERIFICATION_PASS / RUNTIME_VERIFICATION_SKIPPED | PLANNED |
-| 6 | `evaluator` | Blind Evaluator | Независимо пытается опровергнуть полноту и корректность candidate. | нет | EVALUATION_PASS / EVALUATION_SKIPPED_FAST | COMPATIBILITY_IMPLEMENTED |
+| 5 | `runtime_verification` | Runtime / external verification | Условно проверяет observable runtime outcome, если local checks недостаточны. | да | RUNTIME_VERIFICATION_PASS / RUNTIME_VERIFICATION_SKIPPED | IMPLEMENTED |
+| 6 | `evaluator` | Blind Evaluator | Независимо пытается опровергнуть полноту и корректность candidate. | нет | EVALUATION_PASS / EVALUATION_SKIPPED_FAST | IMPLEMENTED |
 | 7 | `final_gate` | Final Gate / result handoff | Сверяет identity доказательств и безопасно выдаёт принятый result. | нет | HARNESS_TASK_PASS / HARNESS_BENCHMARK_PASS | COMPATIBILITY_IMPLEMENTED |
 
-`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на новый Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 5 Runtime честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED` только для local-only плана; обязательный runtime proof блокируется capability gate до Implementer.
+`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 6 Runtime исполняет только Controller-configured typed scenarios, а local-only Verification Plan получает явный `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED`. Blind Evaluator работает в две фазы: независимый audit фиксируется до раскрытия Contract/evidence.
 
 ## Разрешённые петли
 
@@ -95,7 +95,7 @@ attempt_id
 | `HIDDEN_GRADER_CHANGED` | `final_gate` | `final_gate` | нет | Изменение hidden grader требует новой calibration перед benchmark final gate. |
 | `CANDIDATE_CHANGED_AFTER_EVALUATION` | `implementer` | `implementer` | нет | Candidate mutation после evaluation инвалидирует implementation evidence и все gates. |
 
-## Что именно реализует Phase 5
+## Что именно реализует Phase 6
 
 ```text
 machine-readable workflow и versioned Run State
@@ -105,17 +105,17 @@ machine-readable workflow и versioned Run State
 + IMPLEMENTATION CONTRACT implementation-contract.v3
 + typed VERIFICATION PLAN verification-plan.v1
 + IMPLEMENTER implementer.v3
-+ Controller-private typed check registry
-+ revision-bound self-verification receipts
-+ inactivity watchdog с active-tool awareness
-+ independent Controller check classification
-+ candidate freeze до/после deterministic suite
-+ changed-test coverage guard
-+ progress/no-progress repair guard
 + transactional Contract / Verification Plan expansion
 + canonical .worktreeinclude exposure policy
 + worktree-local project-runtime bootstrap and drift reconciliation
-+ generated WORKFLOW.md / workflow.v4.json
++ Controller-private Contract Closure Record
++ LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE runtime scenario executor
++ fresh readback / cleanup / read-only result contracts
++ candidate, source and runtime-only-file immutability guards
++ two-phase BLIND EVALUATOR evaluator.v5
++ immutable blind-audit.v1 before Contract/check framing
++ Controller evidence audit without Planner/Implementer prose
++ generated WORKFLOW.md / workflow.v5.json
 ```
 
-Phase 5 **не заявляет полностью готовыми** universal OS-enforced Controller subprocess sandbox, Runtime executor, двухфазный Evaluator, clean-worktree semantic replan или финальную delivery transaction. Execution Broker сохраняет фактический статус `ENFORCED` / `ADVISORY` / `UNAVAILABLE` вместо ложного заявления об изоляции.
+Phase 6 **не заявляет полностью готовыми** universal OS-enforced Controller subprocess sandbox, встроенную browser automation, универсальные typed wrappers для 1С/БД/Airflow, clean-worktree semantic replan или финальную delivery transaction. Runtime commands являются owner-configured Controller capabilities; `PROD_OBSERVE` требует явно заявленной технической read-only границы, но Harness не выдаёт advisory isolation за OS-enforced sandbox.

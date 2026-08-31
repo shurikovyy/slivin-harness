@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a8 — Phase 5
+# Slivin Harness 0.8.0a9 — Phase 6
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Версия **0.8.0a8** реализует Phase 5 поверх принятого фундамента Phase 1–4:
+Версия **0.8.0a9** реализует Phase 6 поверх принятого фундамента Phase 1–5:
 
 ```text
 RAW USER REQUEST
@@ -26,9 +26,13 @@ worktree-local project runtime reconciliation
 SELF VERIFY + Controller-private typed check registry
         ↓
 CONTROLLER DETERMINISTIC CHECKS
+        ↓
+RUNTIME / EXTERNAL VERIFICATION (условно)
+        ↓
+TWO-PHASE BLIND EVALUATOR evaluator.v5
 ```
 
-Machine-readable workflow: **workflow.v4**. Реализуемая фаза: **phase5-contract-runtime-reproducibility**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller plane: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Evaluator пока остаётся **evaluator.v4**.
+Machine-readable workflow: **workflow.v5**. Реализуемая фаза: **phase6-runtime-two-phase-evaluator**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller plane: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Runtime evidence: **runtime-evidence.v1**. Blind audit: **blind-audit.v1**.
 
 ## Фундамент Phase 3
 
@@ -160,12 +164,28 @@ Ignored runtime-файлы, явно перечисленные repository owner
 
 Подробности: [Phase 5 contract/runtime](docs/PHASE5_CONTRACT_RUNTIME.md).
 
+## Что добавляет Phase 6
+
+### Controller-owned Runtime Verification
+
+Typed Verification Plan теперь исполняется для `LIVE_LOCAL`, `TEST_EXTERNAL` и `PROD_OBSERVE`, если owner настроил покрывающий scenario. Controller связывает scenario с конкретными Contract items, фиксирует candidate/source до и после, требует structured result, fresh readback для test-external write и cleanup/disposable boundary. Local-only proof получает явный `RUNTIME_VERIFICATION_SKIPPED`, а не молчаливое отсутствие evidence.
+
+### Contract Closure Record
+
+Перед независимой проверкой Controller создаёт `contract-closure.v1`: каждый active item связан с candidate, Contract/Verification fingerprints и принятым `VERIFIED`/допустимым `NOT_AFFECTED` evidence. Evaluator не получает свободное объяснение Implementer.
+
+### Двухфазный Blind Evaluator v5
+
+Один fresh read-only evaluator сначала выполняет blind discovery без Planner, Implementation Contract, Implementer Report, зелёных checks и runtime evidence. `blind-audit.v1` сохраняется Controller до раскрытия framing. Затем Phase B получает только Controller-normalized Contract, Closure Record, deterministic и runtime evidence; каждый blind finding обязан быть сохранён или снят с конкретным evidence.
+
+Подробности: [Phase 6 runtime/evaluator](docs/PHASE6_RUNTIME_EVALUATOR.md).
+
 ## Каноническая схема
 
 Полный Step 0–7 workflow генерируется из `slivin_harness/workflow.py`:
 
 - [Понятная схема workflow](docs/WORKFLOW.md)
-- [Machine-readable workflow.v4](docs/workflow.v4.json)
+- [Machine-readable workflow.v5](docs/workflow.v5.json)
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Модель качества](docs/QUALITY_MODEL.md)
 - [Практическое руководство](docs/PRACTICAL_GUIDE.md)
@@ -180,7 +200,7 @@ Ignored runtime-файлы, явно перечисленные repository owner
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a8 ...
+DOCS_SYNC_PASS harness=0.8.0a9 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -192,19 +212,19 @@ HARNESS_SELF_CHECK_PASS
 
 Manifest пока остаётся `version = 2` для совместимости.
 
-## Границы Phase 5 alpha
+## Границы Phase 6 alpha
 
-`0.8.0a8` намеренно **не заявляет готовыми**:
+`0.8.0a9` намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для Controller subprocess;
-LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE executors;
-двухфазный Blind Evaluator;
+готовые универсальные browser/1С/PostgreSQL/Airflow wrappers;
+typed independent runtime tools непосредственно для blind Phase A;
 clean-worktree semantic replan;
 финальную delivery transaction.
 ```
 
-Execution Broker честно фиксирует `ENFORCED`, `ADVISORY` или `UNAVAILABLE`. Advisory subprocess не выдаётся за полноценную OS-изоляцию.
+Runtime scenarios — Controller-owned project configuration, а не произвольные команды агента. `PROD_OBSERVE` принимается только при явно заявленной технической read-only границе; Execution Broker по-прежнему честно фиксирует `ENFORCED`, `ADVISORY` или `UNAVAILABLE`.
 
 ## Локальная конфигурация
 

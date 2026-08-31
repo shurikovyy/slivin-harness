@@ -14,7 +14,7 @@ import task_runner
 from slivin_harness.implementer import IMPLEMENTER_PROTOCOL_VERSION
 from slivin_harness.protocol import EVALUATOR_PROTOCOL_VERSION
 from slivin_harness.workflow import StageResultCode, StageState
-from test_protocol import valid_plan, valid_task_contract
+from test_protocol import valid_blind_audit, valid_pass, valid_plan, valid_task_contract
 
 
 def git(repo: Path, *args: str) -> str:
@@ -124,18 +124,16 @@ timeout_seconds = 30
         def fake_planner(*_args, **_kwargs):
             return valid_plan()
 
-        def fake_evaluator(*_args, **_kwargs):
-            return {
-                "protocol_version": EVALUATOR_PROTOCOL_VERSION,
-                "status": "PASS",
-                "summary": "candidate satisfies the task",
-                "task_satisfied": True,
-                "changed_files_reviewed": ["target.txt"],
-                "checks_assessment": ["configured check passed"],
-                "findings": [],
-                "unverified": [],
-                "replan_reason": "",
-            }
+        def fake_evaluator(*_args, **kwargs):
+            audit = valid_blind_audit()
+            blind_callback = kwargs.get("on_blind_audit")
+            if blind_callback:
+                blind_callback(audit)
+            callback = kwargs.get("on_phase_complete")
+            if callback:
+                callback("PHASE_A")
+                callback("PHASE_B")
+            return audit, valid_pass(blind_audit=audit)
 
         implementer_calls = 0
 

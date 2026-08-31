@@ -1,4 +1,4 @@
-# Windows setup для Slivin Harness 0.8.0a8
+# Windows setup для Slivin Harness 0.8.0a9
 
 ## Целевая среда
 
@@ -8,13 +8,14 @@ Git for Windows / Git Bash
 Codex CLI / App Server
 Python для Harness
 configured bootstrap Python проекта
-project-specific Node/Jest при необходимости
+project-specific Node/Jest
+owner-provided runtime wrappers when runtime proof is required
 ```
 
 ## Проверка release
 
 ```bash
-cd ~/Tools/slivin-harness-080a8-phase5
+cd ~/Tools/slivin-harness-080a9-phase6
 ./py -c "import slivin_harness; print(slivin_harness.__version__)"
 ./py tools/self_check.py
 ```
@@ -22,14 +23,15 @@ cd ~/Tools/slivin-harness-080a8-phase5
 Ожидаемо:
 
 ```text
-0.8.0a8
-DOCS_SYNC_PASS harness=0.8.0a8 ...
+0.8.0a9
+DOCS_SYNC_PASS harness=0.8.0a9 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
-## Python 3.12 проекта
+На native Windows несколько capability-dependent tests могут быть `skipped`; итог всё равно
+обязан быть `OK` и `HARNESS_SELF_CHECK_PASS`.
 
-Пример `harness.local.toml`:
+## Python 3.12 проекта
 
 ```toml
 [projects.sa_icover.runtime]
@@ -37,54 +39,71 @@ bootstrap_python = "C:/Users/Slivin.Aleksandr/AppData/Local/Programs/Python/Pyth
 expected_python = "3.12"
 venv = ".venv"
 dependency_files = ["requirements.txt"]
+pip_install_args = ["--disable-pip-version-check"]
 ```
 
-Harness сам выполняет эквивалент:
-
-```bash
-"$PY312" -m venv "$WORKSPACE/.venv"
-"$WORKSPACE/.venv/Scripts/python.exe" -m pip install -r requirements.txt
-"$WORKSPACE/.venv/Scripts/python.exe" -m pip check
-```
-
-Controller использует абсолютный executable; activation через `source` не требуется. `.venv` каждой worktree изолирована от основной project `.venv` и других parallel tasks.
-
-## Worktree runtime path на native Windows
-
-`tempfile`, NTFS и Windows path canonicalization могут представить один и тот же каталог разными строками. Поэтому принадлежность `project_python` worktree больше не проверяется через:
+Harness использует абсолютный entry point:
 
 ```text
-str(project_python).startswith(str(workspace))
+<worktree>/.venv/Scripts/python.exe
 ```
 
-Такое сравнение лексическое и может дать `False` для эквивалентных путей. Проверяется фактический runtime-инвариант:
+Activation через `source` не требуется. Ownership проверяется канонически: entry point обязан
+принадлежать Controller-owned worktree `.venv`, а не совпадать с workspace по строковому
+`startswith()`.
 
-```text
-project_python entry point
-→ его parent directory канонически находится
-  внутри Controller-owned <worktree>/.venv
+## Runtime Verification scenarios
+
+Пример local runtime:
+
+```toml
+[projects.sa_icover.runtime_verification]
+enabled = true
+
+[[projects.sa_icover.runtime_verification.scenarios]]
+id = "local-app-smoke"
+profile = "LIVE_LOCAL"
+capabilities = ["LOCAL_APP"]
+startup_command = ["{python}", "manage.py", "runserver", "127.0.0.1:{runtime_port}", "--noreload"]
+health_command = ["{python}", "tools/runtime_health.py", "{runtime_port}"]
+command = ["{python}", "tools/runtime_local_smoke.py"]
+timeout_seconds = 300
+startup_timeout_seconds = 60
 ```
 
-Сам runtime-контракт не ослаблен: project checks по-прежнему запускаются через абсолютный entry point собственной `.venv` worktree.
+Place wrapper-generated logs/results in the path passed through `runtime-request.v1`; do not
+write tracked files. Runtime ports and scratch directories are task-local.
+
+A `TEST_EXTERNAL` wrapper must use a test endpoint and either `disposable = true` or a
+`cleanup_command`. A `PROD_OBSERVE` wrapper requires `read_only_enforced = true`; do not use a
+production write-capable credential and rely on a prompt instruction.
+
+## Windows command and environment details
+
+- Use list-form commands in `harness.local.toml`; do not embed shell pipelines.
+- Use `{python}` for the worktree-local Python and `{runtime_port}` for the Controller-assigned
+  LIVE_LOCAL port.
+- `preserve_env` is explicit. Only name variables required by the wrapper; their values remain
+  machine-local and must not be printed.
+- Startup is run without autoreload. A long-running server writes stdout/stderr to runtime
+  scratch files rather than a bounded pipe.
+- Controller distinguishes semantic result, command timeout and infrastructure failure.
 
 ## `.worktreeinclude`
-
-Repository-owned ignored runtime files можно перечислить в `.worktreeinclude`:
 
 ```gitignore
 .env
 .env.local
 ```
 
-Harness копирует их в managed worktree, но не включает в candidate. Symlink/junction/reparse traversal отклоняется на любом компоненте пути, а не только на leaf. Existing worktree files не перезаписываются.
+Only matching ignored regular files are copied. Symlink/junction/reparse traversal is rejected
+on every path component. Runtime-only files are protected by Controller-private keyed HMAC and
+restored if a role changes them.
 
-## Git executable bit на NTFS
+## Canonical path checks
 
-Git/NTFS может не показывать chmod-only изменение. Candidate identity test сначала делает capability probe. Если mode-only diff недоступен, тест ожидаемо `skip`; content/path/deletion identity продолжает проверяться.
-
-## Canonical paths
-
-Controller Plane и Execution Broker сравнивают Windows paths по каноническому расположению. Проверяются:
+Windows paths can have different lexical spellings for the same location. Controller Plane,
+Execution Broker, project runtime and runtime evidence use canonical containment and guard:
 
 ```text
 relative escape ..
@@ -92,32 +111,31 @@ absolute drive path
 UNC path
 drive mismatch
 private-root aliases
-sibling with similar prefix
+similar-prefix siblings
 ```
 
-## Private artifacts
+Git/NTFS may not expose a chmod-only diff. The executable-mode identity test performs a
+capability probe and skips only that unsupported condition.
 
-Authoritative artifacts включают:
+## Two-phase Evaluator
+
+Evaluator uses a fresh read-only App Server thread. Phase A is persisted before Phase B. Both
+phase boundaries re-check candidate identity. Evaluator scratch is writable; candidate files
+must remain unchanged.
+
+## Private artifacts and current sandbox boundary
+
+Authoritative evidence remains in:
 
 ```text
-implementation_contract_*.json
-verification_plan_*.json
-capability_gate_*.json
-project_runtime_*.json
-check_registry.json
-self_verify_receipt_current.json
+RUN_DIR/controller_private/
 ```
 
-Они находятся в `RUN_DIR/controller_private`, не в agent-writable worktree.
-
-## App Server / subprocess boundary
-
-Execution Broker сохраняет фактический enforcement. Где native Windows restricted runner ещё не реализован, policy остаётся `ADVISORY`, а не объявляется `ENFORCED`.
-
-## Runtime capabilities
-
-Запись capability в config не включает отсутствующий executor. Browser/test-external/prod-observe proof будет блокирован до соответствующей Runtime-фазы.
+Execution Broker records `ENFORCED`, `ADVISORY` or `UNAVAILABLE`. Where native Windows lacks a
+universal restricted Controller subprocess runner, the Harness does not claim OS-level
+isolation. Runtime wrappers must therefore use scoped credentials and test/read-only endpoints.
 
 ## Перенос local config
 
-`harness.local.toml` не входит в ZIP. Переносите только его; не копируйте `runs`, `.git`, `.venv`, `.harness_tmp` или Controller private artifacts между версиями.
+`harness.local.toml` is not shipped. Copy only this file between installations. Do not copy
+`runs`, `.git`, `.venv`, `.harness_tmp` or Controller-private artifacts.

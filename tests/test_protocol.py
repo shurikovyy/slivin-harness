@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from slivin_harness.evaluator import EVALUATOR_SCHEMA
+from slivin_harness.phase6 import BLIND_AUDIT_VERSION
 from slivin_harness.implementer import (
     IMPLEMENTER_PROTOCOL_VERSION,
     IMPLEMENTER_REPORT_SCHEMA,
@@ -138,17 +139,44 @@ def valid_plan() -> dict:
     }
 
 
-def valid_pass() -> dict:
+def evaluator_finding(finding_id: str = "BLIND-1") -> dict:
+    return {
+        "finding_id": finding_id,
+        "severity": "MEDIUM",
+        "category": "EVIDENCE",
+        "title": "Regression evidence is incomplete",
+        "evidence": ["The configured test does not execute the production reader."],
+        "failure_mode": "A false-green test could accept a broken candidate.",
+        "required_action": "Add evidence through the real production path.",
+        "required_proof": proof("The production reader observes the changed value."),
+    }
+
+
+def valid_blind_audit(*, findings=None) -> dict:
+    return {
+        "protocol_version": BLIND_AUDIT_VERSION,
+        "summary": "Independent candidate audit completed.",
+        "findings": list(findings or []),
+        "advisories": [],
+    }
+
+
+def valid_pass(*, blind_audit=None) -> dict:
+    audit = blind_audit or valid_blind_audit()
     return {
         "protocol_version": EVALUATOR_PROTOCOL_VERSION,
         "status": "PASS",
         "summary": "The task is satisfied and checks cover the changed contract.",
-        "task_satisfied": True,
-        "changed_files_reviewed": ["target.txt"],
-        "checks_assessment": ["Unit and preservation tests passed."],
+        "blind_finding_dispositions": [
+            {
+                "finding_id": item["finding_id"],
+                "disposition": "DISMISSED_WITH_EVIDENCE",
+                "evidence": ["Repository evidence disproves the original reachability claim."],
+            }
+            for item in audit["findings"]
+        ],
         "findings": [],
-        "unverified": [],
-        "replan_reason": "",
+        "reason": "",
     }
 
 
@@ -226,17 +254,30 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "UNKNOWN_FIELDS")
 
     def test_pass_is_mechanically_strict(self) -> None:
-        validate_evaluation_artifact(valid_pass())
-        evaluation = valid_pass()
-        evaluation["unverified"] = [{"claim": "Backend stage invariant holds.", "reason": "No runtime.", "required_evidence": "Run backend test."}]
-        with self.assertRaisesRegex(RuntimeError, "Evaluator PASS is invalid"):
-            validate_evaluation_artifact(evaluation)
+        audit = valid_blind_audit()
+        validate_evaluation_artifact(valid_pass(blind_audit=audit), blind_audit=audit)
+
+        finding = evaluator_finding()
+        audit = valid_blind_audit(findings=[finding])
+        evaluation = valid_pass(blind_audit=audit)
+        evaluation["blind_finding_dispositions"][0]["disposition"] = "RETAINED"
+        evaluation["findings"] = [finding]
+        with self.assertRaisesRegex(RuntimeError, "PASS requires no findings"):
+            validate_evaluation_artifact(evaluation, blind_audit=audit)
 
     def test_findings_status_requires_a_finding(self) -> None:
-        evaluation = valid_pass()
-        evaluation.update({"status": "FINDINGS", "task_satisfied": False})
+        audit = valid_blind_audit()
+        evaluation = valid_pass(blind_audit=audit)
+        evaluation["status"] = "FINDINGS"
         with self.assertRaisesRegex(RuntimeError, "requires at least one finding"):
-            validate_evaluation_artifact(evaluation)
+            validate_evaluation_artifact(evaluation, blind_audit=audit)
+
+    def test_phase_b_must_disposition_every_blind_finding(self) -> None:
+        audit = valid_blind_audit(findings=[evaluator_finding()])
+        evaluation = valid_pass(blind_audit=audit)
+        evaluation["blind_finding_dispositions"] = []
+        with self.assertRaisesRegex(RuntimeError, "disposition every"):
+            validate_evaluation_artifact(evaluation, blind_audit=audit)
 
     def test_implementation_handoff_contains_task_contract_and_verification_plan(self) -> None:
         plan = valid_plan()

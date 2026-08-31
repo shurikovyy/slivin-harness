@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -24,7 +24,11 @@ from slivin_harness.control_plane import (
     SelfVerifyBinding,
 )
 from slivin_harness.execution import ExecutionBroker, ExecutionRole
-from slivin_harness.evaluator import run_evaluator
+from slivin_harness.evaluator import (
+    run_evaluator,
+    validate_blind_audit,
+    validate_evaluation_artifact as validate_evaluator_artifact,
+)
 from slivin_harness.implementer import (
     IMPLEMENTER_REPORT_SCHEMA,
     build_implementation_contract,
@@ -48,6 +52,19 @@ from slivin_harness.phase5 import (
     ProjectRuntimeManager,
     ProjectRuntimeState,
     expand_contract_and_verification_plan,
+)
+from slivin_harness.phase6 import (
+    Phase6ContractError,
+    RuntimeExecutor,
+    build_contract_closure_record,
+    runtime_available_capabilities,
+    runtime_command_gaps,
+    runtime_environment_gaps,
+    runtime_requirement_gaps,
+    runtime_scenarios_from_config,
+    runtime_selected_scenarios,
+    validate_contract_closure_record,
+    validate_runtime_scenario_commands,
 )
 from slivin_harness.protocol import (
     ArtifactContractError,
@@ -82,6 +99,7 @@ from slivin_harness.workflow import (
     PipelineProfile,
     PlannerStatus,
     RevisionKind,
+    RuntimeStatus,
     StageId,
     StageResultCode,
     TaskContractStatus,
@@ -1148,87 +1166,12 @@ def validate_plan_artifact(
         task_contract=task_contract,
     )
 
-def validate_evaluation_artifact(evaluation: dict) -> None:
-    allowed = {
-        "protocol_version",
-        "status",
-        "summary",
-        "task_satisfied",
-        "changed_files_reviewed",
-        "checks_assessment",
-        "findings",
-        "unverified",
-        "replan_reason",
-    }
-    ensure_exact_keys(evaluation, allowed=allowed, required=allowed, field="evaluation")
-    if evaluation["protocol_version"] != EVALUATOR_PROTOCOL_VERSION:
-        raise ArtifactContractError(
-            code="EVALUATOR_VERSION",
-            field="protocol_version",
-            message="Evaluator protocol version mismatch",
-            expected=EVALUATOR_PROTOCOL_VERSION,
-            actual=evaluation["protocol_version"],
-        )
-    status = evaluation["status"]
-    if status not in set(enum_values(EvaluatorStatus)):
-        raise ArtifactContractError(
-            code="EVALUATOR_STATUS",
-            field="status",
-            message="Unknown Evaluator status",
-            expected="/".join(enum_values(EvaluatorStatus)),
-            actual=status,
-        )
-    require_type(evaluation["summary"], str, field="summary")
-    require_type(evaluation["task_satisfied"], bool, field="task_satisfied")
-    require_string_list(evaluation["changed_files_reviewed"], field="changed_files_reviewed")
-    require_string_list(evaluation["checks_assessment"], field="checks_assessment")
-    require_type(evaluation["findings"], list, field="findings")
-    require_type(evaluation["unverified"], list, field="unverified")
-    require_type(evaluation["replan_reason"], str, field="replan_reason")
-    for index, finding in enumerate(evaluation["findings"]):
-        require_type(finding, dict, field=f"findings[{index}]")
-        ensure_exact_keys(
-            finding,
-            allowed={"severity", "title", "evidence", "required_action"},
-            required={"severity", "title", "evidence", "required_action"},
-            field=f"findings[{index}]",
-        )
-        if finding["severity"] not in {"HIGH", "MEDIUM", "LOW"}:
-            raise ArtifactContractError(
-                code="EVALUATOR_SEVERITY",
-                field=f"findings[{index}].severity",
-                message="Invalid finding severity",
-                expected="HIGH/MEDIUM/LOW",
-                actual=finding["severity"],
-            )
-        require_type(finding["title"], str, field=f"findings[{index}].title")
-        require_string_list(finding["evidence"], field=f"findings[{index}].evidence")
-        require_type(finding["required_action"], str, field=f"findings[{index}].required_action")
-    for index, item in enumerate(evaluation["unverified"]):
-        require_type(item, dict, field=f"unverified[{index}]")
-        ensure_exact_keys(
-            item,
-            allowed={"claim", "reason", "required_evidence"},
-            required={"claim", "reason", "required_evidence"},
-            field=f"unverified[{index}]",
-        )
-        for key in ("claim", "reason", "required_evidence"):
-            require_type(item[key], str, field=f"unverified[{index}].{key}")
-
-    if status == EvaluatorStatus.PASS.value:
-        if not evaluation["task_satisfied"] or evaluation["findings"] or evaluation["unverified"] or evaluation["replan_reason"]:
-            raise RuntimeError(
-                "Evaluator PASS is invalid: task_satisfied must be true and findings, "
-                "unverified and replan_reason must be empty"
-            )
-    elif status == EvaluatorStatus.FINDINGS.value and not evaluation["findings"]:
-        raise RuntimeError("Evaluator FINDINGS requires at least one finding")
-    elif status == EvaluatorStatus.REPLAN_REQUIRED.value and not evaluation["replan_reason"].strip():
-        raise RuntimeError("Evaluator REPLAN_REQUIRED requires replan_reason")
-    elif status in {EvaluatorStatus.BLOCKED.value, EvaluatorStatus.NEEDS_USER_DECISION.value} and not (
-        evaluation["unverified"] or evaluation["replan_reason"].strip()
-    ):
-        raise RuntimeError(f"Evaluator {status} requires an explicit reason")
+def validate_evaluation_artifact(
+    evaluation: dict, *, blind_audit: dict
+) -> None:
+    """Compatibility entry point backed by evaluator.v5 validation."""
+    validate_blind_audit(blind_audit)
+    validate_evaluator_artifact(evaluation, blind_audit=blind_audit)
 
 
 def build_implementation_prompt(
@@ -1355,6 +1298,25 @@ Deterministic checks нашли ошибки. Task ещё не принят.
 
 Проверь причину по коду. Исправь только подтверждённую in-scope проблему, не ослабляй
 checks. {_repair_contract_block(implementation_contract=implementation_contract, self_verify_command=self_verify_command)}
+""".strip()
+
+
+def build_runtime_repair_prompt(
+    runtime_evidence: dict,
+    *,
+    implementation_contract: dict,
+    self_verify_command: list[str],
+) -> str:
+    return f"""
+Controller Runtime Verification обнаружил material failure текущего candidate.
+
+--- BEGIN RUNTIME EVIDENCE ---
+{json.dumps(runtime_evidence, ensure_ascii=False, indent=2)}
+--- END RUNTIME EVIDENCE ---
+
+Определи подтверждённую причину. Исправь candidate, но не подменяй required runtime
+proof локальным тестом и не отключай readback/cleanup.
+{_repair_contract_block(implementation_contract=implementation_contract, self_verify_command=self_verify_command)}
 """.strip()
 
 
@@ -1904,6 +1866,22 @@ def main(argv: list[str] | None = None) -> int:
         if runtime_state is not None:
             toolchain["project_python"] = runtime_state.project_python
         validate_toolchain(toolchain)
+        runtime_scenarios = runtime_scenarios_from_config(
+            local_config, project_name=session.project_name
+        )
+        runtime_executor = RuntimeExecutor(
+            workspace=workspace,
+            source_repo=session.source_repo,
+            toolchain=toolchain,
+            execution_broker=execution_broker,
+        )
+        recorder.write_authoritative_json(
+            "runtime_scenarios.json",
+            {
+                "schema_version": "runtime-scenarios.v1",
+                "scenarios": [item.public_summary() for item in runtime_scenarios],
+            },
+        )
         repair_specs, heldout_specs = split_checks(manifest["checks"])
         risk = manifest.get("risk", "medium")
         timeout = manifest.get("turn_timeout_seconds", 900)
@@ -2104,8 +2082,11 @@ def main(argv: list[str] | None = None) -> int:
             declared_capabilities = configured_capabilities(
                 local_config, project_name=session.project_name
             )
+            runtime_capabilities = runtime_available_capabilities(runtime_scenarios)
             resolved_capabilities = available_capabilities(
-                toolchain=toolchain, configured=declared_capabilities
+                toolchain=toolchain,
+                configured=declared_capabilities,
+                runtime=runtime_capabilities,
             )
             capability_record = {
                 "schema_version": "capability-gate.v1",
@@ -2115,6 +2096,20 @@ def main(argv: list[str] | None = None) -> int:
             }
             capability_record["missing"] = required_capability_gaps(
                 verification_plan, available=resolved_capabilities
+            )
+            capability_record["runtime_requirement_gaps"] = runtime_requirement_gaps(
+                verification_plan, runtime_scenarios
+            )
+            capability_record["runtime_environment_gaps"] = runtime_environment_gaps(
+                runtime_scenarios,
+                verification_plan=verification_plan,
+                execution_broker=execution_broker,
+            )
+            capability_record["runtime_command_gaps"] = runtime_command_gaps(
+                verification_plan,
+                runtime_scenarios,
+                workspace=workspace,
+                toolchain=toolchain,
             )
             recorder.write_authoritative_json(
                 "capability_gate_01.json", capability_record
@@ -2133,7 +2128,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print("HARNESS_TASK_STOPPED: OWNER_BOUNDARY_CONFLICT")
                 return 2
-            if capability_record["missing"]:
+            if (
+                capability_record["missing"]
+                or capability_record["runtime_requirement_gaps"]
+                or capability_record["runtime_environment_gaps"]
+                or capability_record["runtime_command_gaps"]
+            ):
                 run_state.route_stage(
                     StageId.IMPLEMENTATION_CONTRACT,
                     outcome=WorkflowOutcome.BLOCKED,
@@ -2147,7 +2147,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(
                     "HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING",
-                    ", ".join(capability_record["missing"]),
+                    ", ".join([
+                        *capability_record["missing"],
+                        *capability_record["runtime_requirement_gaps"],
+                        *capability_record["runtime_environment_gaps"],
+                        *capability_record["runtime_command_gaps"],
+                    ]),
                 )
                 return 2
             run_state.pass_stage(
@@ -2171,6 +2176,19 @@ def main(argv: list[str] | None = None) -> int:
             verification_plan_index = 1
             capability_gate_index = 1
             project_runtime_index = 1 if runtime_state is not None else 0
+            contract_closure_index = 0
+            runtime_verification_index = 0
+            active_contract_closure: dict | None = None
+            active_contract_closure_artifact: str | None = None
+            active_runtime_evidence: dict = {
+                "protocol_version": "runtime-evidence.v1",
+                "status": StageResultCode.RUNTIME_VERIFICATION_SKIPPED.value,
+                "candidate_id": None,
+                "verification_plan_fingerprint": verification_plan["fingerprint"],
+                "scenarios": [],
+                "reason_code": "NOT_EVALUATED_YET",
+            }
+            active_runtime_artifact: str | None = None
             active_contract_artifact = "implementation_contract_01.json"
             active_verification_artifact = "verification_plan_01.json"
             active_capability_artifact = "capability_gate_01.json"
@@ -2340,6 +2358,7 @@ def main(argv: list[str] | None = None) -> int:
                 current_capabilities = available_capabilities(
                     toolchain=toolchain,
                     configured=declared_capabilities,
+                    runtime=runtime_available_capabilities(runtime_scenarios),
                 )
                 capability_gate_index += 1
                 capability_artifact = f"capability_gate_{capability_gate_index:02d}.json"
@@ -2353,11 +2372,30 @@ def main(argv: list[str] | None = None) -> int:
                     verification_plan,
                     available=current_capabilities,
                 )
+                capability_record["runtime_requirement_gaps"] = runtime_requirement_gaps(
+                    verification_plan, runtime_scenarios
+                )
+                capability_record["runtime_environment_gaps"] = runtime_environment_gaps(
+                    runtime_scenarios,
+                    verification_plan=verification_plan,
+                    execution_broker=execution_broker,
+                )
+                capability_record["runtime_command_gaps"] = runtime_command_gaps(
+                    verification_plan,
+                    runtime_scenarios,
+                    workspace=workspace,
+                    toolchain=toolchain,
+                )
                 recorder.write_authoritative_json(
                     capability_artifact, capability_record
                 )
                 active_capability_artifact = capability_artifact
-                if capability_record["missing"]:
+                if (
+                    capability_record["missing"]
+                    or capability_record["runtime_requirement_gaps"]
+                    or capability_record["runtime_environment_gaps"]
+                    or capability_record["runtime_command_gaps"]
+                ):
                     run_state.route_stage(
                         StageId.IMPLEMENTATION_CONTRACT,
                         outcome=WorkflowOutcome.BLOCKED,
@@ -2371,7 +2409,12 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     raise HarnessControlledStop(
                         "REQUIRED_CAPABILITY_MISSING: "
-                        + ", ".join(capability_record["missing"])
+                        + ", ".join([
+                            *capability_record["missing"],
+                            *capability_record["runtime_requirement_gaps"],
+                            *capability_record["runtime_environment_gaps"],
+                            *capability_record["runtime_command_gaps"],
+                        ])
                     )
 
                 expansion_artifact = (
@@ -2609,6 +2652,26 @@ def main(argv: list[str] | None = None) -> int:
             while True:
                 changed_paths = collect_changed_paths(workspace)
                 enforce_allowed_paths(changed_paths, allowed_paths)
+                closure_candidate = observe_candidate("CONTRACT_CLOSURE")
+                contract_closure_index += 1
+                active_contract_closure = build_contract_closure_record(
+                    implementation_contract=implementation_contract,
+                    verification_plan=verification_plan,
+                    implementation_report=report,
+                    candidate_id=closure_candidate.candidate_id,
+                )
+                validate_contract_closure_record(
+                    active_contract_closure,
+                    implementation_contract=implementation_contract,
+                    verification_plan=verification_plan,
+                    candidate_id=closure_candidate.candidate_id,
+                )
+                active_contract_closure_artifact = (
+                    f"contract_closure_{contract_closure_index:02d}.json"
+                )
+                recorder.write_authoritative_json(
+                    active_contract_closure_artifact, active_contract_closure
+                )
                 current_specs = active_repair_specs()
                 ensure_changed_tests_are_covered(
                     changed_paths=git_changed_paths(workspace),
@@ -2742,22 +2805,154 @@ def main(argv: list[str] | None = None) -> int:
                     artifacts=(checks_artifact, "candidate_identity_current.json"),
                 )
                 run_state.begin_stage(StageId.RUNTIME_VERIFICATION)
-                if verification_plan["runtime_required"]:
+                runtime_verification_index += 1
+                runtime_record = runtime_executor.execute(
+                    verification_plan, runtime_scenarios
+                )
+                runtime_files_after = exposed_runtime_file_snapshot(
+                    session, control_plane=recorder.control_plane
+                )
+                if runtime_files_after != local_runtime_files_baseline:
+                    restore_exposed_runtime_files(session)
+                    runtime_record = replace(
+                        runtime_record,
+                        status=RuntimeStatus.MUTATED_CANDIDATE.value,
+                        reason_code="RUNTIME_MUTATED_LOCAL_RUNTIME_FILES",
+                    )
+                active_runtime_evidence = runtime_record.public_record()
+                active_runtime_artifact = (
+                    f"runtime_evidence_{runtime_verification_index:02d}.json"
+                )
+                recorder.write_private_json(
+                    active_runtime_artifact, runtime_record.private_record()
+                )
+                recorder.write_json(
+                    active_runtime_artifact, active_runtime_evidence
+                )
+                if runtime_record.status == RuntimeStatus.SKIPPED.value:
+                    run_state.skip_stage(
+                        StageId.RUNTIME_VERIFICATION,
+                        StageResultCode.RUNTIME_VERIFICATION_SKIPPED,
+                        reason_code=runtime_record.reason_code or "NO_RUNTIME_PROOF_REQUIRED",
+                        artifacts=(
+                            active_verification_artifact,
+                            active_runtime_artifact,
+                            "candidate_identity_current.json",
+                        ),
+                    )
+                elif runtime_record.status == RuntimeStatus.PASS.value:
+                    run_state.pass_stage(
+                        StageId.RUNTIME_VERIFICATION,
+                        StageResultCode.RUNTIME_VERIFICATION_PASS,
+                        artifacts=(
+                            active_verification_artifact,
+                            active_runtime_artifact,
+                            "candidate_identity_current.json",
+                        ),
+                    )
+                    print("RUNTIME_VERIFICATION_PASS")
+                elif runtime_record.status in {
+                    RuntimeStatus.BEHAVIOR_FAIL.value,
+                    RuntimeStatus.START_FAIL.value,
+                    RuntimeStatus.READBACK_FAIL.value,
+                    RuntimeStatus.MUTATED_CANDIDATE.value,
+                }:
+                    run_state.route_stage(
+                        StageId.RUNTIME_VERIFICATION,
+                        outcome=WorkflowOutcome.REPAIR,
+                        result_code=StageResultCode.RUNTIME_REPAIR_REQUIRED,
+                        reason_code=runtime_record.reason_code or runtime_record.status,
+                        artifacts=(
+                            active_runtime_artifact,
+                            "candidate_identity_current.json",
+                        ),
+                    )
+                    runtime_signature = json.dumps(
+                        active_runtime_evidence, ensure_ascii=False, sort_keys=True
+                    )
+                    runtime_candidate = observe_candidate("RUNTIME_REPAIR_REQUIRED")
+                    if _phase4_loop_stalled(
+                        repair_progress_history,
+                        candidate_id=runtime_candidate.candidate_id,
+                        failure_signature=runtime_signature,
+                    ):
+                        raise RuntimeError(
+                            "REPAIR_STALLED: Runtime Verification repeated the same "
+                            "failure on the same candidate"
+                        )
+                    fix_cycles += 1
+                    _, stamp_path, self_verify_command = prepare_self_verify_runner(
+                        workspace=workspace,
+                        specs=active_repair_specs(),
+                        toolchain=toolchain,
+                    )
+                    implementation_report_index += 1
+                    run_state.begin_stage(StageId.IMPLEMENTER)
+                    report = run_implementer_report(
+                        codex,
+                        thread_id=implementer_thread,
+                        prompt=build_runtime_repair_prompt(
+                            active_runtime_evidence,
+                            implementation_contract=implementation_contract,
+                            self_verify_command=self_verify_command,
+                        ),
+                        timeout=timeout,
+                        label=f"REPAIR RUNTIME #{fix_cycles}",
+                        implementation_contract=implementation_contract,
+                        self_verify_command=self_verify_command,
+                        workspace=workspace,
+                        stamp_path=stamp_path,
+                        plan=plan,
+                        control_plane=recorder.control_plane,
+                        run_state=run_state,
+                        check_registry_digest=check_registry.digest(),
+                    )
+                    report_artifact = (
+                        f"implementation_report_{implementation_report_index:02d}.json"
+                    )
+                    recorder.write_json(report_artifact, report)
+                    observe_candidate("IMPLEMENTER_REPAIR_RUNTIME")
+                    report, report_artifact = stabilize_implementer_report(
+                        report, label=f"REPAIR RUNTIME #{fix_cycles}"
+                    )
+                    if report["status"] != ImplementerStatus.COMPLETE.value:
+                        _phase4_route_implementer_terminal(
+                            run_state=run_state,
+                            report=report,
+                            artifacts=(
+                                report_artifact,
+                                active_runtime_artifact,
+                                "candidate_identity_current.json",
+                            ),
+                            reason_suffix="AFTER_RUNTIME_REPAIR",
+                        )
+                        print("HARNESS_TASK_STOPPED:", report["status"])
+                        return 2
+                    run_state.pass_stage(
+                        StageId.IMPLEMENTER,
+                        StageResultCode.IMPLEMENTATION_COMPLETE,
+                        artifacts=(
+                            report_artifact,
+                            "candidate_identity_current.json",
+                        ),
+                    )
+                    continue
+                else:
                     run_state.route_stage(
                         StageId.RUNTIME_VERIFICATION,
                         outcome=WorkflowOutcome.BLOCKED,
                         result_code=StageResultCode.BLOCKED,
-                        reason_code="RUNTIME_EXECUTOR_NOT_IMPLEMENTED",
-                        artifacts=(active_verification_artifact,),
+                        reason_code=runtime_record.reason_code or runtime_record.status,
+                        artifacts=(
+                            active_runtime_artifact,
+                            "candidate_identity_current.json",
+                        ),
                     )
-                    print("HARNESS_TASK_STOPPED: RUNTIME_EXECUTOR_NOT_IMPLEMENTED")
+                    print(
+                        "HARNESS_TASK_STOPPED:",
+                        runtime_record.reason_code or runtime_record.status,
+                    )
                     return 2
-                run_state.skip_stage(
-                    StageId.RUNTIME_VERIFICATION,
-                    StageResultCode.RUNTIME_VERIFICATION_SKIPPED,
-                    reason_code="NO_RUNTIME_PROOF_REQUIRED",
-                    artifacts=(active_verification_artifact,),
-                )
 
                 if pipeline_profile == PipelineProfile.FAST:
                     run_state.begin_stage(StageId.EVALUATOR)
@@ -2769,12 +2964,38 @@ def main(argv: list[str] | None = None) -> int:
                     break
 
                 evaluation_index += 1
-                evaluator_check_summary = checks_summary(repair_results)
-                if dynamic_notes:
-                    evaluator_check_summary += "\n\nDynamic check notes:\n" + "\n".join(dynamic_notes)
+                if active_contract_closure is None or active_contract_closure_artifact is None:
+                    raise RuntimeError("Evaluator requires an active Contract Closure Record")
+                deterministic_evidence = {
+                    "protocol_version": "deterministic-evidence.v1",
+                    "candidate_id": closure_candidate.candidate_id,
+                    "checks_artifact": checks_artifact,
+                    "checks": check_records(repair_results),
+                    "dynamic_notes": list(dynamic_notes),
+                }
                 run_state.begin_stage(StageId.EVALUATOR)
                 evaluation_candidate_before = observe_candidate("EVALUATOR_BEFORE")
-                evaluation = run_evaluator(
+                blind_artifact = f"blind_audit_{evaluation_index:02d}.json"
+                persisted_blind_audit: dict | None = None
+
+                def evaluator_blind_audit_recorder(audit: dict) -> None:
+                    nonlocal persisted_blind_audit
+                    current = observe_candidate("EVALUATOR_PHASE_A_AFTER")
+                    if current.candidate_id != evaluation_candidate_before.candidate_id:
+                        raise RuntimeError(
+                            "Evaluator changed the candidate during PHASE_A"
+                        )
+                    persisted_blind_audit = dict(audit)
+                    recorder.write_authoritative_json(blind_artifact, audit)
+
+                def evaluator_phase_guard(phase: str) -> None:
+                    current = observe_candidate(f"EVALUATOR_{phase}_AFTER")
+                    if current.candidate_id != evaluation_candidate_before.candidate_id:
+                        raise RuntimeError(
+                            f"Evaluator changed the candidate during {phase}"
+                        )
+
+                blind_audit, evaluation = run_evaluator(
                     codex,
                     workspace=workspace,
                     task_prompt=manifest["prompt"],
@@ -2782,15 +3003,28 @@ def main(argv: list[str] | None = None) -> int:
                     preflight=preflight,
                     owner_allowed_paths=allowed_paths,
                     changed_paths=changed_paths,
-                    diff_text=current_diff_text(workspace),
-                    checks_summary=evaluator_check_summary,
+                    candidate_id=evaluation_candidate_before.candidate_id,
+                    implementation_contract=implementation_contract,
+                    verification_plan=verification_plan,
+                    contract_closure=active_contract_closure,
+                    checks_evidence=deterministic_evidence,
+                    runtime_evidence=active_runtime_evidence,
+                    runtime_probe_guidance=[],
                     on_heartbeat=make_heartbeat(f"EVALUATE #{evaluation_index}"),
                     on_thread_started=_thread_recorder(recorder, f"evaluator_{evaluation_index}"),
+                    on_blind_audit=evaluator_blind_audit_recorder,
+                    on_phase_complete=evaluator_phase_guard,
                     timeout=timeout,
                 )
-                validate_evaluation_artifact(evaluation)
+                validate_evaluation_artifact(
+                    evaluation, blind_audit=blind_audit
+                )
+                if persisted_blind_audit != blind_audit:
+                    raise RuntimeError(
+                        "Evaluator Phase A artifact was not persisted before Phase B"
+                    )
                 evaluation_artifact = f"evaluation_{evaluation_index:02d}.json"
-                recorder.write_json(evaluation_artifact, evaluation)
+                recorder.write_authoritative_json(evaluation_artifact, evaluation)
                 evaluation_candidate_after = observe_candidate("EVALUATOR_AFTER")
                 if evaluation_candidate_after.candidate_id != evaluation_candidate_before.candidate_id:
                     run_state.route_stage(
@@ -2798,9 +3032,15 @@ def main(argv: list[str] | None = None) -> int:
                         outcome=WorkflowOutcome.INVALID,
                         result_code=StageResultCode.INVALID,
                         reason_code="EVALUATOR_MUTATED_CANDIDATE",
-                        artifacts=(evaluation_artifact, "candidate_identity_current.json"),
+                        artifacts=(
+                            blind_artifact,
+                            evaluation_artifact,
+                            "candidate_identity_current.json",
+                        ),
                     )
                     raise RuntimeError("Evaluator changed the candidate")
+                print("=== BLIND AUDIT ===")
+                print(json.dumps(blind_audit, ensure_ascii=False, indent=2))
                 print("=== EVALUATION ===")
                 print(json.dumps(evaluation, ensure_ascii=False, indent=2))
                 if first_evaluation_pass is None:
@@ -2810,7 +3050,14 @@ def main(argv: list[str] | None = None) -> int:
                     run_state.pass_stage(
                         StageId.EVALUATOR,
                         StageResultCode.EVALUATION_PASS,
-                        artifacts=(evaluation_artifact, "candidate_identity_current.json"),
+                        artifacts=(
+                            blind_artifact,
+                            evaluation_artifact,
+                            active_contract_closure_artifact,
+                            checks_artifact,
+                            active_runtime_artifact or active_verification_artifact,
+                            "candidate_identity_current.json",
+                        ),
                     )
                     break
                 if evaluation["status"] == EvaluatorStatus.FINDINGS.value:
@@ -2819,8 +3066,32 @@ def main(argv: list[str] | None = None) -> int:
                         outcome=WorkflowOutcome.REPAIR,
                         result_code=StageResultCode.EVALUATOR_FINDINGS,
                         reason_code="EVALUATOR_FINDINGS",
-                        artifacts=(evaluation_artifact, "candidate_identity_current.json"),
+                        artifacts=(
+                            blind_artifact,
+                            evaluation_artifact,
+                            "candidate_identity_current.json",
+                        ),
                     )
+                    evaluator_discoveries = [
+                        {
+                            "kind": finding["category"].lower(),
+                            "name": finding["title"],
+                            "reason": finding["failure_mode"],
+                            "required_behavior": finding["required_action"],
+                            "required_proof": finding["required_proof"],
+                            "evidence": finding["evidence"],
+                        }
+                        for finding in evaluation.get("findings", [])
+                        if finding.get("category") in {"CONSUMER", "RISK"}
+                    ]
+                    if evaluator_discoveries:
+                        recompile_active_definition(
+                            discoveries=evaluator_discoveries,
+                            registry_changed=False,
+                            detail=(
+                                "Blind Evaluator discovered material consumers/risks"
+                            ),
+                        )
                     finding_signature = json.dumps(
                         evaluation.get("findings", []),
                         ensure_ascii=False,
@@ -2895,7 +3166,7 @@ def main(argv: list[str] | None = None) -> int:
                     if _phase4_loop_stalled(
                         replan_progress_history,
                         candidate_id=plan_fingerprint(plan) if plan is not None else "NO_PLAN",
-                        failure_signature=evaluation["replan_reason"],
+                        failure_signature=evaluation["reason"],
                     ):
                         raise RuntimeError(
                             "REPLAN_STALLED: the same plan was rejected for the same reason"
@@ -2903,7 +3174,7 @@ def main(argv: list[str] | None = None) -> int:
                     replan_cycles += 1
                     run_state.invalidate(
                         InvalidationTrigger.REPLAN_REQUIRED,
-                        detail=evaluation["replan_reason"],
+                        detail=evaluation["reason"],
                     )
                     print(f"=== REPLAN #{replan_cycles} ===")
                     run_state.begin_stage(StageId.PLANNER)
@@ -2917,7 +3188,7 @@ def main(argv: list[str] | None = None) -> int:
                         replan_context=(
                             "Current candidate was rejected by a blind Evaluator. "
                             "Observed reason (not a reference implementation):\n"
-                            + evaluation["replan_reason"]
+                            + evaluation["reason"]
                         ),
                         on_heartbeat=make_heartbeat(f"REPLAN #{replan_cycles}"),
                         on_thread_started=_thread_recorder(recorder, f"planner_replan_{replan_cycles}"),
@@ -2988,7 +3259,22 @@ def main(argv: list[str] | None = None) -> int:
                         available=available_capabilities(
                             toolchain=toolchain,
                             configured=declared_capabilities,
+                            runtime=runtime_available_capabilities(runtime_scenarios),
                         ),
+                    )
+                    runtime_gaps = runtime_requirement_gaps(
+                        verification_plan, runtime_scenarios
+                    )
+                    runtime_env_gaps = runtime_environment_gaps(
+                        runtime_scenarios,
+                        verification_plan=verification_plan,
+                        execution_broker=execution_broker,
+                    )
+                    runtime_cmd_gaps = runtime_command_gaps(
+                        verification_plan,
+                        runtime_scenarios,
+                        workspace=workspace,
+                        toolchain=toolchain,
                     )
                     if not plan["owner_boundary_assessment"]["compatible"]:
                         run_state.route_stage(
@@ -3000,7 +3286,7 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         print("HARNESS_TASK_STOPPED: OWNER_BOUNDARY_CONFLICT")
                         return 2
-                    if missing:
+                    if missing or runtime_gaps or runtime_env_gaps or runtime_cmd_gaps:
                         run_state.route_stage(
                             StageId.IMPLEMENTATION_CONTRACT,
                             outcome=WorkflowOutcome.BLOCKED,
@@ -3008,7 +3294,12 @@ def main(argv: list[str] | None = None) -> int:
                             reason_code="REQUIRED_CAPABILITY_MISSING_AFTER_REPLAN",
                             artifacts=(contract_artifact, verification_artifact),
                         )
-                        print("HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING", ", ".join(missing))
+                        print(
+                            "HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING",
+                            ", ".join([
+                                *missing, *runtime_gaps, *runtime_env_gaps, *runtime_cmd_gaps
+                            ]),
+                        )
                         return 2
                     run_state.pass_stage(
                         StageId.IMPLEMENTATION_CONTRACT,

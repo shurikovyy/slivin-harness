@@ -32,6 +32,29 @@ venv = ".venv"
 dependency_files = ["requirements.txt"]
 pip_install_args = ["--disable-pip-version-check"]
 
+[projects.example.runtime_verification]
+# Optional Controller-owned runtime proof scenarios. They are used only when
+# verification-plan.v1 requires the matching profile/capabilities.
+enabled = false
+
+# Example LIVE_LOCAL scenario:
+# [[projects.example.runtime_verification.scenarios]]
+# id = "local-app-smoke"
+# profile = "LIVE_LOCAL"
+# capabilities = ["LOCAL_APP"]
+# startup_command = ["{python}", "manage.py", "runserver", "127.0.0.1:{runtime_port}", "--noreload"]
+# health_command = ["{python}", "tools/runtime_health.py", "{runtime_port}"]
+# command = ["{python}", "tools/runtime_local_smoke.py"]
+# The command reads SLIVIN_RUNTIME_REQUEST and writes runtime-result.v1 JSON to
+# SLIVIN_RUNTIME_RESULT. Preserved secret values are redacted from saved evidence/logs.
+# timeout_seconds = 300
+# startup_timeout_seconds = 60
+# cleanup_timeout_seconds = 60
+# preserve_env = []
+#
+# TEST_EXTERNAL additionally requires cleanup_command or disposable = true.
+# PROD_OBSERVE requires read_only_enforced = true and cannot define startup/cleanup.
+
 [projects.example.workspace]
 # Prefer repository-owned .worktreeinclude for ignored runtime files such as .env.
 # copy_untracked remains a machine-local override.

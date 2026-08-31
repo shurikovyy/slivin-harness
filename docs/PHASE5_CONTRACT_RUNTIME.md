@@ -1,5 +1,7 @@
 # Phase 5 — Contract expansion and reproducible project runtime
 
+> Historical Phase 5 document. Phase 6 (`0.8.0a9`) now implements the generic runtime executor and two-phase Evaluator described as pending below; see [Phase 6 runtime/evaluator](PHASE6_RUNTIME_EVALUATOR.md).
+
 Phase 5 closes two gaps left intentionally open after Phase 4:
 
 ```text

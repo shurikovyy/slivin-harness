@@ -9,17 +9,13 @@ import slivin_harness
 import task_runner
 from slivin_harness.implementer import IMPLEMENTER_PROTOCOL_VERSION
 from slivin_harness.phase5 import PHASE5_VERSION, PROJECT_RUNTIME_VERSION
-from slivin_harness.workflow import WORKFLOW_PHASE, WORKFLOW_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class Phase5ExecutableIntegrationTests(unittest.TestCase):
-    def test_release_versions_are_phase5(self) -> None:
-        self.assertEqual(slivin_harness.__version__, "0.8.0a8")
-        self.assertEqual(WORKFLOW_VERSION, "workflow.v4")
-        self.assertEqual(WORKFLOW_PHASE, "phase5-contract-runtime-reproducibility")
+    def test_phase5_contract_versions_remain_available(self) -> None:
         self.assertEqual(IMPLEMENTER_PROTOCOL_VERSION, "implementer.v3")
         self.assertEqual(PHASE5_VERSION, "phase5-contract-runtime.v1")
         self.assertEqual(PROJECT_RUNTIME_VERSION, "project-runtime.v1")

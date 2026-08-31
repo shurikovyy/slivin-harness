@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0a9 — Phase 6: executable runtime proof and two-phase Blind Evaluator
+
+- Added Controller-owned runtime scenarios for `LIVE_LOCAL`, `TEST_EXTERNAL` and technically read-only `PROD_OBSERVE`, including startup/health polling, structured request/result, fresh readback, cleanup and candidate/source/runtime-file immutability guards.
+- Bounded runtime result/log artifacts, classify missing/malformed/oversized results separately, redact preserved secret values before private or public persistence, and remove per-scenario scratch after evidence capture.
+- Added `contract-closure.v1` so Evaluator audits Controller-accepted closure rather than Implementer prose.
+- Replaced `evaluator.v4` with `evaluator.v5`: Phase A blind discovery is persisted before Phase B receives Contract and verification evidence; every blind finding requires an explicit disposition.
+- Routed material Evaluator `CONSUMER`/`RISK` findings into transactional Contract/Verification Plan expansion before repair.
+- Bumped the canonical workflow to `workflow.v5` and added `docs/PHASE6_RUNTIME_EVALUATOR.md`.
+- Kept alpha boundaries explicit: no universal runtime wrappers, universal OS-level Controller subprocess sandbox, clean-worktree semantic replan or final delivery transaction yet.
+
 ## 0.8.0a8 — Phase 5: native Windows project-runtime path portability
 
 - Fixed the native Windows self-check failure in `test_build_creates_worktree_runtime_and_stable_state`: equivalent temporary/worktree paths are no longer compared with lexical string `startswith()` semantics.

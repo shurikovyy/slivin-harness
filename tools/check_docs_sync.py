@@ -23,6 +23,15 @@ from slivin_harness.phase5 import (
     PHASE5_VERSION,
     PROJECT_RUNTIME_VERSION,
 )
+from slivin_harness.phase6 import (
+    BLIND_AUDIT_VERSION,
+    CONTRACT_CLOSURE_VERSION,
+    PHASE6_VERSION,
+    RUNTIME_EVIDENCE_VERSION,
+    RUNTIME_REQUEST_VERSION,
+    RUNTIME_RESULT_VERSION,
+    RUNTIME_SCENARIO_VERSION,
+)
 from slivin_harness.run_state import CANDIDATE_IDENTITY_VERSION, RUN_STATE_VERSION
 from slivin_harness.task_contract import TASK_CONTRACT_VERSION
 from slivin_harness.verification import VERIFICATION_PLAN_VERSION
@@ -49,6 +58,7 @@ EXPECTED_MAIN_DOCS = {
     "HISTORY.md",
     "PHASE4_EXECUTION.md",
     "PHASE5_CONTRACT_RUNTIME.md",
+    "PHASE6_RUNTIME_EVALUATOR.md",
     "PRACTICAL_GUIDE.md",
     "QUALITY_MODEL.md",
     "README.md",
@@ -98,13 +108,13 @@ def _check_one_h1(path: Path) -> None:
 
 
 def main() -> int:
-    _assert(__version__ == "0.8.0a8", f"Unexpected Harness version: {__version__}")
+    _assert(__version__ == "0.8.0a9", f"Unexpected Harness version: {__version__}")
     _assert(MANIFEST_VERSION == 2, f"Unexpected manifest version: {MANIFEST_VERSION}")
     _assert(PLANNER_PROTOCOL_VERSION == "planner.v4", PLANNER_PROTOCOL_VERSION)
     _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v3", IMPLEMENTATION_CONTRACT_VERSION)
-    _assert(EVALUATOR_PROTOCOL_VERSION == "evaluator.v4", EVALUATOR_PROTOCOL_VERSION)
+    _assert(EVALUATOR_PROTOCOL_VERSION == "evaluator.v5", EVALUATOR_PROTOCOL_VERSION)
     _assert(IMPLEMENTER_PROTOCOL_VERSION == "implementer.v3", IMPLEMENTER_PROTOCOL_VERSION)
-    _assert(WORKFLOW_VERSION == "workflow.v4", WORKFLOW_VERSION)
+    _assert(WORKFLOW_VERSION == "workflow.v5", WORKFLOW_VERSION)
     _assert(RUN_STATE_VERSION == "run-state.v1", RUN_STATE_VERSION)
     _assert(CANDIDATE_IDENTITY_VERSION == "candidate.v1", CANDIDATE_IDENTITY_VERSION)
     _assert(CONTROL_PLANE_VERSION == "controller-plane.v1", CONTROL_PLANE_VERSION)
@@ -114,6 +124,13 @@ def main() -> int:
     _assert(PHASE5_VERSION == "phase5-contract-runtime.v1", PHASE5_VERSION)
     _assert(CONTRACT_EXPANSION_VERSION == "contract-expansion.v1", CONTRACT_EXPANSION_VERSION)
     _assert(PROJECT_RUNTIME_VERSION == "project-runtime.v1", PROJECT_RUNTIME_VERSION)
+    _assert(PHASE6_VERSION == "phase6-runtime-evaluator.v1", PHASE6_VERSION)
+    _assert(RUNTIME_SCENARIO_VERSION == "runtime-scenario.v1", RUNTIME_SCENARIO_VERSION)
+    _assert(RUNTIME_REQUEST_VERSION == "runtime-request.v1", RUNTIME_REQUEST_VERSION)
+    _assert(RUNTIME_RESULT_VERSION == "runtime-result.v1", RUNTIME_RESULT_VERSION)
+    _assert(RUNTIME_EVIDENCE_VERSION == "runtime-evidence.v1", RUNTIME_EVIDENCE_VERSION)
+    _assert(CONTRACT_CLOSURE_VERSION == "contract-closure.v1", CONTRACT_CLOSURE_VERSION)
+    _assert(BLIND_AUDIT_VERSION == "blind-audit.v1", BLIND_AUDIT_VERSION)
     validate_workflow_definition()
 
     docs_dir = ROOT / "docs"
@@ -128,8 +145,8 @@ def main() -> int:
         indent=2,
     ) + "\n"
     _assert(
-        (docs_dir / "workflow.v4.json").read_text(encoding="utf-8") == generated_json,
-        "docs/workflow.v4.json is stale; run ./py tools/render_workflow_docs.py",
+        (docs_dir / "workflow.v5.json").read_text(encoding="utf-8") == generated_json,
+        "docs/workflow.v5.json is stale; run ./py tools/render_workflow_docs.py",
     )
 
     actual_docs = {path.name for path in docs_dir.glob("*.md")}
@@ -149,14 +166,14 @@ def main() -> int:
         for path in [ROOT / "README.md", docs_dir / "ARCHITECTURE.md", docs_dir / "QUALITY_MODEL.md"]
     )
     for marker in (
-        "0.8.0a8",
+        "0.8.0a9",
         "version = 2",
         "task-contract.v1",
         "planner.v4",
         "implementer.v3",
         "implementation-contract.v3",
         "verification-plan.v1",
-        "evaluator.v4",
+        "evaluator.v5",
         WORKFLOW_VERSION,
         RUN_STATE_VERSION,
         CANDIDATE_IDENTITY_VERSION,
@@ -165,6 +182,13 @@ def main() -> int:
         PHASE5_VERSION,
         CONTRACT_EXPANSION_VERSION,
         PROJECT_RUNTIME_VERSION,
+        PHASE6_VERSION,
+        RUNTIME_SCENARIO_VERSION,
+        RUNTIME_REQUEST_VERSION,
+        RUNTIME_RESULT_VERSION,
+        RUNTIME_EVIDENCE_VERSION,
+        CONTRACT_CLOSURE_VERSION,
+        BLIND_AUDIT_VERSION,
         WORKFLOW_PHASE,
     ):
         _assert(marker in all_active_text, f"Active docs do not mention {marker}")
@@ -242,6 +266,10 @@ def main() -> int:
         f"control_plane={CONTROL_PLANE_VERSION} execution_broker={EXECUTION_BROKER_VERSION}"
         f" phase5={PHASE5_VERSION} contract_expansion={CONTRACT_EXPANSION_VERSION}"
         f" project_runtime={PROJECT_RUNTIME_VERSION}"
+        f" phase6={PHASE6_VERSION} runtime_scenario={RUNTIME_SCENARIO_VERSION}"
+        f" runtime_request={RUNTIME_REQUEST_VERSION} runtime_result={RUNTIME_RESULT_VERSION}"
+        f" runtime_evidence={RUNTIME_EVIDENCE_VERSION} contract_closure={CONTRACT_CLOSURE_VERSION}"
+        f" blind_audit={BLIND_AUDIT_VERSION}"
     )
     return 0
 

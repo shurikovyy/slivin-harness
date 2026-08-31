@@ -4,8 +4,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Iterable, TypeVar
 
-WORKFLOW_VERSION = "workflow.v4"
-WORKFLOW_PHASE = "phase5-contract-runtime-reproducibility"
+WORKFLOW_VERSION = "workflow.v5"
+WORKFLOW_PHASE = "phase6-runtime-two-phase-evaluator"
 
 
 class _TextEnum(str, Enum):
@@ -76,6 +76,7 @@ class StageResultCode(_TextEnum):
     CHECK_REPAIR_REQUIRED = "CHECK_REPAIR_REQUIRED"
     RUNTIME_VERIFICATION_PASS = "RUNTIME_VERIFICATION_PASS"
     RUNTIME_VERIFICATION_SKIPPED = "RUNTIME_VERIFICATION_SKIPPED"
+    RUNTIME_REPAIR_REQUIRED = "RUNTIME_REPAIR_REQUIRED"
     EVALUATION_PASS = "EVALUATION_PASS"
     EVALUATION_SKIPPED_FAST = "EVALUATION_SKIPPED_FAST"
     EVALUATOR_FINDINGS = "EVALUATOR_FINDINGS"
@@ -131,6 +132,7 @@ class RuntimeStatus(_TextEnum):
     START_FAIL = "RUNTIME_START_FAIL"
     TIMEOUT = "RUNTIME_TIMEOUT"
     INFRA_ERROR = "RUNTIME_INFRA_ERROR"
+    INVALID_RESULT = "RUNTIME_INVALID_RESULT"
     READBACK_FAIL = "RUNTIME_READBACK_FAIL"
     CLEANUP_FAIL = "RUNTIME_CLEANUP_FAIL"
     MUTATED_CANDIDATE = "RUNTIME_MUTATED_CANDIDATE"
@@ -251,7 +253,7 @@ STAGES: tuple[StageDefinition, ...] = (
         ),
         (StageResultCode.RUNTIME_VERIFICATION_SKIPPED,),
         True,
-        StageMaturity.PLANNED,
+        StageMaturity.IMPLEMENTED,
     ),
     StageDefinition(
         6,
@@ -261,7 +263,7 @@ STAGES: tuple[StageDefinition, ...] = (
         (StageResultCode.EVALUATION_PASS, StageResultCode.EVALUATION_SKIPPED_FAST),
         (StageResultCode.EVALUATION_SKIPPED_FAST,),
         False,
-        StageMaturity.COMPATIBILITY_IMPLEMENTED,
+        StageMaturity.IMPLEMENTED,
     ),
     StageDefinition(
         7,
@@ -452,8 +454,26 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
     validate_workflow_definition()
     from slivin_harness.control_plane import CONTROL_PLANE_VERSION
     from slivin_harness.execution import EXECUTION_BROKER_VERSION
-    from slivin_harness.implementer import IMPLEMENTATION_CONTRACT_VERSION
-    from slivin_harness.protocol import PLANNER_PROTOCOL_VERSION
+    from slivin_harness.implementer import (
+        IMPLEMENTATION_CONTRACT_VERSION,
+        IMPLEMENTER_PROTOCOL_VERSION,
+    )
+    from slivin_harness.phase5 import (
+        CONTRACT_EXPANSION_VERSION,
+        PHASE5_VERSION,
+        PROJECT_RUNTIME_VERSION,
+    )
+    from slivin_harness.phase6 import (
+        BLIND_AUDIT_VERSION,
+        CONTRACT_CLOSURE_VERSION,
+        PHASE6_VERSION,
+        RUNTIME_EVIDENCE_VERSION,
+        RUNTIME_SCENARIO_VERSION,
+    )
+    from slivin_harness.protocol import (
+        EVALUATOR_PROTOCOL_VERSION,
+        PLANNER_PROTOCOL_VERSION,
+    )
     from slivin_harness.task_contract import TASK_CONTRACT_VERSION
     from slivin_harness.verification import VERIFICATION_PLAN_VERSION
 
@@ -468,8 +488,20 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
         "contract_versions": {
             "task_contract": TASK_CONTRACT_VERSION,
             "planner": PLANNER_PROTOCOL_VERSION,
+            "implementer": IMPLEMENTER_PROTOCOL_VERSION,
             "implementation_contract": IMPLEMENTATION_CONTRACT_VERSION,
             "verification_plan": VERIFICATION_PLAN_VERSION,
+            "evaluator": EVALUATOR_PROTOCOL_VERSION,
+            "blind_audit": BLIND_AUDIT_VERSION,
+            "contract_closure": CONTRACT_CLOSURE_VERSION,
+            "runtime_scenario": RUNTIME_SCENARIO_VERSION,
+            "runtime_evidence": RUNTIME_EVIDENCE_VERSION,
+        },
+        "phase_layers": {
+            "phase5": PHASE5_VERSION,
+            "contract_expansion": CONTRACT_EXPANSION_VERSION,
+            "project_runtime": PROJECT_RUNTIME_VERSION,
+            "phase6": PHASE6_VERSION,
         },
         "stages": [
             {
@@ -595,7 +627,7 @@ def render_workflow_markdown(*, harness_version: str) -> str:
 | ---: | --- | --- | --- | :---: | --- | --- |
 {chr(10).join(rows)}
 
-`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на новый Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 5 Runtime честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED` только для local-only плана; обязательный runtime proof блокируется capability gate до Implementer.
+`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 6 Runtime исполняет только Controller-configured typed scenarios, а local-only Verification Plan получает явный `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED`. Blind Evaluator работает в две фазы: независимый audit фиксируется до раскрытия Contract/evidence.
 
 ## Разрешённые петли
 
@@ -640,7 +672,7 @@ attempt_id
 | --- | --- | --- | :---: | --- |
 {chr(10).join(invalidation_rows)}
 
-## Что именно реализует Phase 5
+## Что именно реализует Phase 6
 
 ```text
 machine-readable workflow и versioned Run State
@@ -650,18 +682,18 @@ machine-readable workflow и versioned Run State
 + IMPLEMENTATION CONTRACT implementation-contract.v3
 + typed VERIFICATION PLAN verification-plan.v1
 + IMPLEMENTER implementer.v3
-+ Controller-private typed check registry
-+ revision-bound self-verification receipts
-+ inactivity watchdog с active-tool awareness
-+ independent Controller check classification
-+ candidate freeze до/после deterministic suite
-+ changed-test coverage guard
-+ progress/no-progress repair guard
 + transactional Contract / Verification Plan expansion
 + canonical .worktreeinclude exposure policy
 + worktree-local project-runtime bootstrap and drift reconciliation
-+ generated WORKFLOW.md / workflow.v4.json
++ Controller-private Contract Closure Record
++ LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE runtime scenario executor
++ fresh readback / cleanup / read-only result contracts
++ candidate, source and runtime-only-file immutability guards
++ two-phase BLIND EVALUATOR evaluator.v5
++ immutable blind-audit.v1 before Contract/check framing
++ Controller evidence audit without Planner/Implementer prose
++ generated WORKFLOW.md / workflow.v5.json
 ```
 
-Phase 5 **не заявляет полностью готовыми** universal OS-enforced Controller subprocess sandbox, Runtime executor, двухфазный Evaluator, clean-worktree semantic replan или финальную delivery transaction. Execution Broker сохраняет фактический статус `ENFORCED` / `ADVISORY` / `UNAVAILABLE` вместо ложного заявления об изоляции.
+Phase 6 **не заявляет полностью готовыми** universal OS-enforced Controller subprocess sandbox, встроенную browser automation, универсальные typed wrappers для 1С/БД/Airflow, clean-worktree semantic replan или финальную delivery transaction. Runtime commands являются owner-configured Controller capabilities; `PROD_OBSERVE` требует явно заявленной технической read-only границы, но Harness не выдаёт advisory isolation за OS-enforced sandbox.
 """

@@ -1,5 +1,13 @@
 # История и дальнейший маршрут
 
+## Phase 6 — 0.8.0a9
+
+Phase 6 made typed runtime proof executable instead of merely fail-closed. Controller now routes `verification-plan.v1` requirements to configured `LIVE_LOCAL`, `TEST_EXTERNAL` and `PROD_OBSERVE` scenarios, binds runtime evidence to the candidate/plan, enforces startup-health-action-cleanup lifecycle and rejects candidate, source-checkout or runtime-only-file mutation. Infrastructure failures remain distinct from semantic behavior failures.
+
+The evaluator moved from `evaluator.v4` to the two-turn `evaluator.v5`. A fresh thread first produces Controller-persisted `blind-audit.v1` without Planner, Contract or green-check framing. Only then does Phase B receive the Implementation Contract, Verification Plan, `contract-closure.v1`, deterministic evidence and runtime PASS/SKIPPED evidence. Every blind finding must be retained or dismissed with concrete evidence; `CONSUMER` and `RISK` findings expand the active Definition of Done before repair.
+
+Machine phase id: `phase6-runtime-two-phase-evaluator`. Generic owner wrappers are supported, but universal browser/1C/PostgreSQL/Airflow wrappers, universal OS-enforced Controller subprocess isolation, clean-worktree semantic replan and the final delivery transaction remain explicit later work.
+
 ## Phase 5 portability — 0.8.0a8
 
 Native Windows exposed one remaining lexical-path assumption in the Phase 5 project-runtime tests. `ProjectRuntimeManager` already canonicalized the worktree and built `.venv` inside it, but the test compared the serialized Python path with the unresolved `tempfile` workspace through string `startswith()`. Equivalent NTFS/temp paths can have different lexical spellings, so the assertion failed although the runtime was correctly worktree-local.

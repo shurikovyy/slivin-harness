@@ -91,4 +91,4 @@ policy; otherwise the actual enforcement level is preserved in Controller eviden
 
 ## Current alpha boundary
 
-`0.8.0a6` introduced the Phase 4 primitives. Phase 5 (`0.8.0a8`) now implements the previously pending automatic Contract/Verification Plan recompilation and optional worktree-local `.venv` bootstrap/rebuild. A universal OS-enforced Controller subprocess sandbox remains pending; the Broker still records `ADVISORY`/`UNAVAILABLE` honestly instead of labelling it enforced.
+`0.8.0a6` introduced the Phase 4 primitives. Phase 5 (`0.8.0a8`) implemented automatic Contract/Verification Plan recompilation and optional worktree-local `.venv` bootstrap/rebuild. Phase 6 (`0.8.0a9`) adds executable runtime proof and the two-phase Evaluator. A universal OS-enforced Controller subprocess sandbox remains pending; the Broker still records `ADVISORY`/`UNAVAILABLE` honestly instead of labelling it enforced.
