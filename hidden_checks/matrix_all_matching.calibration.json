@@ -1,23 +1,75 @@
 {
-  "schema_version": 1,
-  "calibrated_at": "2026-08-22",
-  "evidence_note": "Historical grader was observed to FAIL on broken _90 and PASS on known-good _92 before this repository baseline was created.",
+  "schema_version": 2,
+  "calibrated_at": "2026-08-25",
+  "evidence_note": "Semantic Matrix grader calibrated without treating _92 as gold. Known incomplete historical/candidate states fail; two architecturally different semantic-good variants pass, including a Matrix-only opt-in that safely keeps Distribution stage actions unavailable.",
   "heldout_checks": [
     {
-      "name": "Historical held-out regression oracle",
-      "spec_sha256": "ad8f7646a46b54061b4e5b21402bda4b8a3e751878ad6372f2378bb5378ca5b3",
+      "name": "Historical Matrix semantic held-out",
+      "spec_sha256": "b56a324a34b928af7377077b1575953a2f472a413b493cec9085fa18cb76eacd",
       "files": [
         {
-          "path": "hidden_checks/jest.config.cjs",
-          "sha256": "7c2ac2d50175744d8c7cfd7f4ec21acec7abb67d4526363026ea60442e84d3c1"
-        },
-        {
-          "path": "hidden_checks/matrix_all_matching.test.cjs",
-          "sha256": "c6f85379d60bea2461a65712a2972379030afa7718da841e029a866748370031"
+          "path": "hidden_checks/matrix_semantic_check.cjs",
+          "sha256": "cfd1fc210e24d03fac87d71053f5756ee55541b00748bfe785871efdecd50658"
         }
       ],
-      "broken_result": "FAIL",
-      "good_result": "PASS"
+      "calibration_cases": [
+        {
+          "name": "historical-_90",
+          "role": "broken_baseline",
+          "expected_result": "FAIL",
+          "fixture_fingerprint": "e84d37e3e2beec5979a343034f5ccf0f06670cf9c2d77deb7d05c16d6cf175b5",
+          "observed_summary": "pass=3 fail=4 total=7"
+        },
+        {
+          "name": "historical-_92",
+          "role": "known_incomplete",
+          "expected_result": "FAIL",
+          "fixture_fingerprint": "83e23171da2c54af1810f75472ac93df27310e1da8a8896108ca832d585c9143",
+          "observed_summary": "pass=5 fail=2 total=7"
+        },
+        {
+          "name": "workspace_14",
+          "role": "known_incomplete",
+          "expected_result": "FAIL",
+          "fixture_fingerprint": "90c16b248e0e370e47532112e225b76b90ccad603f266138db2678037618d7eb",
+          "observed_summary": "pass=5 fail=2 total=7"
+        },
+        {
+          "name": "candidate-0.6.2",
+          "role": "known_incomplete",
+          "expected_result": "FAIL",
+          "fixture_fingerprint": "aebee0c43a09d6051e1b1c8a31129c78e671179173f675a54d4a76d77cf7d56f",
+          "observed_summary": "pass=5 fail=2 total=7"
+        },
+        {
+          "name": "candidate-0.6.5",
+          "role": "known_incomplete",
+          "expected_result": "FAIL",
+          "fixture_fingerprint": "b435c669652e396224ff76aca2737381201218e015e00398ead60708f232d24c",
+          "observed_summary": "pass=5 fail=2 total=7"
+        },
+        {
+          "name": "semantic-good-a",
+          "role": "positive_reference",
+          "expected_result": "PASS",
+          "fixture_fingerprint": "14233f05120fb4d3b263093dd8f5d9ff23e9f30207a6f8d8d2effe908dd3e2a0",
+          "observed_summary": "pass=7 fail=0 total=7"
+        },
+        {
+          "name": "semantic-good-b",
+          "role": "positive_reference",
+          "expected_result": "PASS",
+          "fixture_fingerprint": "cf09e99bc5bc68b079612db63dce17966dec12d859239233d2c029bf70a5f445",
+          "observed_summary": "pass=7 fail=0 total=7"
+        }
+      ],
+      "fixture_fingerprint_algorithm": "sha256(canonical-json({repo_relative_path: sha256(file_bytes)}))",
+      "fixture_fingerprint_files": [
+        "static/js/components/datatable/selection/core.js",
+        "static/js/components/datatable/selection/bulk_edit.js",
+        "static/js/distribution/index.js",
+        "static/js/config/tableConfigs/matrix.js"
+      ]
     }
   ]
 }

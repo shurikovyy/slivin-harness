@@ -1,0 +1,211 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+from slivin_harness.implementer import (
+    IMPLEMENTER_PROTOCOL_VERSION,
+    IMPLEMENTATION_CONTRACT_VERSION,
+    build_implementation_contract,
+    validate_implementation_report,
+)
+from slivin_harness.app_server import TurnTimeoutError
+from task_runner import (
+    build_dynamic_check_specs,
+    candidate_content_fingerprint,
+    prepare_self_verify_runner,
+    run_implementer_report,
+    verify_self_verification_stamp,
+)
+from test_protocol import valid_plan
+
+
+def git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args], cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", check=True
+    )
+    return result.stdout.strip()
+
+
+class ImplementerContractTests(unittest.TestCase):
+    def make_repo(self) -> Path:
+        repo = Path(tempfile.mkdtemp(prefix="slivin-implementer-"))
+        git(repo, "init")
+        git(repo, "config", "user.name", "Test")
+        git(repo, "config", "user.email", "test@example.invalid")
+        (repo / "src").mkdir()
+        (repo / "tests").mkdir()
+        (repo / "src" / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (repo / "tests" / "test_a.py").write_text("def test_a():\n    assert True\n", encoding="utf-8")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-m", "baseline")
+        return repo
+
+    def test_contract_keeps_consumers_explicit_without_obligation_explosion(self) -> None:
+        plan = valid_plan()
+        contract = build_implementation_contract(plan, task_prompt="task")
+        ids = [item["id"] for item in contract["items"]]
+        self.assertEqual(
+            ids,
+            ["OUTCOME-1", "PRESERVE-1", "CONSUMER-1", "CONSUMER-2", "RISK-1", "EVIDENCE-1"],
+        )
+        self.assertEqual(contract["protocol_version"], IMPLEMENTATION_CONTRACT_VERSION)
+        self.assertIn("Matrix", contract["items"][2]["text"])
+        self.assertIn("Distribution", contract["items"][3]["text"])
+        self.assertIn("stale token", contract["items"][4]["text"])
+        self.assertLessEqual(len(contract["items"]), 14)
+
+    def test_complete_report_requires_every_contract_item_and_current_self_verify(self) -> None:
+        repo = self.make_repo()
+        plan = valid_plan()
+        contract = build_implementation_contract(plan, task_prompt="task")
+        (repo / "src" / "a.py").write_text("VALUE = 2\n", encoding="utf-8")
+        report = {
+            "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
+            "status": "COMPLETE",
+            "summary": "done",
+            "contract_evidence": [
+                {"item_id": item["id"], "status": "VERIFIED", "evidence": ["checked"]}
+                for item in contract["items"]
+            ],
+            "self_verification": {"status": "PASS", "command": "self", "evidence": ["PASS"]},
+            "additional_check_paths": [],
+            "blockers": [],
+        }
+        validate_implementation_report(
+            report,
+            contract=contract,
+            changed_paths=["src/a.py"],
+            self_verification_ok=True,
+            documentation_paths=[],
+        )
+        report["contract_evidence"].pop()
+        with self.assertRaisesRegex(RuntimeError, "every Implementation Contract item"):
+            validate_implementation_report(
+                report,
+                contract=contract,
+                changed_paths=["src/a.py"],
+                self_verification_ok=True,
+                documentation_paths=[],
+            )
+
+
+    def test_not_applicable_is_only_allowed_for_consumers(self) -> None:
+        repo = self.make_repo()
+        plan = valid_plan()
+        contract = build_implementation_contract(plan, task_prompt="task")
+        report = {
+            "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
+            "status": "COMPLETE",
+            "summary": "done",
+            "contract_evidence": [
+                {"item_id": item["id"], "status": "VERIFIED", "evidence": ["checked"]}
+                for item in contract["items"]
+            ],
+            "self_verification": {"status": "PASS", "command": "self", "evidence": ["PASS"]},
+            "additional_check_paths": [],
+            "blockers": [],
+        }
+        report["contract_evidence"][0]["status"] = "NOT_APPLICABLE"
+        with self.assertRaisesRegex(RuntimeError, "cannot be NOT_APPLICABLE"):
+            validate_implementation_report(
+                report, contract=contract, changed_paths=[], self_verification_ok=True, documentation_paths=[]
+            )
+
+    def test_planner_risks_are_required_contract_items(self) -> None:
+        plan = valid_plan()
+        plan["risks"] = ["Risk A", "Risk B"]
+        contract = build_implementation_contract(plan, task_prompt="task")
+        risk_items = [item for item in contract["items"] if item["kind"] == "risk"]
+        self.assertEqual([item["id"] for item in risk_items], ["RISK-1", "RISK-2"])
+        self.assertTrue(all(item["allow_not_applicable"] is False for item in risk_items))
+
+    def test_implementer_timeout_continues_same_thread_once(self) -> None:
+        repo = self.make_repo()
+        plan = valid_plan()
+        contract = build_implementation_contract(plan, task_prompt="task")
+        report = {
+            "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
+            "status": "BLOCKED",
+            "summary": "blocked after continuation",
+            "contract_evidence": [
+                {"item_id": item["id"], "status": "BLOCKED", "evidence": ["still pending"]}
+                for item in contract["items"]
+            ],
+            "self_verification": {"status": "NOT_RUN", "command": "self", "evidence": ["not run"]},
+            "additional_check_paths": [],
+            "blockers": ["real blocker"],
+        }
+
+        class FakeCodex:
+            def __init__(self):
+                self.calls = []
+            def run_turn(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    raise TurnTimeoutError("timeout")
+                return json.dumps(report)
+
+        codex = FakeCodex()
+        result = run_implementer_report(
+            codex,
+            thread_id="thread-1",
+            prompt="initial",
+            timeout=900,
+            label="IMPLEMENT",
+            implementation_contract=contract,
+            self_verify_command=[sys.executable, "self_verify.py"],
+            workspace=repo,
+            stamp_path=repo / "missing-stamp.json",
+            plan=plan,
+        )
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(len(codex.calls), 2)
+        self.assertEqual(codex.calls[0]["thread_id"], codex.calls[1]["thread_id"])
+        self.assertEqual(codex.calls[1]["timeout"], 300)
+        self.assertIn("НЕ начинай исследование заново", codex.calls[1]["prompt"])
+
+    def test_self_verify_stamp_is_bound_to_current_candidate(self) -> None:
+        repo = self.make_repo()
+        (repo / "src" / "a.py").write_text("VALUE = 2\n", encoding="utf-8")
+        specs = [{
+            "name": "simple",
+            "feedback": "repair",
+            "command": ["{python}", "-c", "from pathlib import Path; assert 'VALUE = 2' in Path('src/a.py').read_text()"],
+            "timeout_seconds": 30,
+        }]
+        _, stamp, command = prepare_self_verify_runner(
+            workspace=repo,
+            specs=specs,
+            toolchain={"project_python": sys.executable},
+        )
+        result = subprocess.run(command, cwd=repo, check=False)
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(verify_self_verification_stamp(workspace=repo, stamp_path=stamp))
+        before = candidate_content_fingerprint(repo)
+        (repo / "src" / "a.py").write_text("VALUE = 3\n", encoding="utf-8")
+        self.assertNotEqual(before, candidate_content_fingerprint(repo))
+        self.assertFalse(verify_self_verification_stamp(workspace=repo, stamp_path=stamp))
+
+    def test_dynamic_checks_accept_test_paths_not_arbitrary_commands(self) -> None:
+        repo = self.make_repo()
+        js = repo / "tests" / "thing.test.cjs"
+        js.write_text("test('x', () => expect(1).toBe(1));\n", encoding="utf-8")
+        specs, notes = build_dynamic_check_specs(
+            ["tests/thing.test.cjs", "src/a.py"],
+            workspace=repo,
+            toolchain={"node": "C:/node.exe", "jest": "C:/jest.js"},
+            base_specs=[],
+        )
+        self.assertEqual(len(specs), 1)
+        self.assertIn("thing.test.cjs", specs[0]["name"])
+        self.assertTrue(any("not test-like" in note for note in notes))
+
+
+if __name__ == "__main__":
+    unittest.main()

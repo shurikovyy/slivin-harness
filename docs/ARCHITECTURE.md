@@ -1,516 +1,315 @@
-# Архитектура Slivin Harness
+# Архитектура 0.8.0a2 — Phase 1
 
-## 1. Назначение
+## 1. Цель Phase 1
 
-Slivin Harness — отдельный персональный orchestration/quality layer вокруг Codex App Server.
+Phase 1 вводит один канонический workflow и versioned Run State, не меняя пока смысл model protocols.
 
-Он не является частью `sa_icover` и не навязывается командному repository workflow.
+До этой версии переходы между Planner, Implementer, checks, Evaluator и held-out были зашиты в `task_runner.py` и повторялись в документации вручную. Это позволяло коду и описанию расходиться.
 
-Цель:
-
-> Пользователь один раз делегирует инженерную задачу, после чего Harness автономно проводит исследование, реализацию, проверки, независимое review и repair/replan до доказуемого результата либо корректно останавливается с `BLOCKED` / `NEEDS_USER_DECISION`.
-
-Основная пользовательская метрика:
+Теперь источник истины один:
 
 ```text
-human interventions per accepted task ≈ 1
+slivin_harness/workflow.py
+        ├── docs/WORKFLOW.md
+        ├── docs/workflow.v1.json
+        ├── workflow_snapshot.json каждого run
+        └── RunState transition validation
 ```
 
----
+## 2. Канонические компоненты
 
-## 2. Trust boundaries
+### `slivin_harness/workflow.py`
+
+Определяет:
 
 ```text
-Human
-  │
-  │ intent / product semantics / high-risk approval
-  ▼
-Slivin Harness Controller
-  │
-  ├── task contract
-  ├── workspace boundary
-  ├── trusted toolchain
-  ├── Planner
-  ├── Implementer
-  ├── deterministic checks
-  ├── Fresh Evaluator
-  ├── evidence ledger
-  ├── repair / replan
-  └── held-out / runtime acceptance
-        │
-        ▼
-Codex App Server
-        │
-        ▼
-Disposable project workspace
+Step 0–7
+stage ids
+stage success codes
+общие routing outcomes
+agent status enums
+allowed stage transitions
+invalidation triggers/rules
+stage maturity
 ```
 
-Controller, а не модель, владеет Definition of Done.
-
-Сообщение агента `PASS` означает только завершение turn.
-
----
-
-## 3. Основные компоненты repository
+Схема имеет версию и phase id:
 
 ```text
-task_runner.py
-    Главный Controller / state machine.
-
-slivin_harness/app_server.py
-    JSON-RPC adapter к Codex App Server:
-    lifecycle, queues, health, heartbeats, structured turn output.
-
-slivin_harness/planner.py
-    Read-only Characterizer / Planner.
-
-slivin_harness/evaluator.py
-    Fresh read-only independent Evaluator.
-
-slivin_harness/workspace.py
-    Managed project profiles/worktrees, local-file exposure, candidate patch/apply.
-
-tools/prepare_workspace.py
-    One-time preparation helper для static/legacy fixture без готового Git baseline.
-
-tools/self_check.py
-    Быстрая самопроверка Harness source/manifests.
-
-run / run.cmd
-    CWD-independent launcher.
-
-py / py.cmd
-    Python launcher для Harness utility scripts.
-
-cases/
-    Historical evaluation cases и manifests.
-    Полные project workspaces в Git Harness не входят.
-
-hidden_checks/
-    Harness-owned held-out graders и calibration certificates.
-
-runs/
-    Runtime artifacts. Не входят в Git.
+workflow.v1
+phase1-state-machine-foundation
 ```
 
----
+`validate_workflow_definition()` запрещает пропущенный номер этапа, дублирующийся stage id, отсутствующий success transition или trigger без invalidation rule.
 
-## 4. Medium-risk state machine
+### `slivin_harness/run_state.py`
 
-Упрощённо:
+Определяет:
 
 ```text
-TASK ACCEPTED
-    ↓
-PREFLIGHT
-    ↓
-REPO CONTEXT / SKILL DISCOVERY
-    ↓
-CHARACTERIZE + PLAN (read-only)
-    ↓
-PLAN VALIDATION
-    ↓
-PRE-EDIT BASELINE SNAPSHOT
-    ↓
-IMPLEMENT (workspace-write)
-    ↓
-CHANGE-SURFACE RECONCILIATION (D-032)
-    ↓
-DETERMINISTIC CHECKS
-   / \
- FAIL PASS
-  │    │
-  ▼    ▼
-REPAIR FRESH EVALUATOR
-  │       │
-  └───┐   ├── PASS ─────→ HELD-OUT/RUNTIME → DONE
-      │   ├── FINDINGS ─→ IMPLEMENTER → checks → fresh evaluation
-      │   ├── REPLAN_REQUIRED → Planner → validation → fresh evaluation
-      │   ├── BLOCKED
-      │   └── NEEDS_USER_DECISION
-      └──────────────────────────────────────────────────────────────
+run-state.v1
+candidate.v1
 ```
 
-Ключевой contract:
-
-> Любое изменение candidate после review инвалидирует старый review.
-
----
-
-## 5. Роли
-
-### Planner / Characterizer
-
-Sandbox: `read-only`.
-
-Не пишет patch.
-
-Строит модель:
-
-- current contract;
-- assumptions;
-- root-cause evidence;
-- state writers/readers;
-- lifecycle;
-- representations;
-- authority;
-- consumers;
-- preservation;
-- test matrix;
-- release obligations;
-- candidate paths.
-
-### Implementer
-
-Sandbox: `workspace-write`.
-
-Получает task + plan + trusted toolchain + baseline snapshot.
-
-Может отклонить техническую гипотезу Planner, если код её опровергает, но не должен самостоятельно изобретать новую product semantics.
-
-### Fresh Evaluator
-
-Sandbox: `read-only`.
-
-Новый thread/context.
-
-Получает task, plan, final workspace, deterministic evidence.
-
-Его задача — **опровергнуть candidate**, а не подтвердить explanation Implementer.
-
----
-
-## 6. Риск-модель
-
-### Low
-
-Примеры: docs, rename, локальная механика.
+`RunState` записывает Controller-owned `run_state.json` атомарно и хранит:
 
 ```text
-Implementer → deterministic checks
+workflow/harness version
+mode: PRODUCTION | HISTORICAL_BENCHMARK
+pipeline profile: FAST | FULL
+attempt_id
+stage states
+revision vector
+baseline
+current candidate
+event history
+terminal result
 ```
 
-### Medium
+### `CandidateIdentity`
 
-Примеры: UI state, shared helper, multi-file behavior, API contract.
+Единая identity candidate содержит:
 
 ```text
-Planner → Implementer → checks → Fresh Evaluator
+baseline SHA
+workspace HEAD
+changed paths
+file/deletion/symlink state
+Git-visible mode
+SHA-256 фактических bytes
 ```
 
-### High
+Из identity вычисляется `candidate_id`.
 
-Примеры: cross-system mutations, DB schema, auth, финансовое/бизнес-состояние, deploy.
+`candidate.v1` фиксирует mode, который Git реально представляет в HEAD-to-working-tree diff. На файловых системах, где Git не наблюдает изменение executable-бита рабочего файла, один `chmod` не считается изменением candidate. Integration test сначала делает capability probe и выполняет mode assertions только когда Git действительно сообщает `100644 → 100755`.
 
-Текущий quality-core ещё не должен автоматически объявлять такие задачи полностью доказанными без достаточной integration/runtime capability.
-
-Целевая схема:
+Не входят:
 
 ```text
-Planner
-→ Implementer
-→ deterministic
-→ runtime/integration
-→ Fresh Evaluator
-→ specialist if needed
-→ human gate
+.harness_tmp/**
+.venv/**
 ```
 
----
+Так Controller может доказать, что self-verify, deterministic checks, Evaluator, held-out и Final Gate наблюдали один candidate.
 
-## 7. Definition of Done
+### `task_runner.py`
 
-Для medium-risk:
+Текущий executor 0.7.1 отображён на новый Step 0–7 Run State:
 
 ```text
-valid plan
-+
-all required deterministic checks PASS
-+
-all release obligations independently evidenced
-+
-no blocking findings
-+
-Fresh Evaluator PASS
-+
-held-out/runtime acceptance PASS, если такой gate определён
+Step 0  preflight
+Step 1  planner либо FAST skip
+Step 2  implementation contract
+Step 3  implementer
+Step 4  existing repair checks
+Step 5  explicit Phase-1 runtime skip
+Step 6  evaluator либо FAST skip
+Step 7  held-out/result handoff
 ```
 
-Agent message не входит в формулу.
+Каждая стадия обязана начинаться разрешённым переходом. Успешный result code проверяется против конкретного stage.
 
----
+### Agent protocol modules
 
-## 8. App Server transport model
-
-App Server асинхронный JSON-RPC.
-
-Controller поддерживает:
-
-- request matching по `id`;
-- separate notification backlog;
-- thread/turn lifecycle;
-- process-health checks;
-- heartbeat;
-- `final_answer` semantics.
-
-Нельзя:
+Статусы больше не дублируются строками в нескольких местах:
 
 ```text
-склеивать все agentMessage как один structured JSON
+planner.py     → PlannerStatus
+implementer.py → ImplementerStatus
+evaluator.py   → EvaluatorStatus
 ```
 
-Потому что turn может иметь commentary + final answer.
-
-Правило:
+Сами schemas/prompts пока остаются:
 
 ```text
-phase=final_answer
-→ authoritative structured response
-
-fallback:
-→ last completed agent message
+planner.v3
+implementer.v1
+implementation-contract.v2
+evaluator.v4
 ```
 
----
-
-## 9. Repo context / skills
-
-Harness сканирует repository:
-
-- `AGENTS.md`;
-- `.agents/skills/*/SKILL.md`;
-- `skills/list` через App Server.
-
-Различать:
+## 3. Понятная схема выполнения
 
 ```text
-skill discovered
-!=
-skill definitely applied automatically
+manifest
+  ↓
+RunState.create
+  ↓
+Step 0 preflight
+  ↓
+Step 1 planner / compatibility skip
+  ↓
+Step 2 contract
+  ↓
+Step 3 implementer + current self-verify
+  ↓
+Step 4 checks; failure → same Implementer repair
+  ↓
+Step 5 explicit runtime skip in Phase 1
+  ↓
+Step 6 evaluator; finding → repair; replan → Planner
+  ↓
+Step 7 held-out if benchmark + result delivery
 ```
 
-В Codex App Server 0.148.0 `instructionSources` в нашем thread result не давал надёжного подтверждения.
+Точный граф генерируется в [WORKFLOW.md](WORKFLOW.md).
 
-Если конкретный skill должен применяться гарантированно/auditable — его нужно передавать turn'у явно.
+## 4. Revision vector
 
----
-
-## 10. Benchmark и production mode
-
-### Historical benchmark
-
-Есть:
-
-- broken historical state;
-- held-out grader;
-- ранее проверенный known-good результат или calibration certificate.
-
-Цель — оценивать Harness.
-
-Known-good implementation агенту не показывается.
-
-### Production task
-
-Known-good implementation обычно отсутствует.
-
-Confidence строится через:
-
-- characterization;
-- reproduction;
-- tests;
-- preservation;
-- consumer/runtime evidence;
-- Fresh Evaluator.
-
-`_92` не является обязательной частью реального workflow.
-
----
-
-## 11. Что пока сознательно не является core architecture
-
-Отложены до следующего этапа:
-
-- GitHub Issues/task supervisor;
-- automatic commit/push/PR;
-- CI integration;
-- browser/Playwright runtime;
-- DB/1C/Airflow MCP;
-- production read-only connectors;
-- deployment automation;
-- постоянный запуск шести specialist reviewers.
-
-Причина: сначала требовалось доказать quality-core на реальном historical escape.
-
-Эта цель достигнута на Matrix all-matching benchmark, но одного case недостаточно для универсальной надёжности.
-
-
----
-
-## 12. D-032: planned vs actual change surface — machine-enforced
-
-`Planner.candidate_paths` теперь является не справочным списком, а planned change surface.
-
-После каждого Implementer/repair turn Controller сравнивает:
+`run_state.json` содержит:
 
 ```text
-actual changed paths
-vs
-plan.candidate_paths
+task_contract
+plan
+implementation_contract
+verification_plan
+candidate
+runtime_environment
 ```
 
-Если найден новый path:
+В Phase 1 реально изменяются:
 
 ```text
-unexpected edit
-    ↓
-Controller records violation
-    ↓
-rollback только unexpected path к trusted baseline
-    ↓
-read-only change-surface replan
-    ↓
-если path нужен → добавить в candidate_paths
-    ↓
-снять trusted pre-path-edit snapshot
-    ↓
-Implementer повторяет необходимое изменение
+plan
+implementation_contract
+candidate
+runtime_environment
 ```
 
-Если revised plan исключает ранее изменённый path, Controller также возвращает его к baseline.
+`task_contract` и `verification_plan` остаются `null`, потому что соответствующие executors ещё не реализованы. Наличие полей заранее фиксирует их место в общей state machine.
 
-Deterministic checks не обходят этот gate: если check сам создаёт новый non-ignored candidate path, цикл возвращается в reconciliation до Fresh Evaluator.
+## 5. Invalidation model
 
-Перед финальным PASS Controller повторно проверяет отсутствие changed paths вне planned surface.
-
-### Evidence semantics
-
-Baseline snapshot теперь различает:
+Канонические triggers определены один раз:
 
 ```text
-captured_before_first_edit
-captured_before_path_edit
-worktree_snapshot_role
+TASK_CONTRACT_CHANGED
+REPLAN_REQUIRED
+CONTRACT_EXPANDED
+CHECK_REGISTERED
+CANDIDATE_CHANGED
+DEPENDENCY_MANIFEST_CHANGED
+RUNTIME_ENV_CHANGED
+RUNTIME_PROFILE_CHANGED
+SOURCE_CHANGED
+HIDDEN_GRADER_CHANGED
+CANDIDATE_CHANGED_AFTER_EVALUATION
 ```
 
-Поздно найденный consumer может получить честное:
+При invalidation устаревший stage больше не хранит активный PASS: result/outcome/artifacts очищаются, stage становится `INVALIDATED`, а подробности остаются в event log.
+
+Полная таблица — в [WORKFLOW.md](WORKFLOW.md).
+
+## 6. Stage state и routing outcome — разные понятия
+
+Stage state показывает состояние записи:
 
 ```text
-captured_before_first_edit = false
-captured_before_path_edit  = true
-role = pre_path_edit_after_surface_reconciliation
+NOT_STARTED
+IN_PROGRESS
+PASSED
+SKIPPED
+STOPPED
+FAILED
+INVALIDATED
 ```
 
-То есть Harness больше не притворяется, что весь task ещё pre-edit, но сохраняет trusted evidence именно для нового path до повторного изменения.
-
----
-
-## 13. Managed project workspace: Git worktree вместо копирования repository
-
-Для обычной project development Harness больше не требует:
+Routing outcome объясняет, куда идёт orchestration:
 
 ```text
-copy repository
-→ delete .venv/node_modules/.env
-→ run
-→ copy candidate назад вручную
+PASS
+REPAIR
+REPLAN
+BLOCKED
+NEEDS_USER_DECISION
+INVALID
 ```
 
-Task manifest указывает logical project name:
-
-```toml
-project = "my_project"
-workspace_mode = "git_worktree"
-```
-
-Machine-specific source path хранится только в ignored:
+Например:
 
 ```text
-harness.local.toml
+Evaluator FINDINGS
+→ stage state FAILED
+→ outcome REPAIR
+→ следующий stage Implementer
 ```
 
-Controller создаёт detached Git worktree из committed source `HEAD`.
-
-### Почему worktree
-
-Он даёт одновременно:
-
-- clean known baseline;
-- independent task diff;
-- отсутствие user dirty state;
-- отсутствие тяжёлого копирования `.venv`/`node_modules`;
-- возможность discard failed candidate;
-- shared Git objects с source repo.
-
-### Local/untracked exposure
-
-Project profile может opt-in скопировать отдельные ignored/untracked paths:
-
-```toml
-[projects.my_project.workspace]
-copy_untracked = [".env"]
-```
-
-Они доступны Agent, но excluded из task Git status/candidate patch.
-
-Default остаётся opt-in: `.env` не экспонируется автоматически.
-
-### Result publication
-
-Два режима:
+Infrastructure или protocol corruption:
 
 ```text
-keep_worktree
-apply_to_source
+→ outcome INVALID/BLOCKED
 ```
 
-`apply_to_source` после полного Harness PASS:
+а не product finding.
 
-1. строит binary candidate patch, включая новые non-ignored files;
-2. проверяет, что source `HEAD` не изменился;
-3. проверяет отсутствие новых source changes, кроме configured local exposures;
-4. применяет patch в исходный working tree;
-5. не делает commit/push/branch/PR.
+## 7. Final Gate в Phase 1
 
-Таким образом quality/execution layer остаётся отделён от будущего Git publication/task supervisor.
+Step 7 теперь:
 
----
+1. фиксирует final `candidate_id`;
+2. для benchmark повторно убеждается, что held-out не изменил candidate;
+3. строит `candidate.patch` и его SHA-256;
+4. убеждается, что packaging не изменил managed candidate;
+5. создаёт `final_acceptance.json`;
+6. выполняет текущий result handoff и пишет `delivery_record.json`;
+7. повторно убеждается, что delivery не изменил managed candidate;
+8. выдаёт отдельный `HARNESS_TASK_PASS` или `HARNESS_BENCHMARK_PASS`;
+9. записывает terminal PASS в Run State.
 
-## 14. Portable configuration model
+Полный будущий Final Gate с patch reconstruction и delivery critical section относится к последующей фазе.
 
-Harness source больше не привязан к `sa_icover/.venv`, конкретному portable Node или конкретному Jest path.
+## 8. Generated documentation
 
-Bootstrap Python:
+Команда:
+
+```bash
+./py tools/render_workflow_docs.py
+```
+
+создаёт:
 
 ```text
-SLIVIN_HARNESS_PYTHON
-→ python3
-→ python
-→ py -3
+docs/WORKFLOW.md
+docs/workflow.v1.json
 ```
 
-Codex:
+Проверка:
+
+```bash
+./py tools/render_workflow_docs.py --check
+./py tools/check_docs_sync.py
+```
+
+`check_docs_sync.py` также проверяет версии:
 
 ```text
-SLIVIN_CODEX_CMD
-→ [codex].command
-→ codex.cmd/codex from PATH
+0.8.0a2
+workflow.v1
+run-state.v1
+candidate.v1
+planner.v3
+implementer.v1
+implementation-contract.v2
+evaluator.v4
 ```
 
-Project/tool paths:
+## 9. Что намеренно не реализовано в Phase 1
+
+Phase 1 не утверждает готовность целевой архитектуры целиком. Пока отсутствуют:
 
 ```text
-harness.local.toml
-[projects.<name>.toolchain]
+User Task Contract normalizer/alignment
+Verification Plan compiler
+private Controller control plane
+Execution / Capability Broker
+new Planner protocol
+open-world Contract transaction
+runtime executor
+restricted Controller runner
+two-phase Evaluator
+clean-worktree semantic replan
+new no-progress/watchdog policy
+publication automation
 ```
 
-Поддерживается `{project_root}`.
-
-Это позволяет одному Harness repository обслуживать несколько проектов и несколько машин без редактирования committed manifests/source.
-
-
----
-
-## 13. Cross-stage protocol
-
-Strict Planner/Controller/Implementer/Evaluator handoff описан в `HANDOFF_PROTOCOL.md`.
-Planner protocol `planner.v2` не содержит свободного cross-reference списка obligations; Controller owns exact ledger and plan fingerprint. Evaluator protocol `evaluator.v2` bound к exact current IDs/fingerprint.
+Это защищает от большого недоказуемого rewrite: сначала фиксируется state ownership, затем по одной фазе меняются capabilities и model contracts.

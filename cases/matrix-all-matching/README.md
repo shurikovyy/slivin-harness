@@ -1,234 +1,124 @@
 # Matrix all-matching historical benchmark
 
-Этот case проверяет quality-core Harness на реальном historical escaped defect.
+Этот case проверяет **сам Slivin Harness** на historical defect в shared DataTable selection.
+Он не является шаблоном production prompt и не требует нового held-out для каждой новой задачи.
 
-**Текущий execution mode: managed Git worktree.**
-
-`cases/matrix-all-matching/` больше не содержит и не требует локальный `workspace/`.
-Broken baseline хранится как отдельный Git repository, путь к которому задаётся только
-в `harness.local.toml`.
-
----
-
-## Purpose
-
-Historical defect:
+Исходный пользовательский дефект:
 
 ```text
-Matrix filters
+filters
 → page selection
-→ "Выбрать все N найденных"
-→ all-matching token active
+→ «Выбрать все N найденных»
+→ token selection active
 → selectedRows empty
-→ filter-chip refresh
-→ normal "Подтвердить распред" исчезала
+→ normal «Подтвердить распред» исчезает
 ```
 
-Case проверяет, способен ли Harness исправить bug без доступа к known-good implementation.
+## Зачем здесь semantic held-out
 
----
+Historical `_92` больше не считается gold standard. Последующий аудит показал, что `_92`, `workspace_14`, candidate 0.6.2 и candidate 0.6.5 каждый исправляют часть контракта, но сохраняют разные defects.
 
-## Source baseline
+Поэтому финальный grader проверяет **observable semantics**, а не сходство с одним reference patch.
 
-Нужен отдельный Git repository с historical broken `_90`, например:
+Bundled semantic held-out проверяет семь свойств:
+
+1. current all-matching остаётся explicit selection через реальный `filter chips → bulk visibility` refresh path;
+2. current all-matching с exclusions согласованно определяет visibility / count / summary / payload даже при resident filter residue;
+3. ordinary filter-only scope не получает normal confirm action;
+4. manual checkbox selection остаётся authoritative поверх resident filter-action residue;
+5. stale / zero-target / all-excluded token не авторизует normal action;
+6. filter action сохраняет target, захваченный до более поздней смены selection во время async fetch;
+7. Distribution token-only selection не делает stage-dependent action доступным без materialized stage data. Допустимы как полноценный fail-closed stage guard, так и безопасная изоляция Matrix, при которой такой action в Distribution вообще не экспонируется.
+
+Grader намеренно не диктует helper names, file ownership или форму patch. Matrix fixture подхватывает literal boolean opt-ins из фактического `MatrixTableConfig`, поэтому безопасный Matrix-only design не отклоняется только за то, что shared DataTable по умолчанию остаётся conservative.
+
+## Что held-out НЕ делает
+
+В benchmark mode:
 
 ```text
-C:/Users/<user>/Downloads/sa_icover_90
+agent work
+→ normal checks
+→ blind Evaluator
+→ hidden semantic held-out
 ```
 
-Требования:
+Если held-out падает, trial заканчивается. Конкретный assertion не возвращается Implementer в том же trial.
+
+Held-out нужен разработчику Harness, чтобы измерять качество pipeline. При новой production-задаче новый hidden grader заранее писать не требуется.
+
+## Calibration (0.6.6)
+
+Calibration больше не использует `_92` как positive reference.
+
+Новый certificate подтверждает:
 
 ```text
-Git repository
-HEAD = broken historical baseline
-git status --short = empty
+_90 broken baseline          → FAIL
+_92 known-incomplete         → FAIL
+workspace_14 known-incomplete→ FAIL
+0.6.2 candidate incomplete   → FAIL
+0.6.5 candidate incomplete   → FAIL
+semantic-good fixture A      → PASS
+semantic-good fixture B      → PASS
 ```
 
-Baseline не нужно копировать в Harness repository.
+Оба positive fixture построены только для калибровки observable contract и архитектурно различаются: один поддерживает explicit all-matching как общий DataTable contract с fail-closed Distribution, второй использует Matrix-only opt-in и сохраняет conservative поведение Distribution. Они **не входят в release archive**. В certificate сохраняются только hash-bound fingerprints и наблюдённые PASS/FAIL. Fingerprint вычисляется из SHA-256 четырёх contract-bearing файлов (`selection/core.js`, `selection/bulk_edit.js`, `distribution/index.js`, `tableConfigs/matrix.js`) через canonical JSON.
 
-Если `_90` получен как обычная папка без `.git`, его можно **один раз** превратить
-в Git baseline через `tools/prepare_workspace.py`. После этого benchmark работает
-напрямую от этого source repository и `prepare_workspace.py` больше не участвует
-в каждом запуске.
+Это защищает от двух ошибок одновременно:
 
----
+- grader, который пропускает известный плохой вариант;
+- grader, который принимает только форму одного «любимого» исправления.
 
-## Local project profile
+## Подготовка broken baseline
 
-Machine-specific binding находится в ignored `harness.local.toml`.
+Нужен отдельный clean Git repository с historical `_90`.
 
-Пример:
+В `harness.local.toml`:
 
 ```toml
-[codex]
-command = "C:/path/to/codex.cmd"
-
-[workspace]
-# На Windows рекомендуется короткий root.
-root = "C:/Users/<user>/.slivin/w"
-
 [projects.matrix_baseline]
 repo = "C:/Users/<user>/Downloads/sa_icover_90"
 base_ref = "HEAD"
 require_clean_source = true
-
-# Historical source должен остаться `_90`.
 result_mode = "keep_worktree"
 
 [projects.matrix_baseline.toolchain]
 project_python = "{project_root}/.venv/Scripts/python.exe"
-node = "C:/path/to/node.exe"
+node = "C:/Users/<user>/Tools/node/node.exe"
 jest = "{project_root}/node_modules/jest/bin/jest.js"
-
-[projects.matrix_baseline.workspace]
-# Optional explicit trust decision.
-copy_untracked = [".env"]
 ```
 
-`{project_root}` Harness подставляет из:
+Если baseline ещё не Git repository:
 
-```toml
-[projects.matrix_baseline]
-repo = "..."
+```bash
+./py tools/prepare_workspace.py C:/path/to/sa_icover_90
 ```
 
-В `task.toml` ничего вместо `{workspace}` писать не нужно: `{workspace}` — это
-runtime path автоматически созданного disposable worktree текущего run.
+Реальный `.env` для frontend benchmark не нужен.
 
----
-
-## Run
-
-Из Harness root:
+## Запуск
 
 ```bash
 ./py tools/self_check.py
 ./run cases/matrix-all-matching/task.toml
 ```
 
-Harness автоматически:
+Каждый run создаёт новый detached worktree. `result_mode = "keep_worktree"`, поэтому source `_90` не меняется.
 
-```text
-source `_90` HEAD
-    ↓
-git worktree add --detach
-    ↓
-новый unique managed workspace
-    ↓
-Planner / Implementer / checks / Evaluator / held-out
-```
+## Ограничения benchmark
 
-Физический worktree создаётся под configured `[workspace].root`, а не внутри
-`cases/matrix-all-matching/`.
+Этот case не доказывает корректность всего `sa_icover`. В частности, semantic held-out не является repository-wide OData, DB или performance audit.
 
----
+Его назначение узкое: проверять, способен ли текущий Harness автономно сохранить связанные selection/lifecycle/stage semantics на реальном historical bug без reference solution в контексте агента.
 
-## Result
 
-Case использует:
+## 0.6.6 note
 
-```toml
-result_mode = "keep_worktree"
-```
+0.6.6 recalibrates the same seven semantic properties to remove one implementation bias discovered by the 0.6.5 trial: the grader no longer requires Distribution to adopt the new explicit-token representation if the candidate safely isolates the behavior to Matrix. The 0.6.5 candidate is added as a negative control and still fails two independent properties (new-action authority with filter residue and zero/all-excluded target safety).
 
-Поэтому source `_90` **не изменяется** после успешного run.
+When a benchmark exhausts its repair budget after deterministic checks are green, Harness may run the held-out once more as **diagnostic-only** evidence for the Harness developer. That output is never returned to Implementer.
 
-Accepted/intermediate candidate остаётся в managed worktree, а run artifacts
-сохраняются под:
+## 0.7.0 execution note
 
-```text
-runs/MATRIX_DATATABLE_ALL_MATCHING_BULK_ACTION_SCOPE_BENCHMARK/<run-id>/
-```
-
-После запуска Controller печатает location managed worktree. При failed run worktree
-тоже сохраняется для диагностики.
-
----
-
-## Re-run
-
-Новый независимый trial не требует reset старого worktree.
-
-Достаточно убедиться, что source baseline всё ещё clean:
-
-```bash
-cd /path/to/sa_icover_90
-git status --short
-```
-
-и снова выполнить:
-
-```bash
-cd ~/Tools/slivin-harness
-./run cases/matrix-all-matching/task.toml
-```
-
-Каждый run получает новый detached worktree от того же source `HEAD`.
-
-Старый retained/failed worktree можно оставить для audit либо удалить корректно через
-source repository:
-
-```bash
-cd /path/to/sa_icover_90
-git worktree list
-git worktree remove --force "<worktree-path>"
-git worktree prune
-```
-
-На Windows для уже созданного очень длинного path может потребоваться
-`core.longpaths=true`; подробности — `docs/WINDOWS_SETUP.md`.
-
----
-
-## Known-good reference и calibration
-
-Полная `_92` рядом с Agent не нужна.
-
-Held-out был отдельно calibrated:
-
-```text
-_90 → FAIL
-_92 → PASS
-```
-
-Repository хранит hash-bound calibration certificate.
-
-Если grader/check definition меняется, Harness должен отказаться от historical
-acceptance до explicit recalibration.
-
----
-
-## Held-out scope
-
-Held-out проверяет public Matrix contract:
-
-1. all-matching остаётся explicit selection;
-2. ordinary filter-only не показывает normal confirm action;
-3. manual checkbox сохраняет normal action.
-
-Он не кодирует ready-made implementation и не используется как tutoring feedback
-внутри trial.
-
----
-
-## Historical milestone
-
-На lineage 0.4.6 один clean trial завершился:
-
-```text
-Planner
-→ Implementer
-→ deterministic checks
-→ Fresh Evaluator
-→ held-out
-→ HARNESS_TASK_PASS
-```
-
-Позднее case был переведён на managed-worktree infrastructure и используется как
-regression benchmark для следующих Harness increments.
-
-Текущий validation status новой infrastructure см. в:
-
-```text
-docs/CURRENT_STATE.md
-```
+0.7.0 deliberately does **not** change the seven semantic properties or their calibration. The experiment changes the solver side: Planner discoveries become an Implementation Contract, Implementer must run trusted self-verification in-turn, and supported tests discovered for sibling consumers are added to Controller checks. This keeps the next blind Matrix trial comparable with 0.6.6: a better result should come from better execution, not a weaker oracle.

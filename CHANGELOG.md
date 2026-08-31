@@ -1,152 +1,141 @@
 # Changelog
 
-## Unreleased
+## 0.8.0a2 — Phase 1: native Windows file-mode portability
 
-### Trusted historical baseline gate
+- Fixed the Phase 1 self-check on native Windows/NTFS: the executable-bit integration test now performs a real Git capability probe and skips only when Git does not expose `chmod` as a mode-only working-tree change.
+- Kept the `candidate.v1` behavior unchanged: file mode remains part of candidate identity whenever Git reports that mode in the HEAD-to-working-tree diff.
+- Clarified the platform boundary in README, architecture, quality-model and Windows setup documentation; the skip is explicit and does not convert a real Git-visible mode change into PASS.
 
-- Historical benchmarks can now require `confirm_current_baseline_broken=true`.
-- The Controller executes the held-out grader against the exact current workspace before Planner starts and requires the expected FAIL.
-- Planner receives only sanitized `CONTROLLER_HELDOUT / CONFIRMED_BROKEN` evidence; hidden assertion/output remains undisclosed.
-- A Planner `BLOCKED` verdict cannot negate Controller-confirmed historical failure with a lower-fidelity synthetic probe.
-- Added regression coverage for baseline FAIL/PASS gating and evidence sanitization.
+## 0.8.0a1 — Phase 1: canonical workflow and versioned Run State
 
+- Added `workflow.v1` as the single machine-readable Step 0–7 definition: stage order, success transitions, routing outcomes, status enums and invalidation rules are no longer duplicated only in prose and `task_runner.py`.
+- Added atomic `run-state.v1` artifacts for every real run, including stage states, attempt lineage, revision vector, baseline binding, candidate identity, event history and terminal result.
+- Added canonical `candidate.v1`: baseline SHA, workspace HEAD, paths, deletions, symlink targets, file modes and file bytes are bound into one `candidate_id`; `.harness_tmp` and `.venv` are excluded.
+- Planner, Implementer and Evaluator JSON schemas now import their status enums from the canonical workflow instead of maintaining duplicate string lists. Model prompts/protocol shapes remain unchanged in Phase 1.
+- Existing 0.7.1 execution is mapped onto Step 0–7. Runtime Step 5 is explicitly recorded as compatibility `RUNTIME_VERIFICATION_SKIPPED`; no runtime executor is claimed yet.
+- Controller observes candidate identity before/after deterministic checks, Evaluator and held-out; candidate mutation or workspace HEAD movement aborts the run.
+- Final Gate now records `final_acceptance.json`, patch SHA-256, terminal Run State and distinct `HARNESS_TASK_PASS` / `HARNESS_BENCHMARK_PASS`.
+- Run State rejects undeclared stage skips, rejects skip codes recorded as ordinary PASS, and enforces mode-specific final results.
+- Added generated `docs/WORKFLOW.md` and `docs/workflow.v1.json`; docs-sync rejects drift from `slivin_harness/workflow.py`.
+- Added unit coverage for canonical transitions, invalidation, candidate identity (including deletion, binary content and executable mode), schema enum reuse and generated workflow output.
 
-### Strict cross-stage protocol (0.5.1 candidate)
+## 0.7.1 RC — load-bearing Planner risks and Implementer timeout continuation
 
-- Replaced Planner-authored free-form `release_obligations` with Controller-derived blocking IDs.
-- Added `release_critical` booleans to CC/INT items; all LIFE/REP/AUTH/CONS/PRES/TEST remain mechanically blocking.
-- Added explicit `planner.v2` / `evaluator.v2` protocol versions.
-- Added plan fingerprints and bound Evaluator verdicts to the exact current plan revision.
-- Dynamically constrain Evaluator obligation/assumption IDs to Controller-approved enums.
-- Added structured compact Planner validation feedback instead of replaying huge malformed artifacts.
-- Added strict protocol regression tests and `docs/HANDOFF_PROTOCOL.md`.
-- No fuzzy/regex repair of malformed model references is performed.
+- `Implementation Contract` upgraded to `implementation-contract.v2`: each Planner `risk` becomes an explicit `RISK-*` item that Implementer must verify before `COMPLETE`; risks are no longer informational prose that can be lost between Planner and execution;
+- Planner policy adds generic reachable state boundaries for state/count/token/selection work: empty/zero/all-excluded, stale and current/resident coexistence should enter risks/test plan when material;
+- App Server exposes a typed `TurnTimeoutError`; Implementer timeout no longer discards a nearly finished candidate;
+- Controller automatically performs one short continuation turn in the **same Implementer thread** after timeout, preserving current worktree changes and asking only for unfinished contract/risk items plus self-verification;
+- continuation is capped at one attempt and at most 300 seconds; a second timeout remains a hard FAIL, so this is recovery rather than unbounded latency;
+- no new model role, repair cycle or manifest field was added;
+- Matrix semantic held-out and calibration are byte-for-byte unchanged from 0.7.0, so the next trial measures execution improvement against the same exam.
+## 0.7.0 RC — execution contract and in-turn self-verification
 
+- Planner remains compact, but Controller now converts its expected behavior, preservation, materially affected consumers and test plan into a small `Implementation Contract`; no extra model role is added;
+- Implementer protocol `implementer.v1` requires structured evidence for every contract item before `COMPLETE`; consumers may be `NOT_APPLICABLE` only with concrete evidence;
+- Controller generates a Harness-owned `SELF_VERIFY_COMMAND` from the same trusted repair checks/toolchain used after the turn; Implementer must reach `SELF_VERIFY_PASS` before completion;
+- self-verification stamp is bound to current candidate file contents, so edits after PASS invalidate it;
+- Implementer may report additional repo-relative test paths for discovered sibling consumers; Harness builds supported Jest/Python commands from trusted toolchain/templates instead of executing arbitrary agent commands;
+- supported dynamic checks join the ordinary repair loop and their results are visible to the blind Evaluator;
+- Evaluator remains blind to Planner artifact, Implementation Contract and Implementer justification;
+- run artifacts now include implementation contracts/reports and output `first_evaluation_pass` / repair metrics;
+- Planner output arrays are capped and instructions explicitly stop after sufficient evidence to avoid returning to the old prose/obligation explosion;
+- Matrix semantic held-out/calibration are unchanged from 0.6.6, so the next benchmark measures execution improvement rather than a moved grader.
 
+## 0.6.6 RC — outcome-based Matrix oracle and state-boundary review
 
-### Documentation refactor: managed worktree is the canonical workflow
+- Matrix semantic grader no longer requires one implementation strategy: it accepts both a generic all-matching contract with fail-closed Distribution and a safe Matrix-only opt-in that keeps Distribution stage actions unavailable;
+- Matrix fixture reads literal boolean selection opt-ins from the actual `MatrixTableConfig`, so an in-scope config gate is exercised instead of being invisible to the oracle;
+- Distribution held-out checks the observable safety outcome (stage-dependent action is hidden or disabled), not a specific internal `hasSelection` representation;
+- candidate 0.6.5 is added as a negative calibration control; it still FAILs two independent semantic properties, while two architecturally different positive fixtures PASS;
+- calibration fingerprint surface now includes `tableConfigs/matrix.js` because Matrix-scoped opt-in is a contract-bearing implementation choice;
+- Evaluator policy adds one compact generic rule for reachable state coexistence and empty/zero/all-excluded targets, without restoring REP/AUTH/LIFE ledgers;
+- when a historical benchmark exhausts `max_fix_cycles` after green checks, Harness runs held-out once as diagnostic-only evidence; the result is recorded but never returned to Implementer;
+- main low/medium/high pipeline, repair limits and App Server transport behavior are unchanged.
 
-- Removed stale Matrix instructions that copied `_90` into
-  `cases/matrix-all-matching/workspace`.
-- Matrix historical benchmark documentation now uses the external
-  `matrix_baseline` project profile and a fresh managed Git worktree per trial.
-- Reframed `prepare_workspace.py` and static `workspace = ...` as legacy/fixture
-  fallback mechanisms rather than the normal historical workflow.
-- Marked D-020 absolute `.env` ban as superseded by D-036 explicit opt-in policy.
-- Updated CURRENT_STATE/HISTORY with the first real managed-worktree Windows run,
-  including the UTF-8 console and long-path failures and their hardening status.
-- Documented that repeated managed historical trials create new worktrees and do
-  not reset/reuse a `cases/.../workspace` directory.
+## 0.6.5 RC — retryable App Server stream recovery
 
+- `error` notification with `willRetry=true` is transient: Harness logs `APP_SERVER_TURN_RETRY` and keeps waiting for the same turn;
+- transient retries stay inside the original turn timeout, so repeated disconnects cannot extend a task indefinitely;
+- `willRetry=false` / terminal App Server errors remain fatal;
+- regression tests cover both retryable recovery and terminal error handling;
+- Matrix semantic grader, calibration and Planner/Evaluator policies are unchanged from 0.6.4.
 
-### Windows portability fixes
+## 0.6.4 RC — non-blocking Planner unknowns and live console
 
-- Made the UTF-8 console regression test newline-agnostic (`LF`/`CRLF`) while
-  still asserting exact Unicode content.
-- Bounded managed worktree project/task filesystem segments with a stable hash
-  to reduce Windows path depth without losing the full task ID in metadata.
-- Enable repository-local `core.longpaths=true` before managed worktree creation
-  on Windows.
+- `READY` Planner artifact may keep honest non-blocking `unknowns`; product-semantic uncertainty still requires `NEEDS_USER_DECISION`, and missing mandatory evidence still requires `BLOCKED`;
+- removed the `READY + unknowns => protocol failure` guard that stopped the first 0.6.3 Matrix trial before implementation;
+- Git Bash/CMD launchers now set `PYTHONUNBUFFERED=1`; Controller stdout/stderr are UTF-8 line-buffered with write-through so stages, heartbeat and Implementer output appear live;
+- console regression test verifies line buffering/write-through; Planner protocol regression verifies non-blocking unknowns;
+- semantic Matrix held-out/calibration remain unchanged from 0.6.3.
 
+## 0.6.3 RC — semantic Matrix benchmark and shared-state review policy
 
-### Windows console / failed-worktree diagnostics
+- bundled Matrix held-out rewritten as a standalone semantic Node grader: no reference patch matching and no hidden Jest dependency;
+- `_92` is no longer a positive gold fixture: calibration now requires `_90`, `_92`, `workspace_14` and the 0.6.2 candidate to FAIL, while two non-distributed semantic-good variants PASS;
+- semantic grader covers the real filter-chips refresh path, stale/zero-target states, selection authority consistency, an async filter-action target race and Distribution token-only fail-closed stage semantics;
+- calibration certificate schema v2 records multiple hash-bound positive/negative controls instead of only `broken=FAIL / good=PASS`;
+- Planner/Evaluator policy gains two generic checks only: shared representations are traced through local eligibility/stage/permission guards, and stateful action targets are checked across lifecycle changes;
+- Matrix benchmark documentation now explicitly separates historical held-out from ordinary production tasks.
 
-- Enforced UTF-8 stdout/stderr for Harness launchers and Controller to prevent
-  Git Bash/Windows ANSI `charmap` corruption and UnicodeEncodeError failures.
-- Added a regression test that prints Cyrillic plus a Unicode arrow from a
-  legacy `cp1251` stream and verifies UTF-8 output.
-- Managed worktree metadata is now recorded at run start, not only after a
-  successful task.
-- Every managed run prints `MANAGED_WORKTREE_ON_EXIT` (or an explicit missing
-  marker) so failed/replanned tasks remain locatable for diagnosis.
+## 0.6.2 RC — benchmark gate integrity and blocked-write fail-fast
 
+- все checks получают `SLIVIN_HARNESS_WORKSPACE` и `SLIVIN_HARNESS_ROOT`; bundled Matrix held-out больше не падает из-за отсутствующей workspace env;
+- baseline benchmark считается доказанно broken только если failing held-out дошёл до ожидаемого oracle marker; setup/infrastructure failure больше не считается defect evidence;
+- confirmed-broken benchmark с пустым diff после IMPLEMENT останавливается до checks/evaluator, чтобы не тратить десятки минут на заведомо неисправимый candidate;
+- Implementer прекращает повторять write attempts после двух разных `Permission denied`/`Access denied`;
+- Windows docs фиксируют отдельную диагностику nested-directory write из-за известных ограничений native Codex workspace-write.
 
+## 0.6.1 RC — App Server SandboxMode compatibility
 
-### D-032 and managed-project workspace increment
+- исправлен `thread/start.sandbox`: теперь отправляются wire values `read-only` / `workspace-write`;
+- удалено ошибочное преобразование в `readOnly` / `workspaceWrite`, которые являются типами `SandboxPolicy`, а не `SandboxMode`;
+- regression test проверяет оба допустимых thread sandbox mode и отклоняет camelCase policy type;
+- документация синхронизирована с фактическим App Server contract.
 
-- Enforced `actual changed paths ⊆ Planner.candidate_paths` for medium/high-risk tasks.
-- Unexpected changed paths are recorded, rolled back to task baseline, replanned and
-  snapshotted before the Implementer may re-apply a required change.
-- Added per-path evidence (`captured_before_path_edit`) for late discovered consumers.
-- Added final change-surface guard before task PASS.
-- Removed project-specific hardcoded Python/Node/Jest defaults from Harness source.
-- Added portable machine/project profiles in ignored `harness.local.toml` with
-  `{project_root}` toolchain expansion.
-- Decoupled Harness bootstrap Python from target-project virtualenv.
-- Added managed detached Git-worktree mode for ordinary project tasks.
-- Added opt-in `copy_untracked` local file exposure (including `.env` when explicitly
-  allowed) without including those files in candidate patches.
-- Added `keep_worktree` and `apply_to_source` result modes; `apply_to_source` applies
-  the accepted binary candidate diff to the original clean source working tree without
-  commit/push/branch changes.
-- `prepare_workspace.py` no longer deletes `.venv`/`node_modules`; static historical
-  `.env` visibility can be opted into with `--allow-env`.
-- Added stdlib tests for D-032 rollback/evidence semantics and managed worktree/apply.
+## 0.6.0 RC — упрощение quality-core
 
-Validation status: local `tools/self_check.py` passes in the development environment;
-Windows/App Server historical regression is required before tagging this increment as a
-new validated milestone.
+### Удалено
 
-### Documentation baseline
+- отдельная роль Impact Auditor;
+- protocol `impact.v1`;
+- десятки обязательных `CC/LIFE/REP/AUTH/PRES/INT/TEST` records;
+- dynamic change-surface negotiation и pre-edit snapshot ledger;
+- поля manifest `max_change_surface_cycles`, `max_impact_cycles`, `max_plan_validation_retries`;
+- передача Planner artifact в независимый Evaluator;
+- устаревшие и дублирующие документы.
 
-- Added architecture documentation under `docs/`.
-- Recorded accepted, rejected and deferred decisions.
-- Recorded Windows sandbox/workspace setup and troubleshooting history.
-- Recorded the causal development history from the first App Server/sandbox probes
-  through the successful Matrix historical benchmark.
-- Added a maintenance policy so future Harness changes retain their rationale.
+### Новый pipeline
 
+- `low`: `Implementer → checks`;
+- `medium/high`: `Planner → Implementer → checks → Evaluator`;
+- repair после failed checks или Evaluator findings;
+- не более одного replan по умолчанию;
+- held-out остаётся финальным экзаменом без feedback.
 
-### Continuation-context audit
+### Качество
 
-- Added `docs/CURRENT_STATE.md` as the canonical cross-session handoff.
-- Documented the current Git/publication trust boundary for task agents.
-- Documented the target-project Python/Django runtime gap.
-- Documented repeated historical-workspace reset procedure.
-- Recorded the successful Matrix trial's planned-vs-actual path mismatch:
-  Distribution was correctly added by the Implementer but was outside the
-  initial `candidate_paths`, so its pre-edit evidence was not captured.
-- Accepted a future mechanical final-diff-to-plan reconciliation contract.
-- Recorded the README newline oracle incident as a second example of semantic
-  grader over-specification.
+- компактный `planner.v3`;
+- blind-first `evaluator.v4`;
+- `PASS` запрещён при findings или `unverified`;
+- Evaluator получает фактический diff, включая новые untracked files;
+- strict manifest version 2 и hard error на неизвестные поля;
+- owner-defined `allowed_paths` вместо guessed hard boundary;
+- documentation sync check;
+- обновлённый regression corpus Harness.
 
-## v0.4.6
+### Workspace и публикация
 
-Quality-core milestone.
+- sensitive local path требует `allow_sensitive_copy = true`;
+- symlink, junction и reparse point не копируются в agent workspace;
+- failed workspace preparation удаляет созданный worktree;
+- App Server stderr сохраняется в task-local runtime;
+- timeout сначала отправляет `turn/interrupt`;
+- публикация выполняет `git apply --check` и сравнивает итоговый source diff с accepted candidate.
 
-Current pipeline includes:
+### Исправление historical claims
 
-- Planner / Characterization;
-- current-contract and assumption validation;
-- pre-edit baseline snapshots;
-- release obligation evidence ledger;
-- LIFE state lifecycle/ownership audit;
-- REP representation-consumer audit;
-- AUTH authority/precedence audit;
-- Fresh Evaluator;
-- deterministic repair loops and replan loops;
-- held-out checks without tutoring;
-- hash-bound historical grader calibration;
-- heartbeat, timings, health checks and run artifacts;
-- repository instruction/skill discovery;
-- disposable workspace preparation and secret hygiene.
+Предыдущий Matrix trial был ложноположительным: узкий held-out прошёл, но внешний аудит нашёл рассогласование selection authority и Distribution fail-open. Он больше не описывается как доказанный successful benchmark.
 
-### Proven historical milestone
+## 0.5.x
 
-The Matrix all-matching historical case was completed autonomously:
-
-```text
-calibration certificate PASS
-→ Planner
-→ Implementer
-→ deterministic checks PASS
-→ Fresh Evaluator PASS
-→ held-out PASS
-→ HARNESS_TASK_PASS
-```
-
-The final candidate also passed an independent post-hoc audit without a material
-escaped defect. In particular, the shared-selection change preserved the
-Distribution stage guard as fail-closed for token-only selection.
-
-This is an intermediate quality milestone, not proof of universal reliability.
+Строгий многостадийный Harness с Planner, Implementer, Impact Auditor, Evaluator, obligation ledger и historical Matrix benchmark. Эта архитектура дала полезные наблюдения, но оказалась слишком дорогой и всё равно не исключила ложный `PASS`.

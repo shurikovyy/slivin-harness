@@ -1,538 +1,202 @@
-# Windows setup и проверенные ограничения
+# Настройка на Windows
 
-## 1. Проверенная среда
-
-Разработка Harness велась на корпоративной Windows-машине без обязательного administrator access.
-
-Проверенная конфигурация:
+## 1. Рекомендуемая структура
 
 ```text
-Windows 10 build 19045
-Git Bash / MINGW64
-Codex CLI 0.148.0
-Python 3.11-compatible runtime
-portable Node
-project-local Python venv
+C:\Users\<user>\Tools\slivin-harness
+C:\Users\<user>\Tools\codex-cli\...
+C:\Users\<user>\Tools\node\node.exe
+C:\Users\<user>\.slivin-harness\workspaces
 ```
 
-Исторически на первой машине Codex/Node/project venv были user-local installations,
-но их конкретные filesystem paths **не являются Harness contract**.
+Короткий workspace root снижает риск Windows path-length проблем.
 
-Текущая конфигурация:
+## 2. Локальный config
 
-```text
-Harness bootstrap Python → environment/PATH
-Codex                  → local config/environment/PATH
-project repository     → [projects.<name>].repo
-project Python/Node/Jest → [projects.<name>.toolchain]
+Создайте `harness.local.toml` рядом с `task_runner.py`:
+
+```toml
+[codex]
+command = "C:/Users/<user>/Tools/codex-cli/node_modules/.bin/codex.cmd"
+
+[workspace]
+root = "C:/Users/<user>/.slivin-harness/workspaces"
+
+[projects.sa_icover]
+repo = "C:/Users/<user>/Documents/sa_icover"
+base_ref = "HEAD"
+result_mode = "keep_worktree"
+require_clean_source = true
+
+[projects.sa_icover.toolchain]
+project_python = "{project_root}/.venv/Scripts/python.exe"
+node = "C:/Users/<user>/Tools/node/node.exe"
+jest = "{project_root}/node_modules/jest/bin/jest.js"
 ```
 
-Harness не требует изменения global `PATH`: absolute user-local paths можно хранить в ignored `harness.local.toml`.
+Используйте `/` в TOML paths либо экранируйте обратные слеши.
 
----
+## 3. Запуск
 
-## 2. Почему используем Codex App Server
+Git Bash:
 
-App Server запускается из установленного Codex CLI:
-
-```text
-codex app-server
+```bash
+./py tools/self_check.py
+./run path/to/task.toml
 ```
 
-Это не отдельный продукт/install.
+CMD:
 
-Harness вызывает executable напрямую.
-
-Это удобно в корпоративной среде:
-
-- global PATH менять не обязательно;
-- admin install не нужен;
-- версия Codex контролируется user-local installation.
-
----
-
-## 3. Самая сложная проблема Windows sandbox: split writable roots
-
-Первоначально `workspace-write` через App Server/Codex exec создавал writable roots:
-
-```text
-[workdir, /tmp, $TMPDIR]
+```cmd
+py.cmd tools\self_check.py
+run.cmd path\to\task.toml
 ```
 
-Unelevated Windows restricted-token sandbox не мог безопасно enforce несколько разнесённых writable roots и fail-closed сообщал примерно:
+Launchers сами определяют Harness root, поэтому запуск не зависит от текущего каталога.
 
-```text
-windows unelevated restricted-token sandbox
-cannot enforce split writable root sets directly;
-refusing to run unsandboxed
+## 4. Git Bash и native Windows executables
+
+Если Git Bash искажает аргументы native command, запускайте с:
+
+```bash
+MSYS2_ARG_CONV_EXCL='*' ./run path/to/task.toml
 ```
 
-Попытка использовать elevated sandbox была неприемлема: она требовала administrator credentials.
+## 5. TEMP и cache
 
-### Рабочее решение
-
-App Server запускается со strict config:
-
-```text
-sandbox_workspace_write.exclude_slash_tmp=true
-sandbox_workspace_write.exclude_tmpdir_env_var=true
-```
-
-В результате workspace-write boundary становится:
-
-```text
-[workdir]
-```
-
-Это позволило без admin:
-
-- читать/писать project workspace;
-- применять patch;
-- запускать shell;
-- запускать Python;
-- запускать pytest;
-- запускать Node/Jest.
-
-### Важно
-
-Это проверенный workaround для конкретной версии Codex CLI, а не вечная гарантия.
-
-После обновления Codex CLI нужно повторно проверить sandbox probes.
-
----
-
-## 4. Task-local temp
-
-После удаления внешних temp writable roots тесты и инструменты должны писать temp внутрь workspace:
+Harness задаёт дочерним процессам task-local paths под:
 
 ```text
 <workspace>/.harness_tmp/
 ```
 
-Harness задаёт child-process environment примерно так:
+Это уменьшает sandbox denials и не добавляет cache в candidate diff.
 
-```text
-TEMP=.harness_tmp
-TMP=.harness_tmp
-TMPDIR=.harness_tmp
-XDG_CACHE_HOME=.harness_tmp/cache
-NPM_CONFIG_CACHE=.harness_tmp/npm
-PYTHONDONTWRITEBYTECODE=1
-```
+## 6. Worktree cleanup
 
-Плюсы:
+Успешный `keep_worktree` и failed run сохраняют worktree для диагностики.
 
-- sandbox не требует write за пределами workspace;
-- Jest/Python cache не загрязняет product diff;
-- runtime artifacts принадлежат конкретной задаче.
-
----
-
-## 5. `.harness_tmp` должна быть ignored
-
-Outer Harness repo игнорирует task workspaces целиком.
-
-Для static historical inner repo `.harness_tmp/` добавляется через:
-
-```text
-.git/info/exclude
-```
-
-Для managed linked Git worktree используется worktree-specific:
-
-```text
-.harness_git_excludes
-core.excludesFile=<workspace>/.harness_git_excludes
-```
-
-Это позволяет не менять project `.gitignore`.
-
----
-
-## 6. PowerShell Constrained Language
-
-Windows sandbox может запускать PowerShell в Constrained Language Mode.
-
-На практике были блокированы некоторые:
-
-```text
-[System.IO.File] static calls
-reflection/dynamic .NET operations
-```
-
-При этом нормально работали:
-
-```text
-Get-Content
-Get-ChildItem
-git
-Python
-Node
-pytest/Jest
-```
-
-Правило:
-
-> Для нетривиальной обработки файлов предпочитать маленький Python script вместо попыток обходить PowerShell restrictions.
-
----
-
-## 7. Git Bash / MSYS argument conversion
-
-Git Bash автоматически преобразует некоторые Unix-looking аргументы для native Windows executables.
-
-Например при прямом вызове:
-
-```text
-cmd.exe /d /c ...
-```
-
-может понадобиться:
+Удаляйте его через source repository:
 
 ```bash
-MSYS2_ARG_CONV_EXCL='*'
+git worktree list
+git worktree remove --force "<worktree-path>"
+git worktree prune
 ```
 
-Это особенно важно для low-level sandbox probes.
+При ошибке во время подготовки worktree Harness сам удаляет незавершённый worktree.
 
-Не добавлять этот env глобально без необходимости.
+## 7. EOL
 
----
-
-## 8. App Server process health
-
-Длинный structured Planner/Evaluator turn может несколько минут не выдавать user-facing текст.
-
-Harness поэтому показывает heartbeat:
-
-```text
-[PLANNING] working...
-elapsed=04:20
-app-server=alive
-last-event=00:06
-```
-
-Adapter отдельно проверяет:
-
-```text
-process.poll()
-last protocol activity
-turn timeout
-```
-
-Если App Server умер, Controller должен обнаружить это раньше общего 15-минутного ожидания.
-
----
-
-## 9. Structured output и `final_answer`
-
-App Server может emit:
-
-```text
-commentary agentMessage
-final_answer agentMessage
-```
-
-Первая реализация клиента склеивала все completed agent messages:
-
-```text
-JSON1
-JSON2
-```
-
-что приводило к:
-
-```text
-JSONDecodeError: Extra data
-```
-
-Исправление:
-
-```text
-phase=final_answer → authoritative
-fallback → last completed agent message
-```
-
-Этот transport detail является частью архитектуры, а не косметикой.
-
----
-
-## 10. Streaming implementer output
-
-`item/agentMessage/delta` — chunk одного сообщения, а не отдельное сообщение.
-
-Поэтому:
-
-```text
-newline after every delta
-```
-
-сломал бы читаемость.
-
-Текущая схема:
-
-```text
-stream delta без newline
-item/completed(agentMessage)
-→ separator/newline
-```
-
----
-
-## 11. EOL и file mode — разные проблемы
+Harness не нормализует project files самовольно. Добавляйте project-specific EOL check в manifest, например существующий `tools/check_changed_eol.py`.
 
 Диагностика:
 
 ```bash
-git ls-files --eol py run
-git diff --ignore-space-at-eol -- py run
-git diff --summary -- py run
+git ls-files --eol <file>
+git diff --check
+git diff --summary
 ```
 
-Можно иметь:
+## 8. Sensitive files
 
-```text
-i/lf w/lf
+`.gitignore` не запрещает агенту читать `.env`. Не копируйте real secrets без необходимости.
+
+Явный opt-in:
+
+```toml
+[projects.sa_icover.workspace]
+copy_untracked = [".env"]
+allow_sensitive_copy = true
 ```
 
-и всё равно видеть modification из-за:
+Symlink/junction/reparse point в `copy_untracked` отклоняется.
 
-```text
-100755 → 100644
-```
-
-На Windows filesystem executable bit ведёт себя иначе, чем на Linux.
-
-Рекомендуемый local setting:
-
-```bash
-git config core.filemode false
-```
-
-При этом в repository index shell launchers `run` и `py` должны оставаться:
-
-```text
-100755
-```
-
-чтобы Linux/macOS clone получил executable files.
-
----
-
-## 12. `.gitattributes`
-
-Harness фиксирует EOL policy:
-
-```text
-*.py   LF
-*.toml LF
-*.md   LF
-*.cjs  LF
-run    LF
-py     LF
-*.cmd  CRLF
-```
-
-Если новая `.gitattributes` расходится с уже committed blobs, может потребоваться отдельный:
-
-```bash
-git add --renormalize ...
-```
-
-commit.
-
-Не путать EOL normalization с file-mode change.
-
----
-
-## 13. Проверка новой Windows-машины
-
-После clone:
+## 9. Что проверить после установки
 
 ```bash
 ./py tools/self_check.py
+./run examples/project-task.example.toml --validate-only
 ```
 
-Создать local config:
+Реальный App Server turn проверяется только запуском небольшой project-задачи. Self-check не вызывает Codex и не расходует model tokens.
+
+Для `thread/start` Harness использует wire values `read-only` / `workspace-write`. Если Codex CLI сообщает `unknown variant workspaceWrite`, установлена версия Harness до 0.6.1.
+
+## 10. Если появляется `Permission denied` при записи workspace
+
+Один Matrix-run на Windows показал `Permission denied` для tracked-файлов и `.harness_tmp`, хотя последующие controlled probes на той же машине успешно проверили: root write, nested write, запись существующего tracked-файла и `apply_patch`. Поэтому этот incident не считается доказанным постоянным ограничением nested paths или linked worktree.
+
+Harness не переключается автоматически на `danger-full-access`: это сломало бы filesystem boundary. Если отказ повторяется, сначала выполните маленький write-probe в том же project/workspace и отделите воспроизводимую sandbox-проблему от разового turn failure.
+
+При confirmed-broken benchmark Harness останавливается сразу, если Implementer не смог создать candidate diff, вместо повторных evaluator cycles.
+
+
+## 11. Если progress появляется только после завершения run
+
+Начиная с 0.6.4 Harness включает `PYTHONUNBUFFERED=1` в Git Bash/CMD launchers и line-buffered/write-through
+stdout/stderr внутри Controller. Ожидаемое поведение:
+
+- `TASK_STARTED`, стадии и heartbeat появляются сразу;
+- Implementer agent-message deltas стримятся сразу;
+- structured JSON Planner/Evaluator выводится после завершения соответствующего turn, а до этого виден heartbeat.
+
+Если актуальная версия показывает весь stdout только в конце, проверьте, не запускается ли `./run` через
+дополнительный внешний wrapper, который сам буферизует stdout.
+
+
+## Временный обрыв response stream
+
+Если Codex App Server печатает retryable transport error (`willRetry=true`), Harness начиная с 0.6.5 показывает `APP_SERVER_TURN_RETRY: ...` и продолжает текущий turn. Это не требует повторного запуска task вручную, пока App Server сам не исчерпал retries или общий turn timeout.
+
+## Implementer timeout continuation
+
+`IMPLEMENTER_TIMEOUT_CONTINUE` означает, что первый writable turn достиг Harness deadline. Уже сделанный worktree diff сохраняется; Harness продолжает тот же thread один раз, максимум на короткое continuation window. Это не Windows sandbox error и не новый repair cycle.
+
+## 12. Git file mode на native Windows
+
+`candidate.v1` учитывает file mode, который Git реально показывает в HEAD-to-working-tree diff.
+
+На native Windows/NTFS команда Python `chmod` может не создавать observable mode-only working-tree change даже при `core.filemode=true`. Поэтому self-check сначала выполняет capability probe:
+
+```text
+Git сообщает mode change 100644 → 100755
+→ все mode assertions выполняются
+
+Git не сообщает такого изменения
+→ integration test SKIPPED с явной причиной
+```
+
+Это ожидаемый platform skip. Он не превращает настоящий Git-visible mode defect в PASS: если Git сообщает mode change, test обязан проверить изменённый `candidate_id`, path и mode `100755`.
+
+Диагностика вручную:
 
 ```bash
-cp harness.local.example.toml harness.local.toml
-# заполнить Codex/project/toolchain paths этой машины
+git config core.filemode true
+chmod +x path/to/file
+git diff --summary HEAD -- path/to/file
+git diff --raw HEAD -- path/to/file
 ```
 
-Проверить Codex тем executable, который указан в config, либо через PATH:
+Если Git не показывает `mode change 100644 => 100755` или raw transition `:100644 100755`, один filesystem `chmod` не является observable candidate change на этой платформе. Сам Harness не включает index-only state в ordinary candidate: Implementer не должен использовать index-mutating команды в обычном workflow.
+
+## 13. Phase 1 workflow artifacts
+
+Начиная с 0.8.0a1 каждый реальный run пишет:
+
+```text
+runs/<task>/<run>/run_state.json
+runs/<task>/<run>/workflow_snapshot.json
+runs/<task>/<run>/candidate_identity_current.json
+```
+
+Они не находятся в project worktree и не входят в candidate patch. При ошибке Harness печатает `RUN_DIR`, поэтому сначала откройте `run_state.json` и проверьте `active_stage`, `cursor_stage`, `terminal` и последние `events`.
+
+Проверка канонической схемы:
 
 ```bash
-codex --version
-codex login status
+./py tools/render_workflow_docs.py --check
+./py tools/check_docs_sync.py
 ```
 
-Если Codex не в PATH — вызвать configured absolute path напрямую.
-
-Перед использованием новой версии Codex рекомендуется повторить:
-
-1. App Server initialize smoke.
-2. Read-only turn.
-3. Workspace-write sandbox probe.
-4. Python test/temp probe.
-5. Structured Planner/Evaluator smoke.
-
----
-
-## 14. Известный редкий MSYS failure
-
-В одном historical planning run Git Bash subprocess выдал:
-
-```text
-fatal error - CreateFileMapping ... Win32 error 5
-```
-
-App Server при этом оставался жив, heartbeat продолжался и turn завершился.
-
-Пока это считается transient Windows/MSYS subprocess failure, а не архитектурным blocker.
-
-Если станет повторяемым — предпочтительное направление: использовать native `git.exe`/native process boundary вместо дополнительного bash subprocess.
-
-
----
-
-## 15. Project `core.autocrlf` и project-specific EOL gate
-
-В `sa_icover` historical workspaces наблюдалось:
-
-```text
-core.autocrlf=true
-```
-
-Поэтому Git index и physical worktree могут выглядеть:
-
-```text
-i/lf
-w/crlf
-attr/text=auto
-```
-
-Это допустимо само по себе.
-
-Для project changes authoritative EOL policy лучше проверять существующим project checker:
-
-```text
-tools/check_changed_eol.py
-```
-
-а не делать вывод только из raw worktree bytes.
-
-Отдельно помнить про UTF-8 BOM: line-ending checker и BOM preservation — не одно и то же.
-
----
-
-## 16. Codex CLI upgrade contract
-
-Tested App Server version:
-
-```text
-0.148.0
-```
-
-Protocol/schema и Windows sandbox behavior считаются version-sensitive.
-
-После upgrade:
-
-1. сгенерировать/прочитать новые App Server protocol schemas;
-2. проверить initialize;
-3. read-only turn;
-4. workspace-write probe;
-5. temp/Python probe;
-6. structured output;
-7. skill discovery;
-8. process death/heartbeat behavior.
-
-Не переносить старые protocol assumptions на новую версию без smoke.
-
-
----
-
-## 17. Managed Git worktree на Windows
-
-Обычные project tasks теперь создают linked Git worktree автоматически.
-
-Git metadata остаётся в source repository, а task directory содержит `.git` file.
-
-Чтобы иметь worktree-local ignore policy, Harness один раз включает:
-
-```text
-extensions.worktreeConfig=true
-```
-
-и задаёт:
-
-```text
-core.excludesFile=<task-worktree>/.harness_git_excludes
-```
-
-Это проверяется `tools/self_check.py` на temporary Git repository без зависимости от `sa_icover`.
-
-Перед новым release/tag всё равно нужен smoke на реальной Windows-машине, потому что файловые locks, path syntax и Codex sandbox остаются platform-sensitive.
-
-
----
-
-## 18. Long paths в managed worktrees
-
-На Windows полный путь складывается из:
-
-```text
-workspace root
-+ project segment
-+ task segment
-+ run id
-+ project-relative file path
-```
-
-Даже если сам repository помещается в `MAX_PATH`, длинный task ID может
-сделать linked worktree заметно глубже. Симптом при удалении:
-
-```text
-git worktree remove --force ...
-error: failed to delete ...: Filename too long
-```
-
-Harness поэтому:
-
-1. ограничивает физические project/task path segments и добавляет stable hash
-   при усечении;
-2. на Windows включает для source repository локальный:
-
-   ```text
-   core.longpaths=true
-   ```
-
-   перед созданием managed worktree.
-
-Полный `task_id` при этом не теряется: он остаётся в manifest, console output и
-run metadata; сокращается только filesystem segment.
-
-Для machine-local config всё равно предпочтителен короткий root, например:
-
-```toml
-[workspace]
-root = "C:/Users/<user>/.slivin/w"
-```
-
-### Очистка старого уже созданного long-path worktree
-
-Из source repository сначала включить:
-
-```bash
-git config core.longpaths true
-```
-
-и повторить:
-
-```bash
-git worktree remove --force "$WT"
-git worktree prune
-```
-
-Если physical directory был удалён вручную, `git worktree prune` очищает stale
-registration.
+Phase 1 пока сохраняет существующий timeout continuation 0.7.1. Inactivity watchdog будет отдельной последующей фазой; наличие его в target workflow не означает, что он уже включён.

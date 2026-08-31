@@ -5,6 +5,7 @@ set -euo pipefail
 # ANSI/charmap stdout under Git Bash.
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
+export PYTHONUNBUFFERED=1
 
 if [[ -n "${SLIVIN_HARNESS_PYTHON:-}" ]]; then
   exec "$SLIVIN_HARNESS_PYTHON" "$@"

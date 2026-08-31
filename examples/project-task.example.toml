@@ -1,36 +1,37 @@
-version = 1
+version = 2
 
-task_id = "EXAMPLE_PROJECT_TASK"
-
-# Resolves through [projects.example] in harness.local.toml.
+task_id = "EXAMPLE_LOCAL_FIX"
 project = "example"
 workspace_mode = "git_worktree"
 base_ref = "HEAD"
-# Optional manifest override. Usually keep this in the project profile.
-# result_mode = "apply_to_source"
+result_mode = "keep_worktree"
 
-risk = "medium"
-max_fix_cycles = 3
-max_replan_cycles = 2
-max_change_surface_cycles = 2
-max_plan_validation_retries = 2
+# low: Implementer → checks
+# medium/high: Planner → Implementer → checks → Evaluator
+risk = "low"
+max_fix_cycles = 1
+max_replan_cycles = 0
+turn_timeout_seconds = 900
 require_clean_git = true
 
 prompt = """
-Describe the observable engineering task here.
-State required preservation behavior and important scope constraints.
-Do not encode a known implementation answer.
+Исправь небольшой локальный дефект в example project.
+Сохрани существующее поведение, добавь регрессионный тест
+и обнови документацию, если меняется контракт.
 """
+
+# Optional owner-defined hard boundary. Omit it when the correct
+# change surface is not known in advance.
+# allowed_paths = ["src/component/", "tests/component/"]
+
+[[checks]]
+name = "Unit tests"
+feedback = "repair"
+command = ["{python}", "-m", "pytest", "tests/test_target.py", "-q"]
+timeout_seconds = 180
 
 [[checks]]
 name = "Git diff check"
 feedback = "repair"
 command = ["git", "diff", "--check"]
 timeout_seconds = 30
-
-# Example target-project Python check:
-# [[checks]]
-# name = "Focused backend tests"
-# feedback = "repair"
-# command = ["{project_python}", "-m", "pytest", "path/to/test.py", "-q"]
-# timeout_seconds = 180

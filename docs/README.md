@@ -1,67 +1,24 @@
-# Slivin Harness — документация проекта
+# Документация Slivin Harness
 
-Эта директория хранит **архитектурные знания и причины решений**, а не только инструкции запуска.
+Актуальная версия: **0.8.0a2 — Phase 1**.
 
-Цель: после смены чата, машины или разработчика ключевой контекст Harness должен восстанавливаться из репозитория, а не из памяти участников.
+Начните с:
 
-## Слои документации
+- [WORKFLOW.md](WORKFLOW.md) — генерируемая понятная схема Step 0–7, переходы и invalidation rules;
+- [`workflow.v1.json`](workflow.v1.json) — тот же workflow в machine-readable форме;
+- [ARCHITECTURE.md](ARCHITECTURE.md) — как Phase 1 встроена в код;
+- [QUALITY_MODEL.md](QUALITY_MODEL.md) — что новая state machine реально доказывает и чего ещё не доказывает;
+- [PRACTICAL_GUIDE.md](PRACTICAL_GUIDE.md) — как запускать Harness и читать `run_state.json`;
+- [WINDOWS_SETUP.md](WINDOWS_SETUP.md) — установка и Windows-диагностика;
+- [HISTORY.md](HISTORY.md) — история упрощения и дальнейший маршрут.
 
-| Файл | Назначение |
-|---|---|
-| [CURRENT_STATE.md](CURRENT_STATE.md) | Оперативный handoff: текущий milestone, известные gaps и следующий шаг |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Текущая архитектура Harness, роли, state machine и границы ответственности |
-| [QUALITY_MODEL.md](QUALITY_MODEL.md) | Модель качества: current contract, assumptions, LIFE/REP/AUTH, obligations, Evaluator, held-out |
-| [HANDOFF_PROTOCOL.md](HANDOFF_PROTOCOL.md) | Строгий Planner → Controller → Implementer/Evaluator protocol, fingerprints и machine-owned obligations |
-| [DECISIONS.md](DECISIONS.md) | Принятые, отклонённые и отложенные архитектурные решения с причинами |
-| [HISTORY.md](HISTORY.md) | История развития и реальные failures, которые породили текущие механизмы |
-| [WINDOWS_SETUP.md](WINDOWS_SETUP.md) | Проверенная конфигурация Windows/Git Bash/Codex sandbox |
-| [WORKSPACE_MODEL.md](WORKSPACE_MODEL.md) | Outer/inner Git, disposable workspace, secrets, temp, snapshots и run artifacts |
-| [MAINTAINING_HARNESS.md](MAINTAINING_HARNESS.md) | Как дальше изменять Harness и не потерять причины решений |
-| [DECISION_TEMPLATE.md](DECISION_TEMPLATE.md) | Шаблон новой архитектурной записи |
+Канонический workflow находится в `slivin_harness/workflow.py`. `docs/WORKFLOW.md` и `docs/workflow.v1.json` генерируются из него.
 
-## Что относится к другим слоям
+Проверка актуальности:
 
-Корневой `README.md` — operational onboarding: что запустить, какие скрипты существуют, как развернуть Harness.
-
-`CHANGELOG.md` — краткая история пользовательски/архитектурно значимых milestone.
-
-`docs/` — **почему система устроена именно так**, какие альтернативы рассматривались и какие реальные failures подтверждают необходимость механизма.
-
-## Правило обновления
-
-При каждом существенном изменении Harness ответьте в репозитории на четыре вопроса:
-
-1. Какой observable failure или missing capability обнаружен?
-2. Почему существующая архитектура его не поймала?
-3. Какое общее, а не case-specific изменение принято?
-4. Каким eval/benchmark доказано улучшение?
-
-Если ответ меняет архитектуру или долгосрочный contract — обновить `DECISIONS.md` или создать запись по `DECISION_TEMPLATE.md`.
-
-Если ответ относится к эксплуатации Windows/workspace — обновить соответствующий operations-документ.
-
-Если меняется milestone — обновить `HISTORY.md` и `CHANGELOG.md`.
-
-## Принцип
-
-Документация Harness должна объяснять не только:
-
-> «Что сейчас есть в коде?»
-
-но и:
-
-> «Почему это появилось, какой failure это предотвращает и почему мы не выбрали более простой/другой путь?»
-
-
-## Перед продолжением в новой сессии
-
-Если история предыдущего чата недоступна, начинать с:
-
-```text
-CURRENT_STATE.md
-→ ARCHITECTURE.md
-→ QUALITY_MODEL.md
-→ DECISIONS.md
+```bash
+./py tools/render_workflow_docs.py --check
+./py tools/check_docs_sync.py
 ```
 
-`CURRENT_STATE.md` специально хранит временные ограничения/known gaps, которые ещё не стали стабильным architecture contract.
+Код, manifests и self-check остаются источником текущей исполняемой capability. В документации явно разделены уже реализованная Phase 1 foundation и target-контракты следующих фаз.

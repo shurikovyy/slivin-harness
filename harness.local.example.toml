@@ -1,51 +1,43 @@
-# Copy this file to harness.local.toml and edit only machine-local values.
-# harness.local.toml is intentionally ignored by Git.
-#
-# Paths may use:
-#   ~
-#   environment variables such as %USERPROFILE% / $HOME
-#   {home}
-#   {harness_root}
-#   {project_root} inside a project profile/toolchain
-#
-# Bare executable names such as "node" or "codex" are resolved through PATH.
+# Copy this file to harness.local.toml and adjust machine-local paths.
+# harness.local.toml is ignored and must not be committed or shipped.
 
 [codex]
-# Use a bare executable if Codex is on PATH, otherwise an absolute/user-local path.
-command = "codex"
+command = "C:/Users/<user>/Tools/codex-cli/node_modules/.bin/codex.cmd"
 
 [workspace]
-# Managed project worktrees are created here. They contain only tracked project
-# files plus explicitly exposed local files; .venv/node_modules do not need copying.
-# On Windows prefer a short path because project-relative file names can be deep.
-# Example: C:/Users/<user>/.slivin/w
-root = "~/.slivin-harness/workspaces"
+# Keep this path short on Windows.
+root = "C:/Users/<user>/.slivin-harness/workspaces"
 
-# Global tools can be shared by historical/static cases.
 [toolchain]
-node = "node"
-# Example if a historical case needs Jest from a particular installation:
-# jest = "C:/path/to/project/node_modules/jest/bin/jest.js"
+# Optional tools shared by all projects. Repair checks and Implementer self-verify use these exact paths.
+# node = "C:/Users/<user>/Tools/node/node.exe"
 
-# Example reusable project profile.
 [projects.example]
-repo = "~/Documents/example-project"
+repo = "C:/Users/<user>/Documents/example-repo"
 base_ref = "HEAD"
+result_mode = "keep_worktree"
 require_clean_source = true
-# keep_worktree      -> source working tree is not touched; candidate.patch is saved.
-# apply_to_source    -> after full Harness PASS, apply candidate diff to the source
-#                       working tree if it is still clean and on the same HEAD.
-result_mode = "apply_to_source"
 
 [projects.example.toolchain]
-# Target-project runtime is intentionally separate from the Python running Harness.
 project_python = "{project_root}/.venv/Scripts/python.exe"
-# A bare executable is PATH-resolved; use an absolute path if needed.
-node = "node"
-jest = "{project_root}/node_modules/jest/bin/jest.js"
+node = "C:/Users/<user>/Tools/node/node.exe"
+# jest = "{project_root}/node_modules/jest/bin/jest.js"
 
 [projects.example.workspace]
-# Optional opt-in visibility of untracked/ignored local files in the disposable
-# worktree. They are copied and ignored, never included in candidate.patch.
-# The agent can read their contents, so only list files you intentionally expose.
-copy_untracked = [".env"]
+# Local untracked runtime files are not copied unless listed here.
+copy_untracked = []
+
+# Required only when copy_untracked intentionally includes .env, *.pem,
+# credentials.json or another sensitive path. The agent can read it.
+allow_sensitive_copy = false
+
+[projects.matrix_baseline]
+repo = "C:/Users/<user>/Downloads/sa_icover_90"
+base_ref = "HEAD"
+result_mode = "keep_worktree"
+require_clean_source = true
+
+[projects.matrix_baseline.toolchain]
+project_python = "{project_root}/.venv/Scripts/python.exe"
+node = "C:/Users/<user>/Tools/node/node.exe"
+jest = "{project_root}/node_modules/jest/bin/jest.js"

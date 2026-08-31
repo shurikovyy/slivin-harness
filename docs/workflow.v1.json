@@ -1,0 +1,336 @@
+{
+  "schema_version": "workflow.v1",
+  "harness_version": "0.8.0a2",
+  "phase": "phase1-state-machine-foundation",
+  "stages": [
+    {
+      "number": 0,
+      "stage_id": "intake_preflight",
+      "title": "Intake / Preflight",
+      "purpose": "Фиксирует задачу, baseline, workspace и доступные инструменты.",
+      "success_codes": [
+        "PREFLIGHT_READY"
+      ],
+      "skip_codes": [],
+      "optional": false,
+      "maturity": "COMPATIBILITY_IMPLEMENTED"
+    },
+    {
+      "number": 1,
+      "stage_id": "planner",
+      "title": "Planner",
+      "purpose": "Read-only исследование и техническая модель задачи.",
+      "success_codes": [
+        "PLANNER_READY",
+        "PLANNER_SKIPPED_FAST"
+      ],
+      "skip_codes": [
+        "PLANNER_SKIPPED_FAST"
+      ],
+      "optional": false,
+      "maturity": "COMPATIBILITY_IMPLEMENTED"
+    },
+    {
+      "number": 2,
+      "stage_id": "implementation_contract",
+      "title": "Implementation Contract",
+      "purpose": "Controller превращает load-bearing выводы в обязательный минимум результата.",
+      "success_codes": [
+        "IMPLEMENTATION_CONTRACT_READY"
+      ],
+      "skip_codes": [],
+      "optional": false,
+      "maturity": "COMPATIBILITY_IMPLEMENTED"
+    },
+    {
+      "number": 3,
+      "stage_id": "implementer",
+      "title": "Implementer",
+      "purpose": "Создаёт candidate, tests/docs и собственное evidence.",
+      "success_codes": [
+        "IMPLEMENTATION_COMPLETE"
+      ],
+      "skip_codes": [],
+      "optional": false,
+      "maturity": "COMPATIBILITY_IMPLEMENTED"
+    },
+    {
+      "number": 4,
+      "stage_id": "deterministic_checks",
+      "title": "Controller deterministic checks",
+      "purpose": "Независимо запускает локальные машинные проверки candidate.",
+      "success_codes": [
+        "DETERMINISTIC_VERIFICATION_PASS"
+      ],
+      "skip_codes": [],
+      "optional": false,
+      "maturity": "COMPATIBILITY_IMPLEMENTED"
+    },
+    {
+      "number": 5,
+      "stage_id": "runtime_verification",
+      "title": "Runtime / external verification",
+      "purpose": "Условно проверяет observable runtime outcome, если local checks недостаточны.",
+      "success_codes": [
+        "RUNTIME_VERIFICATION_PASS",
+        "RUNTIME_VERIFICATION_SKIPPED"
+      ],
+      "skip_codes": [
+        "RUNTIME_VERIFICATION_SKIPPED"
+      ],
+      "optional": true,
+      "maturity": "PLANNED"
+    },
+    {
+      "number": 6,
+      "stage_id": "evaluator",
+      "title": "Blind Evaluator",
+      "purpose": "Независимо пытается опровергнуть полноту и корректность candidate.",
+      "success_codes": [
+        "EVALUATION_PASS",
+        "EVALUATION_SKIPPED_FAST"
+      ],
+      "skip_codes": [
+        "EVALUATION_SKIPPED_FAST"
+      ],
+      "optional": false,
+      "maturity": "COMPATIBILITY_IMPLEMENTED"
+    },
+    {
+      "number": 7,
+      "stage_id": "final_gate",
+      "title": "Final Gate / result handoff",
+      "purpose": "Сверяет identity доказательств и безопасно выдаёт принятый result.",
+      "success_codes": [
+        "HARNESS_TASK_PASS",
+        "HARNESS_BENCHMARK_PASS"
+      ],
+      "skip_codes": [],
+      "optional": false,
+      "maturity": "COMPATIBILITY_IMPLEMENTED"
+    }
+  ],
+  "success_next": {
+    "intake_preflight": "planner",
+    "planner": "implementation_contract",
+    "implementation_contract": "implementer",
+    "implementer": "deterministic_checks",
+    "deterministic_checks": "runtime_verification",
+    "runtime_verification": "evaluator",
+    "evaluator": "final_gate",
+    "final_gate": null
+  },
+  "allowed_transitions": {
+    "<START>": [
+      "intake_preflight"
+    ],
+    "intake_preflight": [
+      "planner"
+    ],
+    "planner": [
+      "implementation_contract"
+    ],
+    "implementation_contract": [
+      "implementer"
+    ],
+    "implementer": [
+      "deterministic_checks"
+    ],
+    "deterministic_checks": [
+      "implementer",
+      "runtime_verification"
+    ],
+    "runtime_verification": [
+      "evaluator",
+      "implementer"
+    ],
+    "evaluator": [
+      "final_gate",
+      "implementer",
+      "planner"
+    ],
+    "final_gate": []
+  },
+  "routing_outcomes": [
+    "PASS",
+    "REPAIR",
+    "REPLAN",
+    "BLOCKED",
+    "NEEDS_USER_DECISION",
+    "INVALID"
+  ],
+  "stage_states": [
+    "NOT_STARTED",
+    "IN_PROGRESS",
+    "PASSED",
+    "SKIPPED",
+    "STOPPED",
+    "FAILED",
+    "INVALIDATED"
+  ],
+  "stage_result_codes": [
+    "PREFLIGHT_READY",
+    "PLANNER_READY",
+    "PLANNER_SKIPPED_FAST",
+    "IMPLEMENTATION_CONTRACT_READY",
+    "IMPLEMENTATION_COMPLETE",
+    "DETERMINISTIC_VERIFICATION_PASS",
+    "CHECK_REPAIR_REQUIRED",
+    "RUNTIME_VERIFICATION_PASS",
+    "RUNTIME_VERIFICATION_SKIPPED",
+    "EVALUATION_PASS",
+    "EVALUATION_SKIPPED_FAST",
+    "EVALUATOR_FINDINGS",
+    "REPLAN_REQUIRED",
+    "FINAL_ACCEPTANCE_PASS",
+    "RESULT_DELIVERY_PASS",
+    "HARNESS_TASK_PASS",
+    "HARNESS_BENCHMARK_PASS",
+    "BLOCKED",
+    "NEEDS_USER_DECISION",
+    "INVALID"
+  ],
+  "agent_statuses": {
+    "planner": [
+      "READY",
+      "BLOCKED",
+      "NEEDS_USER_DECISION"
+    ],
+    "implementer": [
+      "COMPLETE",
+      "BLOCKED"
+    ],
+    "evaluator": [
+      "PASS",
+      "FINDINGS",
+      "REPLAN_REQUIRED",
+      "BLOCKED",
+      "NEEDS_USER_DECISION"
+    ]
+  },
+  "verification_statuses": {
+    "checks": [
+      "CHECK_PASS",
+      "CHECK_FAIL",
+      "CHECK_TIMEOUT",
+      "CHECK_INFRA_ERROR",
+      "CHECK_MUTATED_CANDIDATE"
+    ],
+    "runtime": [
+      "RUNTIME_VERIFICATION_PASS",
+      "RUNTIME_VERIFICATION_SKIPPED",
+      "RUNTIME_BEHAVIOR_FAIL",
+      "RUNTIME_START_FAIL",
+      "RUNTIME_TIMEOUT",
+      "RUNTIME_INFRA_ERROR",
+      "RUNTIME_READBACK_FAIL",
+      "RUNTIME_CLEANUP_FAIL",
+      "RUNTIME_MUTATED_CANDIDATE"
+    ],
+    "heldout": [
+      "HELDOUT_PASS",
+      "HELDOUT_SEMANTIC_FAIL",
+      "HELDOUT_INFRA_ERROR",
+      "HELDOUT_TIMEOUT",
+      "HELDOUT_MUTATED_CANDIDATE"
+    ]
+  },
+  "revision_kinds": [
+    "task_contract",
+    "plan",
+    "implementation_contract",
+    "verification_plan",
+    "candidate",
+    "runtime_environment"
+  ],
+  "invalidation_rules": [
+    {
+      "trigger": "TASK_CONTRACT_CHANGED",
+      "invalidate_from": "planner",
+      "restart_at": "planner",
+      "new_attempt_required": true,
+      "delivery_only": false,
+      "reason": "Изменение пользовательского контракта инвалидирует всё техническое reasoning."
+    },
+    {
+      "trigger": "REPLAN_REQUIRED",
+      "invalidate_from": "planner",
+      "restart_at": "planner",
+      "new_attempt_required": true,
+      "delivery_only": false,
+      "reason": "Ошибка технической модели требует нового независимого planning attempt."
+    },
+    {
+      "trigger": "CONTRACT_EXPANDED",
+      "invalidate_from": "implementer",
+      "restart_at": "implementer",
+      "new_attempt_required": false,
+      "delivery_only": false,
+      "reason": "Новый consumer/risk меняет Definition of Done и обнуляет downstream evidence."
+    },
+    {
+      "trigger": "CHECK_REGISTERED",
+      "invalidate_from": "implementer",
+      "restart_at": "implementer",
+      "new_attempt_required": false,
+      "delivery_only": false,
+      "reason": "Новая authoritative проверка должна войти в self-verify и все последующие gates."
+    },
+    {
+      "trigger": "CANDIDATE_CHANGED",
+      "invalidate_from": "implementer",
+      "restart_at": "implementer",
+      "new_attempt_required": false,
+      "delivery_only": false,
+      "reason": "Любое изменение candidate делает прежние проверки устаревшими."
+    },
+    {
+      "trigger": "DEPENDENCY_MANIFEST_CHANGED",
+      "invalidate_from": "implementer",
+      "restart_at": "implementer",
+      "new_attempt_required": false,
+      "delivery_only": false,
+      "reason": "Изменение dependency declaration требует rebuild runtime и повторного evidence."
+    },
+    {
+      "trigger": "RUNTIME_ENV_CHANGED",
+      "invalidate_from": "implementer",
+      "restart_at": "implementer",
+      "new_attempt_required": false,
+      "delivery_only": false,
+      "reason": "Evidence другого runtime environment не переносится автоматически."
+    },
+    {
+      "trigger": "RUNTIME_PROFILE_CHANGED",
+      "invalidate_from": "runtime_verification",
+      "restart_at": "runtime_verification",
+      "new_attempt_required": false,
+      "delivery_only": false,
+      "reason": "Новый runtime proof profile инвалидирует runtime, evaluator и final gate."
+    },
+    {
+      "trigger": "SOURCE_CHANGED",
+      "invalidate_from": null,
+      "restart_at": "final_gate",
+      "new_attempt_required": false,
+      "delivery_only": true,
+      "reason": "Изменение source checkout не портит accepted candidate, но блокирует delivery."
+    },
+    {
+      "trigger": "HIDDEN_GRADER_CHANGED",
+      "invalidate_from": "final_gate",
+      "restart_at": "final_gate",
+      "new_attempt_required": false,
+      "delivery_only": false,
+      "reason": "Изменение hidden grader требует новой calibration перед benchmark final gate."
+    },
+    {
+      "trigger": "CANDIDATE_CHANGED_AFTER_EVALUATION",
+      "invalidate_from": "implementer",
+      "restart_at": "implementer",
+      "new_attempt_required": false,
+      "delivery_only": false,
+      "reason": "Candidate mutation после evaluation инвалидирует implementation evidence и все gates."
+    }
+  ]
+}

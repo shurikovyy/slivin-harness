@@ -1,20 +1,31 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from task_runner import (
-    _plan_validation_error,
     planner_benchmark_context,
+    require_candidate_change_for_confirmed_benchmark,
     run_benchmark_baseline_gate,
+    verify_oracle_calibration_certificate,
 )
-from tests.test_protocol import valid_plan
+
+
+class FakeRecorder:
+    def __init__(self) -> None:
+        self.writes: dict[str, object] = {}
+
+    def write_json(self, name: str, value: object) -> Path:
+        self.writes[name] = value
+        return Path(name)
 
 
 class BenchmarkBaselineGateTests(unittest.TestCase):
-    def test_current_baseline_failure_becomes_sanitized_controller_evidence(self) -> None:
+    def test_baseline_failure_becomes_sanitized_controller_fact(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             workspace = root / "workspace"
@@ -24,25 +35,69 @@ class BenchmarkBaselineGateTests(unittest.TestCase):
                     {
                         "name": "hidden regression",
                         "feedback": "heldout",
-                        "command": [sys.executable, "-c", "raise SystemExit(1)"],
+                        "command": [
+                            sys.executable,
+                            "-c",
+                            "print('ORACLE_REACHED'); raise SystemExit(1)",
+                        ],
                         "timeout_seconds": 30,
                     }
                 ],
                 workspace=workspace,
                 toolchain={},
                 runtime_root=root / "runtime",
+                failure_marker="ORACLE_REACHED",
             )
-
             self.assertEqual(evidence["baseline_status"], "CONFIRMED_BROKEN")
-            self.assertEqual(evidence["authority"], "CONTROLLER_HELDOUT")
-            self.assertFalse(evidence["failure_details_exposed_to_planner"])
+            context = planner_benchmark_context(evidence)
+            self.assertIn("CONFIRMED_BROKEN", context)
+            self.assertNotIn("raise SystemExit", context)
+            self.assertNotIn("records", context)
 
-            sanitized = planner_benchmark_context(evidence)
-            self.assertEqual(sanitized["baseline_status"], "CONFIRMED_BROKEN")
-            self.assertNotIn("records", sanitized)
-            self.assertFalse(sanitized["failure_details_exposed_to_planner"])
+    def test_unexpected_baseline_pass_blocks_benchmark(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "unexpectedly passes"):
+                run_benchmark_baseline_gate(
+                    [
+                        {
+                            "name": "hidden regression",
+                            "feedback": "heldout",
+                            "command": [sys.executable, "-c", "raise SystemExit(0)"],
+                            "timeout_seconds": 30,
+                        }
+                    ],
+                    workspace=workspace,
+                    toolchain={},
+                    runtime_root=root / "runtime",
+                    failure_marker="ORACLE_REACHED",
+                )
 
-    def test_unexpected_baseline_pass_is_not_confirmed_broken(self) -> None:
+
+    def test_infrastructure_failure_cannot_confirm_broken_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "infrastructure/setup failure"):
+                run_benchmark_baseline_gate(
+                    [
+                        {
+                            "name": "hidden regression",
+                            "feedback": "heldout",
+                            "command": [sys.executable, "-c", "raise SystemExit(1)"],
+                            "timeout_seconds": 30,
+                        }
+                    ],
+                    workspace=workspace,
+                    toolchain={},
+                    runtime_root=root / "runtime",
+                    failure_marker="ORACLE_REACHED",
+                )
+
+    def test_checks_receive_workspace_environment(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             workspace = root / "workspace"
@@ -52,42 +107,144 @@ class BenchmarkBaselineGateTests(unittest.TestCase):
                     {
                         "name": "hidden regression",
                         "feedback": "heldout",
-                        "command": [sys.executable, "-c", "raise SystemExit(0)"],
+                        "command": [
+                            sys.executable,
+                            "-c",
+                            (
+                                "import os; "
+                                "assert os.environ['SLIVIN_HARNESS_WORKSPACE']; "
+                                "print('ORACLE_REACHED'); raise SystemExit(1)"
+                            ),
+                        ],
                         "timeout_seconds": 30,
                     }
                 ],
                 workspace=workspace,
                 toolchain={},
                 runtime_root=root / "runtime",
+                failure_marker="ORACLE_REACHED",
             )
-            self.assertEqual(
-                evidence["baseline_status"],
-                "NOT_CONFIRMED_BROKEN",
+            self.assertEqual(evidence["baseline_status"], "CONFIRMED_BROKEN")
+
+
+    def test_confirmed_broken_benchmark_with_empty_candidate_fails_fast(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "no candidate changes"):
+            require_candidate_change_for_confirmed_benchmark(
+                {"baseline_status": "CONFIRMED_BROKEN"},
+                [],
             )
 
-    def test_planner_cannot_block_confirmed_broken_benchmark_as_not_reproduced(self) -> None:
-        plan = valid_plan()
-        plan["status"] = "BLOCKED"
-        plan["candidate_paths"] = []
-        error = _plan_validation_error(
-            plan,
-            trusted_benchmark_evidence={
-                "baseline_status": "CONFIRMED_BROKEN",
-                "authority": "CONTROLLER_HELDOUT",
-            },
+        require_candidate_change_for_confirmed_benchmark(
+            {"baseline_status": "CONFIRMED_BROKEN"},
+            ["src/fix.py"],
         )
-        self.assertIsNotNone(error)
-        self.assertEqual(
-            error["protocol_error"],
-            "PLANNER_TRUSTED_BASELINE_CONFLICT",
-        )
+        require_candidate_change_for_confirmed_benchmark(None, [])
 
-    def test_non_benchmark_blocked_plan_remains_allowed(self) -> None:
-        plan = valid_plan()
-        plan["status"] = "BLOCKED"
-        plan["candidate_paths"] = []
-        error = _plan_validation_error(plan, trusted_benchmark_evidence=None)
-        self.assertIsNone(error)
+    def test_calibration_certificate_is_bound_to_check_and_files(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            hidden = root / "hidden.test"
+            hidden.write_text("assert contract\n", encoding="utf-8")
+            spec = {
+                "name": "hidden",
+                "feedback": "heldout",
+                "command": [sys.executable, str(hidden)],
+                "timeout_seconds": 30,
+            }
+            from task_runner import _stable_sha256
+
+            certificate = root / "certificate.json"
+            certificate.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "heldout_checks": [
+                            {
+                                "name": "hidden",
+                                "spec_sha256": _stable_sha256(spec),
+                                "files": [
+                                    {
+                                        "path": str(hidden),
+                                        "sha256": hashlib.sha256(hidden.read_bytes()).hexdigest(),
+                                    }
+                                ],
+                                "calibration_cases": [
+                                    {
+                                        "name": "broken",
+                                        "role": "broken_baseline",
+                                        "expected_result": "FAIL",
+                                        "fixture_fingerprint": "a" * 64,
+                                    },
+                                    {
+                                        "name": "good-a",
+                                        "role": "positive_reference",
+                                        "expected_result": "PASS",
+                                        "fixture_fingerprint": "b" * 64,
+                                    },
+                                    {
+                                        "name": "good-b",
+                                        "role": "positive_reference",
+                                        "expected_result": "PASS",
+                                        "fixture_fingerprint": "c" * 64,
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            recorder = FakeRecorder()
+            verify_oracle_calibration_certificate(
+                [spec], certificate_path=certificate, recorder=recorder
+            )
+            self.assertIn("oracle_calibration_certificate_verified.json", recorder.writes)
+
+            hidden.write_text("changed\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "changed"):
+                verify_oracle_calibration_certificate(
+                    [spec], certificate_path=certificate, recorder=FakeRecorder()
+                )
+
+    def test_semantic_calibration_requires_positive_and_negative_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            hidden = root / "hidden.test"
+            hidden.write_text("assert contract\n", encoding="utf-8")
+            spec = {
+                "name": "hidden",
+                "feedback": "heldout",
+                "command": [sys.executable, str(hidden)],
+                "timeout_seconds": 30,
+            }
+            from task_runner import _stable_sha256
+
+            certificate = root / "certificate.json"
+            certificate.write_text(
+                json.dumps({
+                    "schema_version": 2,
+                    "heldout_checks": [{
+                        "name": "hidden",
+                        "spec_sha256": _stable_sha256(spec),
+                        "files": [{
+                            "path": str(hidden),
+                            "sha256": hashlib.sha256(hidden.read_bytes()).hexdigest(),
+                        }],
+                        "calibration_cases": [{
+                            "name": "broken",
+                            "role": "broken_baseline",
+                            "expected_result": "FAIL",
+                            "fixture_fingerprint": "d" * 64,
+                        }],
+                    }],
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "multiple calibration_cases"):
+                verify_oracle_calibration_certificate(
+                    [spec], certificate_path=certificate, recorder=FakeRecorder()
+                )
+
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 task_id = "MATRIX_DATATABLE_ALL_MATCHING_BULK_ACTION_SCOPE_BENCHMARK"
 project = "matrix_baseline"
@@ -9,11 +9,9 @@ base_ref = "HEAD"
 result_mode = "keep_worktree"
 
 risk = "medium"
-max_fix_cycles = 3
-max_replan_cycles = 2
-max_change_surface_cycles = 2
-max_impact_cycles = 2
-max_plan_validation_retries = 2
+max_fix_cycles = 2
+max_replan_cycles = 1
+turn_timeout_seconds = 900
 require_clean_git = true
 
 prompt = """
@@ -58,6 +56,7 @@ Git write-команды не выполняй.
 [benchmark]
 calibration_certificate = "hidden_checks/matrix_all_matching.calibration.json"
 confirm_current_baseline_broken = true
+baseline_failure_marker = "MATRIX_SEMANTIC_ORACLE_REACHED"
 
 [[checks]]
 name = "Existing DataTable selection regressions"
@@ -111,16 +110,10 @@ command = [
 timeout_seconds = 120
 
 [[checks]]
-name = "Historical held-out regression oracle"
+name = "Historical Matrix semantic held-out"
 feedback = "heldout"
 command = [
     "{node}",
-    "{jest}",
-    "--config",
-    "{harness_root}/hidden_checks/jest.config.cjs",
-    "--runTestsByPath",
-    "{harness_root}/hidden_checks/matrix_all_matching.test.cjs",
-    "--runInBand",
-    "--no-cache",
+    "{harness_root}/hidden_checks/matrix_semantic_check.cjs",
 ]
-timeout_seconds = 120
+timeout_seconds = 30

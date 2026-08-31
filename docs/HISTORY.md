@@ -1,739 +1,197 @@
-# История развития Slivin Harness
+# История и дальнейший маршрут
 
-Этот документ фиксирует **причинную историю**, а не просто номера версий.
+## 1. Почему 0.5.x стал перегруженным
 
-Формат каждой стадии:
-
-```text
-что было
-что сломалось / чего не хватало
-какой общий вывод сделан
-что добавлено
-```
-
----
-
-# 1. До Harness: Codex App + инструкции + reviewers
-
-Исходный процесс уже имел:
-
-- сильный project `AGENTS.md`;
-- project skills;
-- несколько custom reviewer roles;
-- ручное управление ветками и Codex sessions.
-
-Проблема:
+Предыдущая архитектура содержала:
 
 ```text
-Agent PASS
-→ человек независимо проверяет
-→ находит gap
-→ новый prompt
+Planner
+→ Implementer
+→ deterministic checks
+→ отдельный Impact Auditor
+→ Evaluator
+→ held-out
 ```
 
-Шесть reviewers не решали correlated blind spots, потому что работали на той же модели состояния/тестах.
+Planner формировал десятки obligations и подробные state ledgers. Это увеличивало время и токены, но не гарантировало истинность вывода.
 
----
+Historical Matrix run занял почти 24 минуты. Узкий held-out прошёл, однако последующий аудит обнаружил два material defects:
 
-# 2. Execution environment proof
+1. интерфейс мог показывать current all-matching scope, а payload брать из старого filter-action state;
+2. Distribution token-only selection обходил stage guard.
 
-Первая цель была не PR automation, а доказать, что Controller вообще может безопасно управлять agent execution.
+Следовательно, `HARNESS_TASK_PASS` был ложноположительным.
 
-Проверено:
+## 2. Что из строгой версии оказалось полезным
 
-- Codex CLI login;
-- `codex app-server --stdio`;
-- protocol schema generation;
-- read-only thread;
-- workspace-write;
-- file modifications;
-- project Python;
-- pytest;
-- Node/Jest-compatible execution.
+Сохранены:
 
-## Первый App Server adapter bug
-
-RPC request ждал response, но notification backlog мог повторно отдавать один и тот же deferred event и starvation'ить настоящий response.
-
-Исправление:
-
-```text
-RPC request читает новые messages из queue
-unrelated notifications временно собирает локально
-после response возвращает их в backlog
-```
-
----
-
-# 3. Windows workspace-write blocker
-
-App Server/Codex создавал writable roots:
-
-```text
-[workdir, /tmp, $TMPDIR]
-```
-
-Windows unelevated restricted-token sandbox отказался применять split writable roots.
-
-Admin elevation была недоступна.
-
-## Решение
-
-```text
-sandbox_workspace_write.exclude_slash_tmp=true
-sandbox_workspace_write.exclude_tmpdir_env_var=true
-```
-
-и temp перенесён в:
-
-```text
-workspace/.harness_tmp
-```
-
-После этого workspace-write стал реально usable без admin.
-
-Это был один из наиболее трудоёмких infrastructure blockers.
-
----
-
-# 4. Completion controller demo
-
-Toy task:
-
-```text
-agent должен создать answer.txt=READY
-```
-
-Внешний gate дополнительно требовал `proof.txt=VERIFIED`.
-
-Первый agent turn считал работу готовой без proof.
-
-Harness:
-
-```text
-checks FAIL
-→ вернул evidence agent
-→ repair
-→ checks PASS
-```
-
-Доказан главный принцип:
-
-> Controller способен переопределить субъективный Done модели.
-
----
-
-# 5. v0.2 universal runner
-
-Появились:
-
-- TOML manifests;
-- clean Git preflight;
-- generic checks;
-- automatic repair;
-- trusted temp;
-- EOL/diff checks.
-
-## Первый historical Matrix benchmark
-
-Broken `_90`:
-
-после «Выбрать все N найденных» исчезала «Подтвердить распред».
-
-External hidden oracle:
-
-- all-matching explicit selection;
-- filter-only preservation;
-- manual selection preservation.
-
-v0.2:
-
-1. Agent сделал shared fix.
-2. Hidden oracle указал первый miss.
-3. Agent repair.
-4. Oracle указал `excluded_ids` shape.
-5. Agent repair.
-6. Harness объявил PASS.
-
-## Human post-hoc audit
-
-Обнаружены реальные gaps:
-
-- stale/combined token semantics;
-- Distribution stage guard;
-- shared core impact.
-
-Вывод:
-
-```text
-completion loop + known tests
-```
-
-недостаточен.
-
-И ещё:
-
-```text
-hidden failure → repair
-```
-
-не является честным historical eval.
-
----
-
-# 6. v0.3: Planner + Fresh Evaluator
-
-Добавлены:
-
-```text
-read-only Planner
-Implementer
-checks
-fresh read-only Evaluator
-```
-
-Planner начал явно искать:
-
-- selectedRows;
-- selectionAllMatching;
-- filteredBulkSelection;
-- scopeKey;
-- consumers.
-
-## Положительный результат
-
-Planner заметно глубже моделировал state.
-
-Evaluator начал находить false-green и shared-consumer risk.
-
-## Проблемы
-
-- structured turn adapter склеивал несколько agent messages → `JSONDecodeError: Extra data`;
-- Planner artifact оставался «хорошим текстом», но не обязательным evidence contract;
-- hidden oracle всё ещё мог учить agent во время repair.
-
----
-
-# 7. v0.4: Characterization + evidence obligations + held-out
-
-Добавлены:
-
-- current contract;
-- assumptions;
-- release obligations;
-- evidence ledger;
-- held-out mode;
-- `REPLAN_REQUIRED`.
-
-## Failure: transport regression
-
-В packaged App Server случайно вернулась старая логика join всех messages.
-
-Урок:
-
-> Harness transport — такой же product code и требует regression discipline.
-
-## Failure: слишком строгий evidence
-
-README smoke был заблокирован из-за невозможности доказать incidental historical CRLF.
-
-Это привело к разделению:
-
-```text
-characterization observations
-vs
-release-critical obligations
-```
-
----
-
-# 8. Pre-edit snapshot
-
-Добавлен independent snapshot planned paths до first edit.
-
-Причина:
-
-после edit нельзя честно восстановить физическое pre-edit состояние.
-
----
-
-# 9. v0.4.4 observability
-
-Добавлены:
-
-- readable Implementer message separators;
-- phase timings;
-- per-check timings;
-- overall duration;
-- heartbeat;
-- App Server health;
+- clean isolated worktree;
+- external checks;
+- fresh Planner;
+- отдельный Evaluator;
+- hidden held-out without tutoring;
+- bounded repair/replan;
 - run artifacts;
-- repo `AGENTS.md`/skills discovery;
-- graceful invalid-plan retry.
+- controlled publication.
 
-Это решило operational проблему:
+Удалены повторяющиеся prose layers.
 
-```text
-долгий REPLAN без вывода выглядел как зависание
-```
-
----
-
-# 10. Oracle problem: `excluded_ids: []`
-
-Historical held-out требовал exact:
-
-```json
-{
-  "selection_token": "...",
-  "excluded_ids": []
-}
-```
-
-Independent project audit показал:
-
-- backend: missing `excluded_ids` → `[]`;
-- reference `_92` тоже опускает empty field.
-
-То есть grader проверял implementation shape, а не semantic contract.
-
-Исправлен oracle.
-
-Вывод:
-
-> Historical grader — тоже software artifact, который может быть неправильным.
-
----
-
-# 11. v0.4.5: Oracle calibration + REP/AUTH
-
-Добавлены:
+## 3. Что изменено в 0.6.0
 
 ```text
-broken → FAIL
-known-good → PASS
+low:
+Implementer → checks
+
+medium/high:
+Planner → Implementer → checks → blind Evaluator
 ```
 
-calibration gate.
+Impact Auditor удалён. Planner artifact компактный. Evaluator не видит plan. Structured `PASS` механически запрещён при `unverified`.
 
-Также:
 
-- `REP-*` representation-consumer audit;
-- `AUTH-*` state authority audit.
+## 3a. Исправление 0.6.1
 
-## Результат
+Первый реальный Windows smoke-run обнаружил protocol bug: `thread/start.sandbox` ошибочно отправлял `workspaceWrite`. App Server 0.148.0 ожидает `SandboxMode` `workspace-write`. В 0.6.1 mapping удалён, а thread mode передаётся в canonical kebab-case.
 
-Planner самостоятельно обнаружил:
+## 3b. Matrix Windows write-blocker и исправление 0.6.2
 
-- downstream Distribution;
-- multiple token representations;
-- возможную precedence ambiguity.
+Первый real Matrix run 0.6.1 выявил два harness gaps. Held-out baseline check упал до выполнения oracle из-за отсутствующей `SLIVIN_HARNESS_WORKSPACE`, но Controller ошибочно засчитал любой non-zero exit как доказательство broken baseline. Затем Implementer получил `Permission denied` при записи в вложенные пути, а Controller продолжил checks/evaluator/repair на пустом diff и потратил около 33 минут.
 
-Но вернул `NEEDS_USER_DECISION` на technical state conflict.
+В 0.6.2 checks получают workspace env, baseline gate требует ожидаемый oracle marker, а confirmed-broken benchmark с пустым candidate diff останавливается сразу после IMPLEMENT. Последующие controlled probes успешно записали root/nested paths и existing tracked-файл через `apply_patch`, поэтому первый `Permission denied` считаем неповторившимся turn incident, а не доказанным постоянным ограничением linked worktree. Harness не ослабляет sandbox автоматически.
 
----
 
-# 12. v0.4.6: LIFE lifecycle authority
+## 3c. Semantic benchmark 0.6.3
 
-Добавлена классификация:
+Matrix run 0.6.2 показал полезное поведение simplified pipeline: blind Evaluator поймал false-green regression test, а held-out затем заблокировал ещё одну semantic regression. Но сам historical oracle оставался слишком узким и `_92` нельзя было использовать как gold standard.
+
+В 0.6.3 pipeline не усложняется. Вместо новых model roles Matrix benchmark получил standalone semantic held-out с несколькими независимыми lifecycle properties. Calibration использовала известные неполные `_90`, `_92`, `workspace_14` и candidate 0.6.2 как negative controls, а два отдельно построенных и не распространяемых semantic-good fixtures — как positive controls.
+
+Параллельно Planner/Evaluator получили только generic policy: shared state нужно трассировать до local guards, а action-local target — проверять на ретаргетинг после старта.
+
+## 3d. Planner uncertainty и live console 0.6.4
+
+Первый blind Matrix run 0.6.3 корректно подтвердил baseline semantic grader (`3/7`), но затем остановился на protocol guard: Planner вернул `READY` вместе с честными `unknowns`. Такой guard оказался избыточным — неизвестность должна блокировать только когда без неё нельзя выбрать product semantics, получить обязательное evidence или безопасно продолжить. `READY` теперь может содержать non-blocking unknowns; `NEEDS_USER_DECISION`/`BLOCKED` сохраняют строгую семантику.
+
+Тот же run показал, что под Git Bash обычный Python stdout мог буферизоваться до конца процесса. Launchers теперь задают `PYTHONUNBUFFERED=1`, а Controller включает line buffering/write-through. Pipeline не получил новых ролей или стадий.
+
+## 3e. Retryable App Server stream errors 0.6.5
+
+Реальный Matrix-run на Codex App Server 0.148.0 получил `error` notification с `willRetry=true` и `responseStreamDisconnected`, после чего Controller преждевременно завершил task. По App Server contract такой event промежуточный: server автоматически retry и turn не должен считаться завершённым. 0.6.5 продолжает ждать тот же `turn/completed` в пределах исходного timeout и печатает `APP_SERVER_TURN_RETRY`. Terminal error остаётся fatal.
+
+## 3f. Outcome-based Matrix oracle 0.6.6
+
+Blind run 0.6.5 дошёл до нескольких полезных repair cycles: Evaluator самостоятельно нашёл click-routing defect и затем Distribution stage-risk. Implementer выбрал безопасную Matrix-only изоляцию, но старый held-out всё равно требовал, чтобы Distribution внутренне принял token-only selection как `hasSelection=true`. Это оказалось implementation bias самого benchmark: исходная Matrix-задача допускает как общий fail-closed contract, так и Matrix-only изоляцию, если Distribution action не становится доступным.
+
+0.6.6 делает held-out outcome-based и перекалибрует его на двух архитектурно разных positive fixtures. Candidate 0.6.5 добавлен как negative control и после исправления oracle всё равно получает `5/7`: остаются реальные defects new-action authority при filter residue и zero/all-excluded target safety. То есть grader стал менее overfit, но не был ослаблен под конкретный candidate.
+
+Evaluator получает одну короткую общую policy для reachable coexistence и empty/zero/all-excluded boundaries. При исчерпании repair budget historical benchmark дополнительно запускает held-out только диагностически, без feedback Implementer.
+
+
+## 3g. Execution-first 0.7.0
+
+После 0.6.x стало ясно, что Harness уже намного лучше блокирует плохой result, но первый Implementer всё ещё часто использует только часть хорошего Planner analysis. В Matrix run Planner заранее находил Distribution, action lifecycle и sibling consumers, однако эти выводы оставались prose и становились обязательными только после Evaluator findings.
+
+0.7.0 не добавляет новый reviewer. Controller автоматически превращает fresh Planner artifact в маленький Implementation Contract: outcome и preservation группируются, каждый materially affected consumer остаётся отдельным пунктом, test plan и required docs становятся evidence items. Implementer обязан закрыть весь contract before COMPLETE.
+
+Второй capability gap был toolchain: Implementer сообщал, что Jest/Python недоступны, хотя Controller сразу после turn успешно запускал их по configured paths. Теперь Controller заранее создаёт Harness-owned self-verify runner из trusted repair checks. Implementer выполняет те же commands внутри своего turn, видит failures и может исправить их до первого Evaluator. Stamp привязан к current candidate fingerprint.
+
+Третий gap — tests найденных consumers. Implementer теперь может вернуть только repo-relative test paths; Harness строит поддерживаемые commands сам из trusted toolchain/templates. Arbitrary agent shell на стороне Controller не исполняется.
+
+Новая целевая метрика — `first_evaluation_pass`: final PASS недостаточно, если почти каждая medium-задача требует двух-трёх дорогих Evaluator repair cycles.
+
+## 3h. Execution continuity 0.7.1
+
+Последний 0.7.0 Matrix trial показал два execution gaps: Planner risk про coexistence `filteredBulkSelection` был найден, но не стал обязательным contract item; длинный Implementer turn дошёл до расширенных consumer tests и lifecycle snapshot, но был прерван на timeout до self-verification.
+
+0.7.1 делает Planner risks load-bearing (`RISK-*`) и один раз продолжает тот же Implementer thread после timeout, сохраняя workspace/diff. Matrix held-out/calibration при этом не меняются.
+
+## 3i. Canonical workflow foundation 0.8.0a1
+
+После согласования Step 0–7 обнаружилось, что отдельные контракты были сильными, но переходы, identity evidence и invalidation не имели одного machine-readable владельца. Документация уже расходилась: Runtime был вставлен перед Evaluator в целевой схеме, но старые разделы продолжали направлять Step 4 сразу в Evaluator.
+
+0.8.0a1 решает только этот фундаментальный класс проблем:
 
 ```text
-USER_INTENT
-ACTION_LOCAL
-DERIVED
-CACHE
-PERSISTED_SOURCE
-EXTERNAL_SOURCE
-LEGACY_COMPAT
-UNKNOWN
+workflow.v1
+→ stage order / transitions / statuses / invalidation
+
+run-state.v1
+→ versioned execution lineage
+
+candidate.v1
+→ одна identity candidate для всех evidence stages
 ```
 
-Planner обязан доказать, почему конфликт действительно требует product decision.
+Существующие model protocols 0.7.1 пока не переписываются. Runtime executor, User Task Contract, Verification Plan, private Controller plane, новый Planner/Implementer/Evaluator contract и clean-worktree replan будут внедряться отдельными фазами поверх фиксированной state machine.
 
-Это позволило понять:
+Generated `WORKFLOW.md` и `workflow.v1.json` теперь проверяются docs-sync, поэтому нумерация и переходы не должны снова расходиться вручную.
+
+## 3j. Native Windows file-mode portability 0.8.0a2
+
+Первый self-check упакованной `0.8.0a1` на native Windows обнаружил, что POSIX-воспроизведение mode-only change через `Path.chmod()` непереносимо: NTFS/Git for Windows может не сообщать executable-bit рабочего файла как изменение, даже если test принудительно выставил `core.filemode=true`.
+
+`0.8.0a2` не удаляет file-mode identity и не ослабляет production-контракт. Integration test теперь сначала спрашивает сам Git, появился ли в HEAD-to-working-tree diff переход:
 
 ```text
-selectionAllMatching = USER_INTENT
-filteredBulkSelection = ACTION_LOCAL
+100644 → 100755
 ```
 
-и не спрашивать пользователя о technical lifecycle rule.
+Если переход существует, все прежние assertions обязательны. Если Git/filesystem не умеет представить такой `chmod` как working-tree change, test получает явный platform `SKIP`. Документация использует точный термин `Git-visible file mode`: filesystem-only изменение, отсутствующее в Git diff, не является наблюдаемым candidate change для Git-based Harness.
 
----
+## 4. Fresh Planner и накопленное знание
 
-# 13. Successful historical milestone
+Fresh Planner остаётся независимым. Старые reasoning reports и reference fixes ему не передаются.
 
-Финальный Matrix historical trial:
+Принятые свойства должны переходить в:
 
 ```text
-calibration certificate PASS
-Planner READY
-Implementer
-deterministic checks PASS
-Fresh Evaluator PASS
-held-out PASS
-HARNESS_TASK_PASS
+canonical docs
+public regression tests
+project checks
+controller-owned hidden graders
 ```
 
-Время:
+Это сохраняет fresh reasoning и не заставляет каждый run повторно открывать уже доказанный contract.
+
+## 5. Ближайший маршрут
+
+### Stage A — доказать базовую пригодность
+
+- 3–5 небольших `risk=low` задач;
+- проверить скорость, понятность output и качество diff;
+- исправлять только реальные capability gaps.
+
+### Stage B — medium-задачи
+
+- несколько задач со shared state/API contract;
+- измерять Evaluator findings и escaped defects;
+- добавлять contract tests, а не новые универсальные роли.
+
+### Stage C — runtime capabilities
+
+- project app per worktree;
+- browser/API checks;
+- test 1C/DB/ClickHouse read/write boundaries;
+- production read-only observation.
+
+### Stage D — Git tasks и orchestration
+
+Только после устойчивого quality-core:
+
+- task pickup;
+- controlled branch/commit/PR publication;
+- issue tracker/Symphony;
+- CI enforcement.
+
+## 6. Критерий упрощения
+
+Каждый новый слой должен отвечать на вопрос:
 
 ```text
-27:37
+Какой измеримый класс ошибок он ловит,
+который дешевле не поймать test/runtime capability?
 ```
 
-Planner/Implementer самостоятельно нашли Distribution consumer.
+Если ответа нет, слой не добавляется.
 
-Candidate:
-
-- исправил Matrix all-matching classification;
-- сохранил manual/filter-only/stale/zero/exclusion semantics;
-- добавил current token scope helper;
-- сделал Distribution token-only state `hasSelection=true`, `hasSelectionData=false`;
-- сохранил Distribution stage guard fail-closed.
-
-Post-hoc independent audit material defect не обнаружил.
-
-Это первый подтверждённый milestone качества.
-
----
-
-# 14. Repo hygiene milestone
-
-До этого Harness развивался через множество:
-
-```text
-task_runner_vXX.py
-v0.4.x.zip
-```
-
-что быстро стало неудобно.
-
-Принято:
-
-```text
-one repository
-one current source
-Git commits
-tags
-CHANGELOG
-docs
-```
-
-Добавлены:
-
-- `.gitignore`;
-- `.gitattributes`;
-- CWD-independent launchers;
-- local config;
-- workspace preparation;
-- self-check;
-- calibration certificate.
-
----
-
-# 15. Что пока не доказано
-
-Успешный historical benchmark — важный milestone, но corpus пока мал.
-
-Не доказаны полноценно:
-
-- несколько независимых trials одного case;
-- другие classes historical bugs;
-- browser/runtime tasks;
-- cross-system tasks;
-- production-read evidence;
-- MCP;
-- PR/CI orchestration.
-
-Следующий рост качества должен быть driven реальными tasks/evals, а не добавлением scaffolding «на всякий случай».
-
-
----
-
-# 16. v0.4.6 smoke: второй пример over-specified oracle
-
-Простой smoke contract требовал:
-
-```text
-README.txt содержит единственную строку READY
-```
-
-Planner/Implementer создал семантически допустимое representation, но ранний held-out был привязан к exact bytes:
-
-```text
-READY\n
-```
-
-Этот case усилил вывод Matrix `excluded_ids` incident:
-
-> Grader может быть слишком узким даже после `broken → FAIL / one known-good → PASS`.
-
-Corrected semantic grader принимал:
-
-```text
-READY
-READY\n
-READY\r\n
-```
-
-и отклонял:
-
-```text
-BASE
-missing
-empty
-partial
-extra line
-BOM/extra content
-```
-
----
-
-# 17. Successful Matrix run: target-project runtime gap
-
-Implementer отдельно пытался проверить backend token unit-test.
-
-Run не имел usable Django environment внутри workspace/system Python:
-
-```text
-backend token test → not executed
-```
-
-Backend code/wire contract не менялись, поэтому конкретный task сохранил PASS.
-
-Это выявило будущий capability:
-
-```text
-Harness runtime Python
-!=
-target project Python
-```
-
-для backend tasks.
-
----
-
-# 18. Post-milestone documentation audit: candidate-path evidence gap
-
-При повторном разборе final successful run обнаружено:
-
-Planner initial `candidate_paths` не включал Distribution files, хотя `affected_consumers` и `TEST-008` уже указывали на Distribution risk.
-
-Implementer позже самостоятельно обнаружил необходимость change и изменил Distribution.
-
-Product result был правильным.
-
-Но Controller не:
-
-- расширил planned path set до edit;
-- снял trusted pre-edit snapshot Distribution path;
-- потребовал replan;
-- mechanically reconciled final diff with planned paths.
-
-Это **не отменяет successful product benchmark**, но уточняет состояние Harness:
-
-```text
-quality reasoning milestone → достигнут
-change-surface evidence hardening → ещё нужен
-```
-
-Следующий core hardening должен решить общий класс:
-
-```text
-planned change surface
-vs
-actual final diff
-```
-
-до масштабирования orchestration.
-
----
-
-# 19. D-032 и workspace usability redesign
-
-После documentation audit были объединены три связанных improvement:
-
-```text
-A. planned-vs-actual change surface
-B. machine/project path portability
-C. неудобный manual repository copy lifecycle
-```
-
-## D-032 implementation
-
-Controller теперь после каждого write turn сравнивает:
-
-```text
-actual Git diff paths
-vs
-Planner.candidate_paths
-```
-
-Unexpected path:
-
-```text
-record
-→ rollback только unexpected path
-→ read-only replan
-→ explicit revised candidate surface
-→ per-path trusted snapshot
-→ Implementer redo
-```
-
-Добавлены stdlib tests на tracked/untracked rollback и late pre-path-edit evidence.
-
-## Portable configuration
-
-Удалены hardcoded defaults на `sa_icover/.venv`, portable Node и Jest.
-
-Принято:
-
-```text
-Harness bootstrap Python → PATH/env
-harness.local.toml        → machine config
-projects.<name>            → source repo + toolchain
-```
-
-## Managed Git worktree
-
-Для ordinary project task repository больше не копируется в Harness `cases/`.
-
-Controller создаёт detached Git worktree из source HEAD.
-
-Heavy local dependencies остаются в source location, а executable paths задаются через project toolchain.
-
-## `.env`
-
-Absolute ban заменён explicit opt-in policy.
-
-Managed worktree:
-
-```toml
-copy_untracked = [".env"]
-```
-
-Static historical preparation:
-
-```text
---allow-env
-```
-
-## Accepted result
-
-`result_mode=apply_to_source` позволяет после полного quality PASS применить binary candidate patch обратно в исходный working tree без commit/push.
-
-На момент записи source/unit self-check этого increment проходит в development environment. Windows + real App Server regression должен быть выполнен перед новым validated tag.
-
-
----
-
-# 20. Первый real managed-worktree trial на Windows
-
-После D-032/worktree redesign Matrix benchmark был переведён с локальной копии
-`cases/.../workspace` на external source repository + managed detached worktree.
-
-Run подтвердил:
-
-```text
-local project profile resolution
-→ worktree creation outside Harness repo
-→ opt-in .env copy
-→ project Python/Jest resolution from source
-→ Planner
-→ Implementer
-→ deterministic checks PASS
-→ Fresh Evaluator
-→ REPLAN_REQUIRED
-→ revised Planner
-```
-
-Fresh Evaluator снова обнаружил два реальных gap initial candidate:
-
-- Distribution stage/eligibility representation;
-- stale all-matching selection counter.
-
-Это подтвердило, что evaluator/replan quality logic работает и в новом workspace model.
-
-## Failure: Windows console encoding
-
-После `REPLAN_1_DONE` Controller упал не на reasoning, а при печати Unicode revised
-plan:
-
-```text
-UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'
-```
-
-Run artifacts при этом содержали корректный UTF-8. Root cause находился в Python
-stdout/stderr encoding under Git Bash/Windows.
-
-Добавлены:
-
-```text
-PYTHONUTF8=1
-PYTHONIOENCODING=utf-8
-Controller stdout/stderr reconfigure
-console regression test
-LF/CRLF-neutral test assertion
-```
-
-## Failure: long path при cleanup старого worktree
-
-Первый managed path включал полный длинный `task_id`; `git worktree remove --force`
-на Windows получил `Filename too long`.
-
-Добавлены:
-
-- bounded/hash-suffixed filesystem path segments;
-- short workspace-root recommendation;
-- repository-local `core.longpaths=true`;
-- explicit failed-worktree location diagnostics.
-
-## Validation nuance
-
-Этот run не вызвал D-032 unexpected-path route: Implementer изменил только planned
-files, а missing consumers были обнаружены Fresh Evaluator и добавлены через ordinary
-`REPLAN_REQUIRED`.
-
-Полный rerun после UTF/path fixes остаётся следующим validation gate.
-
-
----
-
-# 21. Planner/Controller protocol failure: free-form obligation IDs
-
-После Windows/worktree fixes новый Matrix trial дошёл до planning, но implementation
-не стартовал. Три Planner attempts возвращали semantically useful characterization,
-однако поле `release_obligations` имело неправильную representation:
-
-```text
-"CC-1 — preserve ..."
-"CC-1, CC-2 ..."
-```
-
-Controller ожидал exact IDs и корректно fail-closed завершил:
-
-```text
-HARNESS_TASK_BLOCKED: planner_artifact_invalid
-```
-
-Проблема классифицирована как **protocol design defect**, а не model reasoning defect:
-Planner заставляли заново кодировать cross-reference list, который Controller мог
-вычислить сам.
-
-## Hardening
-
-Введён strict protocol:
-
-```text
-planner.v2
-→ local release_critical booleans
-→ Controller-derived exact obligation ledger
-→ plan_fingerprint
-→ Implementer
-→ evaluator.v2 bound to exact IDs/fingerprint
-```
-
-Также validation retry перестал пересылать весь malformed artifact и получает compact
-structured error. Это снижает token/latency cost повторных planning turns.
-
-Следующий real Matrix trial является acceptance gate этого protocol increment.

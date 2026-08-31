@@ -1,494 +1,182 @@
-# Модель качества Slivin Harness
+# Модель качества 0.8.0a2 — Phase 1
 
-## 1. Почему green tests недостаточны
+## 1. Что доказывает Phase 1
 
-Исторический development cycle показал несколько отдельных классов false confidence:
+Phase 1 не делает агента умнее напрямую. Она устраняет фундаментальную неоднозначность:
 
-1. Implementer исправил direct scenario, но shared consumer остался неверным.
-2. Новый regression test оказался green уже на broken baseline.
-3. Held-out grader проверял `excluded_ids: []`, хотя реальный backend contract допускал отсутствие поля.
-4. Evaluator мог формально проверить backend token support, но не локальный stage guard consumer.
-5. Синтетически возможная комбинация полей выглядела defect, но lifecycle показывал, что normal runtime path её не создаёт.
+> Какой этап сейчас выполняется, какая версия Contract/candidate проверялась и какие прежние доказательства уже устарели?
 
-Поэтому текущая модель качества — это не «больше тестов», а явная state/evidence model.
+До Phase 1 эти факты выводились из console flow. Теперь они являются machine state.
 
----
+## 2. Один candidate — одно evidence lineage
 
-## 2. Current Contract — `CC-*`
-
-Planner сначала характеризует существующее поведение.
-
-Пример:
+Единый `candidate_id` связывает candidate с:
 
 ```text
-CC-001
-state: ACTIVE
-behavior: ...
-evidence:
-- source code
-- existing test
-compatibility_notes: ...
+baseline SHA
+workspace HEAD
+changed paths
+bytes
+удалениями
+symlink targets
+Git-visible file modes
 ```
 
-Current contract отделяется от желаемого target и assumptions.
+`Git-visible` означает, что mode должен существовать в HEAD-to-working-tree diff. На native Windows/NTFS один `chmod` может не создавать такого изменения; в этом случае candidate действительно остаётся тем же с точки зрения Git. Self-check не маскирует настоящий mode change: он сначала подтверждает, что Git видит `100644 → 100755`, и только при отсутствии такой filesystem capability честно пропускает integration test.
 
----
+Если candidate меняется, его identity меняется. Если Controller check, Evaluator или held-out изменяет candidate, run не может продолжить как PASS.
 
-## 3. Assumptions — `A-*`
+## 3. Версии и инвалидация
 
-Структура:
+`run_state.json` хранит revision vector:
 
 ```text
-id
-claim
-evidence
-confidence = HIGH | MEDIUM | LOW
-narrows_existing_behavior = true | false
+task_contract_rev
+plan_rev
+implementation_contract_rev
+verification_plan_rev
+candidate_rev
+runtime_environment_rev
+attempt_id
 ```
 
-Критическое правило:
+Phase 1 уже использует plan, implementation contract, candidate и runtime environment revisions. Остальные поля зарезервированы для следующих фаз и пока имеют `null`.
+
+Главное правило:
 
 ```text
-narrows_existing_behavior = true
-+
-confidence < HIGH
-→ plan validation failure / replan
+изменилось основание доказательства
+→ старое evidence больше не считается текущим
 ```
-
-Нельзя превращать технически удобное предположение в новый compatibility contract.
-
----
-
-## 4. Consumers — `CONS-*`
-
-Shared change автоматически повышает требование к impact analysis.
-
-Для materially affected consumer недостаточно подтвердить:
-
-```text
-backend endpoint умеет принять payload
-```
-
-Нужно проверить его собственные readers и observable semantics.
-
----
-
-## 5. State Lifecycle — `LIFE-*`
-
-Каждый materially relevant mechanism классифицируется:
-
-```text
-USER_INTENT
-ACTION_LOCAL
-DERIVED
-CACHE
-PERSISTED_SOURCE
-EXTERNAL_SOURCE
-LEGACY_COMPAT
-UNKNOWN
-```
-
-Для LIFE фиксируются:
-
-- owner;
-- scope;
-- created_when;
-- valid_while;
-- invalidated_when;
-- authority_domains;
-- frozen_after_action_start;
-- supersession_rule;
-- must_not_override;
-- evidence;
-- confidence.
-
-### Базовые invariants
-
-Если domain contract не говорит иначе:
-
-```text
-USER_INTENT
-→ выбирает target нового action.
-
-ACTION_LOCAL
-→ authoritative только внутри создавшего его action instance.
-
-ACTION_LOCAL + frozen target
-→ новый global intent не ретаргетит уже начатый action.
-
-ACTION_LOCAL residue
-→ не должен определять другой новый action.
-
-DERIVED/CACHE
-→ не переопределяют source.
-
-stale
-→ never authoritative.
-
-PERSISTED/EXTERNAL
-→ authority определяется domain contract.
-```
-
----
-
-## 6. Representation Consumer Audit — `REP-*`
-
-Используется, если один logical state имеет несколько carriers.
 
 Например:
 
 ```text
-manual materialized IDs
-server-side token reference
+REPLAN_REQUIRED
+→ Planner и downstream stages INVALIDATED
+→ attempt_id увеличивается
+→ Planner запускается заново
 ```
 
-REP требует найти у consumers:
+## 4. Stage result validation
 
-- eligibility/stage guards;
-- permissions;
-- visibility/enabled;
-- counts/summaries;
-- payload/routing;
-- mutation target;
-- readback;
-- cache;
-- fail-open/fail-closed.
+`RunState` не принимает произвольный успешный code.
 
-Главный lesson:
-
-> Новый representation безопасен не тогда, когда его понимает backend, а когда все materially affected readers либо понимают его, либо сознательно остаются fail-closed.
-
----
-
-## 7. Authority Audit — `AUTH-*`
-
-Если mechanisms сосуществуют:
+Нельзя записать:
 
 ```text
-state A
-state B
-state C
+Intake / Preflight
+→ EVALUATION_PASS
 ```
 
-Planner определяет authority для reachable combinations.
+Для каждого этапа канонически задан допустимый success code. `RunState` также различает настоящий `PASSED` и разрешённый compatibility `SKIPPED`: skip-code нельзя записать как обычный PASS, а обязательный этап нельзя пропустить с его pass-code. Финальный код дополнительно связан с режимом run: production не может завершиться `HARNESS_BENCHMARK_PASS`, а benchmark — `HARNESS_TASK_PASS`. Это защищает от логически невозможного результата из-за ошибки Controller-кода.
 
-Проверяем surfaces:
+## 5. Self-verify и Controller checks
+
+Текущая модель 0.7.1 сохраняется:
 
 ```text
-visibility
-count
-summary
-eligibility
-payload
-routing
-mutation target
-readback
-cleanup
+Implementer self-verify
+≠
+Controller deterministic verification
 ```
 
-Material defect:
+Self-verify помогает Implementer исправиться до сдачи. Controller затем повторяет checks независимо.
+
+Phase 1 переводит fingerprint self-verify на единый `candidate_id`, но private Controller plane и dynamic check registration до `COMPLETE` ещё относятся к следующим фазам.
+
+## 6. Runtime и Evaluator
+
+Канонический workflow уже содержит:
 
 ```text
-visibility → A
-payload     → B
+Step 5 Runtime / external verification
+Step 6 Blind Evaluator
 ```
 
-без подтверждённого contract.
+Но в 0.8.0a2:
 
-AUTH должен ссылаться на LIFE, а не только на наличие полей.
+- Runtime executor ещё не реализован и всегда получает explicit compatibility skip;
+- Evaluator остаётся однопроходным `evaluator.v4` и получает прежний context;
+- двухфазный blind/contract audit будет реализован позже.
 
----
+Документация намеренно не выдаёт будущий target за текущую capability.
 
-## 8. Reachability before Cartesian product
+## 7. Production и benchmark
 
-Нельзя автоматически считать defect каждую комбинацию:
+Workflow mode вычисляется Controller:
 
 ```text
-object.fieldA = ...
-object.fieldB = ...
+нет benchmark/heldout → PRODUCTION
+benchmark config или heldout → HISTORICAL_BENCHMARK
 ```
 
-Сначала проследить writers/lifecycle:
+Финальные статусы разделены:
 
 ```text
-может ли normal runtime реально создать state A+B?
+HARNESS_TASK_PASS
+HARNESS_BENCHMARK_PASS
 ```
 
-Если комбинация возможна только ручной конструкцией test object, она не обязана быть product bug.
+Held-out по-прежнему не возвращается Implementer как repair feedback.
 
----
+## 8. Что означает `HARNESS_SELF_CHECK_PASS`
 
-## 9. Preservation Contract — `PRES-*`
-
-Определяет, что нельзя случайно изменить.
-
-Пример:
+Он доказывает:
 
 ```text
-PRES-001:
-filter-only не получает normal action.
-
-PRES-002:
-manual IDs сохраняют precedence.
-
-PRES-003:
-wire protocol не меняется.
+Python sources compile
+manifest schemas valid
+unit tests pass
+generated workflow docs current
+workflow definition internally consistent
+benchmark calibration artifacts consistent
 ```
 
----
-
-## 10. Interaction Matrix — `INT-*`
-
-Для реально достижимых state combinations:
+Он не доказывает:
 
 ```text
-current
-stale
-missing
-empty
-zero
-partial
-combined
+автономную надёжность на любом project;
+готовность ещё не реализованных Phase 2–6 capabilities;
+отсутствие всех semantic defects.
 ```
 
-Interaction должен быть material — не каждая наблюдаемая деталь обязана быть release gate.
+## 9. Метрики Phase 1
 
----
-
-## 11. Test Matrix — `TEST-*`
-
-Planner формирует test/evidence plan до production edit.
-
-Для regression bug предпочтительно:
+Полезные artifacts:
 
 ```text
-broken baseline → RED
-candidate → GREEN
+run_state.json
+workflow_snapshot.json
+candidate_identity_current.json
+execution_metrics.json
+final_acceptance.json
 ```
 
-Evaluator должен проверять, что test не false-green.
-
----
-
-## 12. Release Obligations — Controller-owned ledger
-
-Не все `CC`/interaction observations становятся blockers, но Planner больше **не**
-формирует отдельный free-form `release_obligations` array. Это cross-reference
-representation оказалось ненадёжным и дублирующим.
-
-Controller детерминированно включает все:
-
-- `LIFE-*`;
-- `REP-*`;
-- `AUTH-*`;
-- `CONS-*`;
-- `PRES-*`;
-- `TEST-*`.
-
-Planner делает только локальную boolean-классификацию:
+Они позволяют измерять:
 
 ```text
-current_contract[].release_critical
-interaction_matrix[].release_critical
+attempts per task
+repair/replan cycles
+first_evaluation_pass
+candidate revisions
+terminal failure stage
 ```
 
-`true` CC/INT включаются Controller в blocking ledger; `false` остаются
-characterization context. Fresh Evaluator независимо проверяет, не пометил ли Planner
-material CC/INT как advisory.
+После следующих фаз к ним добавятся Task Contract и Verification Plan revisions.
 
-Exact blocking IDs — machine-owned handoff Controller → Implementer/Evaluator.
-Подробно: `HANDOFF_PROTOCOL.md`.
+## 10. Anti-monster принцип
 
----
+В Phase 1 не добавлен ни один новый model reviewer.
 
-## 13. Evidence Ledger
-
-Fresh Evaluator возвращает одну assessment на каждый release obligation:
+Сложность добавлена туда, где она детерминированна и проверяема:
 
 ```text
-PASS
-FAIL
-UNVERIFIED
+workflow definition
+state ownership
+artifact identity
+invalidation
+status routing
 ```
 
-С evidence type и concrete evidence.
-
-Medium/high-risk `UNVERIFIED` release claim обычно блокирует Done.
-
----
-
-## 14. Evaluator statuses
-
-### `PASS`
-
-Все blocking obligations доказаны, material findings отсутствуют.
-
-### `FINDINGS`
-
-Проблема в candidate implementation/evidence.
-
-Routing:
-
-```text
-Implementer repair
-→ deterministic checks
-→ NEW Fresh Evaluator
-```
-
-### `REPLAN_REQUIRED`
-
-Проблема в planning/characterization model.
-
-Routing:
-
-```text
-Planner revises artifact
-→ validation
-→ Fresh Evaluator
-```
-
-### `BLOCKED`
-
-Не хватает обязательной technical capability/evidence.
-
-### `NEEDS_USER_DECISION`
-
-Нужно настоящее новое product rule.
-
-Не использовать для implementation ambiguity, которую можно разрешить LIFE/ownership analysis.
-
----
-
-## 15. Decision escalation
-
-`NEEDS_USER_DECISION` требует explicit `decision_escalations`.
-
-Planner должен доказать:
-
-- какие peer states конфликтуют;
-- почему lifecycle/ownership/temporal order не дают приоритета;
-- какой именно product rule отсутствует;
-- последствия вариантов.
-
----
-
-## 16. Pre-edit baseline snapshot
-
-После валидного plan, но до Implementer:
-
-```text
-head_sha
-candidate path
-exists
-raw size
-raw SHA-256
-git EOL
-index entry
-baseline blob SHA
-baseline blob size
-```
-
-Это independent evidence о pre-edit state.
-
-Если replan позже добавил новый path, нельзя задним числом называть его snapshot «pre-edit».
-
-### 16.1. D-032 path-local evidence reconciliation
-
-Текущий Controller решает late-discovered consumer механически.
-
-Если Agent уже изменил path вне `candidate_paths`, Controller не принимает это как готовое расширение. Он:
-
-```text
-rollback unexpected path к baseline
-→ replan
-→ required path входит в candidate_paths
-→ snapshot ДО повторной edit этого path
-```
-
-Snapshot различает:
-
-```text
-captured_before_first_edit
-captured_before_path_edit
-```
-
-Поэтому поздний path может быть:
-
-```text
-first_edit=false
-path_edit=true
-```
-
-что является корректным evidence statement.
-
-Machine invariant перед evaluation/final PASS:
-
-```text
-actual changed paths ⊆ candidate_paths
-```
-
----
-
-## 17. Deterministic checks
-
-Check modes:
-
-```text
-feedback = "repair"
-feedback = "heldout"
-```
-
-### repair
-
-Failure показывается Implementer.
-
-### heldout
-
-Запускается после readiness.
-
-Failure не используется как tutor в том же trial.
-
----
-
-## 18. Held-out и calibration
-
-Historical grader должен проверять semantics.
-
-Calibration sanity check:
-
-```text
-broken → FAIL
-known-good → PASS
-```
-
-Текущий Matrix case хранит hash-bound calibration certificate.
-
-Если grader/check definition изменяется, certificate должен стать invalid.
-
-Calibration — necessary sanity check, но один known-good не доказывает acceptance всех допустимых implementations.
-
----
-
-## 19. Independent historical benchmark result
-
-Matrix all-matching case стал первым реальным milestone:
-
-Ранний Harness:
-
-- исправлял direct Matrix flow;
-- пропускал downstream Distribution stage semantics;
-- принимал weak/false-green evidence;
-- нуждался в human post-review.
-
-Текущий Harness:
-
-- самостоятельно определил current all-matching scope;
-- построил LIFE/REP/AUTH;
-- нашёл Distribution consumer;
-- сохранил token-only fail-closed stage behavior;
-- прошёл deterministic checks;
-- прошёл Fresh Evaluator;
-- прошёл calibrated held-out;
-- прошёл отдельный post-hoc audit без material defect.
-
-Это evidence жизнеспособности quality-core, но не доказательство универсальной надёжности.
+Planner/Implementer/Evaluator prompts будут меняться отдельными фазами и после каждой фазы проверяться на historical corpus.

@@ -5,11 +5,8 @@ from pathlib import Path
 from typing import Callable
 
 from slivin_harness.app_server import CodexAppServer
-from slivin_harness.protocol import (
-    PLANNER_PROTOCOL_VERSION,
-    id_schema,
-)
-
+from slivin_harness.protocol import PLANNER_PROTOCOL_VERSION
+from slivin_harness.workflow import PlannerStatus, enum_values
 
 PLANNER_SCHEMA = {
     "type": "object",
@@ -21,596 +18,81 @@ PLANNER_SCHEMA = {
         },
         "status": {
             "type": "string",
-            "enum": [
-                "READY",
-                "BLOCKED",
-                "NEEDS_USER_DECISION",
-            ],
+            "enum": enum_values(PlannerStatus),
         },
         "summary": {"type": "string"},
-        "reproduction": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "relevant_state": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "name": {"type": "string"},
-                    "meaning": {"type": "string"},
-                    "writers": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "readers": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": [
-                    "name",
-                    "meaning",
-                    "writers",
-                    "readers",
-                ],
-            },
-        },
-        "current_contract": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": id_schema("current_contract"),
-                    "state": {"type": "string"},
-                    "behavior": {"type": "string"},
-                    "evidence": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "source": {
-                        "type": "string",
-                        "enum": [
-                            "user_requirement",
-                            "test",
-                            "code",
-                            "documentation",
-                            "observed_runtime",
-                            "mixed",
-                        ],
-                    },
-                    "compatibility_notes": {"type": "string"},
-                    "release_critical": {"type": "boolean"},
-                },
-                "required": [
-                    "id",
-                    "state",
-                    "behavior",
-                    "evidence",
-                    "source",
-                    "compatibility_notes",
-                    "release_critical",
-                ],
-            },
-        },
-        "assumptions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": id_schema("assumptions"),
-                    "claim": {"type": "string"},
-                    "evidence": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "confidence": {
-                        "type": "string",
-                        "enum": ["HIGH", "MEDIUM", "LOW"],
-                    },
-                    "narrows_existing_behavior": {"type": "boolean"},
-                },
-                "required": [
-                    "id",
-                    "claim",
-                    "evidence",
-                    "confidence",
-                    "narrows_existing_behavior",
-                ],
-            },
-        },
+        "observed_behavior": {"type": "array", "maxItems": 6, "items": {"type": "string"}},
+        "expected_behavior": {"type": "array", "maxItems": 5, "items": {"type": "string"}},
         "root_cause": {
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "hypothesis": {"type": "string"},
-                "evidence": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
+                "claim": {"type": "string"},
+                "evidence": {"type": "array", "items": {"type": "string"}},
                 "confidence": {
                     "type": "string",
                     "enum": ["HIGH", "MEDIUM", "LOW"],
                 },
             },
-            "required": [
-                "hypothesis",
-                "evidence",
-                "confidence",
-            ],
+            "required": ["claim", "evidence", "confidence"],
         },
-        "local_owner": {"type": "string"},
-        "shared_components": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "affected_consumers": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": id_schema("affected_consumers"),
-                    "consumer": {"type": "string"},
-                    "why_affected": {"type": "string"},
-                },
-                "required": ["id", "consumer", "why_affected"],
+        "change_plan": {"type": "array", "maxItems": 6, "items": {"type": "string"}},
+        "preserve": {"type": "array", "maxItems": 6, "items": {"type": "string"}},
+        "consumers_to_check": {"type": "array", "maxItems": 8, "items": {"type": "string"}},
+        "risks": {"type": "array", "maxItems": 6, "items": {"type": "string"}},
+        "test_plan": {"type": "array", "maxItems": 6, "items": {"type": "string"}},
+        "documentation": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "required": {"type": "boolean"},
+                "paths": {"type": "array", "items": {"type": "string"}},
+                "reason": {"type": "string"},
             },
+            "required": ["required", "paths", "reason"],
         },
-        "state_lifecycle_audit": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": id_schema("state_lifecycle_audit"),
-                    "mechanism": {"type": "string"},
-                    "role": {
-                        "type": "string",
-                        "enum": [
-                            "USER_INTENT",
-                            "ACTION_LOCAL",
-                            "DERIVED",
-                            "CACHE",
-                            "PERSISTED_SOURCE",
-                            "EXTERNAL_SOURCE",
-                            "LEGACY_COMPAT",
-                            "UNKNOWN",
-                        ],
-                    },
-                    "owner": {"type": "string"},
-                    "scope": {"type": "string"},
-                    "created_when": {"type": "string"},
-                    "valid_while": {"type": "string"},
-                    "invalidated_when": {"type": "string"},
-                    "authority_domains": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "frozen_after_action_start": {"type": "boolean"},
-                    "supersession_rule": {"type": "string"},
-                    "must_not_override": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "evidence": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "confidence": {
-                        "type": "string",
-                        "enum": ["HIGH", "MEDIUM", "LOW"],
-                    },
-                },
-                "required": [
-                    "id",
-                    "mechanism",
-                    "role",
-                    "owner",
-                    "scope",
-                    "created_when",
-                    "valid_while",
-                    "invalidated_when",
-                    "authority_domains",
-                    "frozen_after_action_start",
-                    "supersession_rule",
-                    "must_not_override",
-                    "evidence",
-                    "confidence",
-                ],
-            },
-        },
-        "decision_escalations": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": id_schema("decision_escalations"),
-                    "question": {"type": "string"},
-                    "mechanisms": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "why_lifecycle_cannot_resolve": {"type": "string"},
-                    "evidence": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "user_semantics_required": {"type": "string"},
-                    "consequences": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": [
-                    "id",
-                    "question",
-                    "mechanisms",
-                    "why_lifecycle_cannot_resolve",
-                    "evidence",
-                    "user_semantics_required",
-                    "consequences",
-                ],
-            },
-        },
-        "representation_consumer_audit": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": id_schema("representation_consumer_audit"),
-                    "logical_state": {"type": "string"},
-                    "representations": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "properties": {
-                                "name": {"type": "string"},
-                                "semantics": {"type": "string"},
-                                "evidence": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                            },
-                            "required": ["name", "semantics", "evidence"],
-                        },
-                    },
-                    "change_or_extension": {"type": "string"},
-                    "consumers": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "properties": {
-                                "consumer": {"type": "string"},
-                                "local_readers": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "expected_behavior": {"type": "string"},
-                                "risk": {"type": "string"},
-                                "evidence": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                            },
-                            "required": [
-                                "consumer",
-                                "local_readers",
-                                "expected_behavior",
-                                "risk",
-                                "evidence",
-                            ],
-                        },
-                    },
-                },
-                "required": [
-                    "id",
-                    "logical_state",
-                    "representations",
-                    "change_or_extension",
-                    "consumers",
-                ],
-            },
-        },
-        "authority_matrix": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": id_schema("authority_matrix"),
-                    "coexisting_states": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "authority_rule": {"type": "string"},
-                    "surfaces": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "expected_consistency": {"type": "string"},
-                    "evidence": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": [
-                    "id",
-                    "coexisting_states",
-                    "authority_rule",
-                    "surfaces",
-                    "expected_consistency",
-                    "evidence",
-                ],
-            },
-        },
-        "preservation_contract": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": id_schema("preservation_contract"),
-                    "claim": {"type": "string"},
-                },
-                "required": ["id", "claim"],
-            },
-        },
-        "interaction_matrix": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": id_schema("interaction_matrix"),
-                    "scenario": {"type": "string"},
-                    "expected": {"type": "string"},
-                    "risk": {"type": "string"},
-                    "release_critical": {"type": "boolean"},
-                },
-                "required": [
-                    "id",
-                    "scenario",
-                    "expected",
-                    "risk",
-                    "release_critical",
-                ],
-            },
-        },
-        "test_matrix": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": id_schema("test_matrix"),
-                    "scenario": {"type": "string"},
-                    "expected": {"type": "string"},
-                    "test_level": {
-                        "type": "string",
-                        "enum": [
-                            "unit",
-                            "contract",
-                            "integration",
-                            "ui",
-                            "static",
-                        ],
-                    },
-                },
-                "required": [
-                    "id",
-                    "scenario",
-                    "expected",
-                    "test_level",
-                ],
-            },
-        },
-        "candidate_paths": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "proposed_change_surface": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "unknowns": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
+        "likely_paths": {"type": "array", "maxItems": 12, "items": {"type": "string"}},
+        "unknowns": {"type": "array", "maxItems": 5, "items": {"type": "string"}},
     },
     "required": [
         "protocol_version",
         "status",
         "summary",
-        "reproduction",
-        "relevant_state",
-        "current_contract",
-        "assumptions",
+        "observed_behavior",
+        "expected_behavior",
         "root_cause",
-        "local_owner",
-        "shared_components",
-        "affected_consumers",
-        "state_lifecycle_audit",
-        "decision_escalations",
-        "representation_consumer_audit",
-        "authority_matrix",
-        "preservation_contract",
-        "interaction_matrix",
-        "test_matrix",
-        "candidate_paths",
-        "proposed_change_surface",
+        "change_plan",
+        "preserve",
+        "consumers_to_check",
+        "risks",
+        "test_plan",
+        "documentation",
+        "likely_paths",
         "unknowns",
     ],
 }
 
-
 PLANNER_INSTRUCTIONS = """
-Ты Planner/Characterizer внутри Slivin Harness.
+Ты read-only Planner внутри Slivin Harness.
 
-Работай строго read-only.
+Твоя задача — коротко понять задачу до изменения кода:
+- прочитать repository instructions и актуальную документацию;
+- подтвердить фактическое поведение по коду, тестам или воспроизведению;
+- отделить доказанный root cause от предположений;
+- найти общие компоненты и соседних consumers, которые реально достижимы; для shared state/representation проследить consumers до локальных eligibility/stage/permission guards, а не только до endpoint/payload;
+- назвать, что должно сохраниться, включая target уже начатого stateful action при последующей смене global state;
+- для state/count/token/selection логики проверить только достижимые boundary/coexistence случаи: empty/zero/all-excluded, stale и конкурирующие current/resident states; важные случаи включить в risks/test_plan;
+- consumers_to_check держи коротким: максимум 8 materially distinct consumer families, однотипные readers объединяй;
+- предложить небольшой test plan; остановись, когда evidence достаточно для безопасной реализации, не создавай repository-wide prose audit;
+- определить, нужна ли синхронизация документации.
 
-Твоя задача — ДО реализации охарактеризовать контракт, logical state,
-representation, lifecycle и authority. Не исправляй код и не предлагай готовый patch.
-
-1. CHARACTERIZE CURRENT CONTRACT.
-   Найди current/legacy/compatibility states по коду, tests, docs и user requirement.
-   Проверь optional/missing/null/empty/zero/stale semantics.
-
-2. TRACE LOGICAL STATE.
-   Определи writers/readers и representations logical state:
-   materialized/token, persisted/generated, cached/fresh, local/remote, legacy/new.
-
-3. STATE SCOPE / LIFECYCLE AUDIT.
-   Для каждого materially relevant state mechanism создай LIFE-*.
-   Классифицируй `role`:
-   - USER_INTENT: текущее явное намерение пользователя/оператора;
-   - ACTION_LOCAL: state, созданный/зафиксированный для конкретного action instance;
-   - DERIVED: вычисляемое представление другого state;
-   - CACHE: ускоряющий/временный cache, не source of truth;
-   - PERSISTED_SOURCE: persisted domain source-of-truth;
-   - EXTERNAL_SOURCE: authoritative external system/source;
-   - LEGACY_COMPAT: совместимое legacy representation;
-   - UNKNOWN: только если evidence реально недостаточно.
-
-   Для каждого state зафиксируй:
-   owner, scope, created_when, valid_while, invalidated_when,
-   authority_domains, frozen_after_action_start, supersession_rule,
-   must_not_override и evidence.
-
-4. LIFECYCLE AUTHORITY RESOLUTION.
-   Перед NEEDS_USER_DECISION попытайся разрешить конфликт механически по ownership
-   и lifecycle. Используй следующие engineering invariants, если код/контракт им
-   не противоречит:
-
-   a) USER_INTENT определяет target для НОВОГО действия в своей authority domain.
-   b) ACTION_LOCAL authoritative только внутри action instance, который его создал.
-      Если target уже зафиксирован для начатого action и
-      `frozen_after_action_start=true`, последующее изменение global intent не должно
-      молча ретаргетить этот уже начатый action.
-   c) ACTION_LOCAL state не должен переопределять выбор target для другого нового
-      action только потому, что остался в памяти/cache.
-   d) DERIVED/CACHE не переопределяет source state, из которого он выведен.
-   e) stale/invalidated state никогда не authoritative.
-   f) PERSISTED_SOURCE / EXTERNAL_SOURCE могут быть authoritative в своей domain
-      даже против USER_INTENT, если это следует из domain contract; не предполагай
-      обратное без evidence.
-   g) LEGACY_COMPAT сохраняется только в пределах подтверждённой compatibility domain.
-
-   Эти правила — про технический ownership/lifecycle, а не про продуктовый выбор.
-
-5. WHEN NEEDS_USER_DECISION IS ALLOWED.
-   `NEEDS_USER_DECISION` допустим только если после LIFE-* анализа остаются
-   два или более СЕМАНТИЧЕСКИ РАВНОПРАВНЫХ состояния:
-   - они претендуют на одну и ту же authority domain;
-   - их lifecycle одновременно действителен;
-   - ownership/temporal order не даёт приоритета;
-   - current contract/tests/docs/user requirement не разрешают конфликт;
-   - выбор реально меняет продуктовую семантику.
-
-   Тогда обязательно заполни `decision_escalations` с конкретным доказательством,
-   почему lifecycle/ownership не может разрешить вопрос.
-   Не эскалируй пользователю внутреннюю implementation ambiguity, которую можно
-   разрешить по lifecycle.
-
-6. REPRESENTATION-CONSUMER AUDIT.
-   Если representation logical state добавляется/расширяется/заменяется, создай REP-*.
-   Для каждого materially affected consumer проверь локальные readers:
-   stage/eligibility guards, permissions, visibility, count/summary,
-   payload/routing, readback/cache, fail-open/fail-closed.
-   Backend transport compatibility сама по себе недостаточна.
-
-7. AUTHORITY / PRECEDENCE AUDIT.
-   Если mechanisms могут сосуществовать, создай AUTH-*.
-   Каждое AUTH-* должно опираться на LIFE-* и давать единое решение для:
-   visibility, count, summary, eligibility, payload, routing, mutation target,
-   readback/cleanup. Один surface не должен выбирать state A, а другой исполнять
-   state B без подтверждённого contract.
-
-8. CHALLENGE ASSUMPTIONS.
-   Всё вне current contract → assumptions с evidence/confidence и
-   `narrows_existing_behavior`. Не сужай compatibility молча.
-
-9. ROOT CAUSE / OWNERSHIP / IMPACT.
-   Ищи контрпример root cause. Предпочитай local owner. Для shared changes найди
-   materially affected consumers и создай CONS-*.
-
-10. UNIQUE IDS.
-    Используй уникальные IDs:
-    CC-*, A-*, CONS-*, LIFE-*, REP-*, AUTH-*, PRES-*, INT-*, TEST-*.
-    decision_escalations использует DEC-*.
-
-11. INTERACTIONS.
-    Проверь current/stale/missing/empty/partial/combined и coexisting mechanisms.
-
-12. TEST VALIDITY.
-    Test matrix строится ДО production edit. Для regression bug evidence должен
-    различать broken baseline и candidate. Green-on-baseline test не доказывает fix.
-
-13. UNKNOWN SEMANTICS.
-    Неизвестная настоящая product semantics → NEEDS_USER_DECISION.
-    Недостаточное technical evidence/capability → BLOCKED.
-    Technical lifecycle/ownership ambiguity → сначала LIFE/AUTH resolution, не user.
-
-13a. TRUSTED BENCHMARK EVIDENCE.
-    Если Harness передал `baseline_status=CONFIRMED_BROKEN` с authority
-    `CONTROLLER_HELDOUT`, existence исторического defect уже доказан Controller на
-    ЭТОМ exact workspace до planning. Это evidence сильнее твоего ad-hoc jsdom/smoke
-    probe. Не возвращай BLOCKED с причиной «не воспроизводится». Если твой probe
-    проходит, считай его неполным: найди omitted lifecycle transition, DOM reader,
-    second-pass refresh, routing или другую разницу fidelity. Hidden assertion/output
-    намеренно не раскрываются; не пытайся искать grader вне workspace.
-
-14. BASELINE VS WORKTREE.
-    Различай canonical baseline blob и filesystem representation.
-
-15. RELEASE-CRITICAL MARKING.
-    НЕ создавай отдельный список release obligations и НЕ повторяй IDs в prose.
-    Controller сам детерминированно строит blocking ledger:
-    - все LIFE-*;
-    - все REP-*;
-    - все AUTH-*;
-    - все materially affected CONS-*;
-    - все PRES-*;
-    - все TEST-*;
-    - только CC-* с `release_critical=true`;
-    - только INT-* с `release_critical=true`.
-
-    Для каждого current_contract и interaction_matrix ОБЯЗАТЕЛЬНО выставь
-    `release_critical` как boolean. Это единственный способ выбрать advisory vs
-    blocking CC/INT. Не кодируй этот выбор в строках, описаниях или ID.
-
-16. STRICT PROTOCOL FORMAT.
-    `protocol_version` всегда ровно `planner.v2`.
-    Все ID-поля — только bare identifiers по schema, например:
-    `CC-1`, `A-2`, `CONS-3`, `LIFE-4`, `REP-1`, `AUTH-2`, `PRES-5`,
-    `INT-7`, `TEST-9`, `DEC-1`.
-    Никогда не добавляй к ID пояснение (`CC-1 — ...` запрещено), не объединяй
-    несколько IDs в одной строке (`CC-1, CC-2` запрещено) и не используй ID как
-    поле для prose. Пояснение всегда хранится в семантическом поле объекта.
-
-17. CANDIDATE PATHS.
-    Только точные repo-relative paths предполагаемых изменений.
-    Это machine-enforced planned change surface, а не справочный список.
-    Включай production files, tests и docs, которые реально могут потребоваться для
-    заявленного решения. Если revision_context сообщает UNPLANNED_CHANGE_SURFACE,
-    независимо реши, нужен ли каждый обнаруженный path: required path явно добавь,
-    unrelated path не добавляй. Controller уже откатил такие paths к baseline и
-    снимет trusted pre-path-edit snapshot перед повторной implementation.
-
-18. REPLAN.
-    После REPLAN_REQUIRED исправляй artifact по independent feedback.
-    Baseline определяй через preflight/baseline_snapshot/head_sha.
-
-19. proposed_change_surface — owners/files/modules, не готовый patch.
-
-Верни только JSON по output schema.
+Не пиши готовый patch и не диктуй конкретные строки реализации. Не используй другие
+копии проекта, старые Planner reports, reference patches или hidden checks. Код не меняй.
+`unknowns` — это честный список оставшихся неопределённостей. READY может содержать
+non-blocking unknowns, если они не мешают безопасно выбрать change semantics и проверить
+результат. Если unknown требует решения пользователя и меняет product semantics — верни
+NEEDS_USER_DECISION. Если без него нельзя получить обязательное evidence или безопасно
+продолжать — BLOCKED.
 """.strip()
 
 
@@ -619,14 +101,12 @@ def run_planner(
     *,
     workspace: Path,
     task_prompt: str,
-    toolchain: dict[str, str] | None = None,
-    preflight: dict | None = None,
-    baseline_snapshot: dict | None = None,
-    revision_context: dict | None = None,
-    benchmark_evidence: dict | None = None,
+    preflight: dict,
+    replan_context: str = "",
     explicit_skills: list[dict[str, str]] | None = None,
     on_heartbeat: Callable[[dict], None] | None = None,
     on_thread_started: Callable[[dict], None] | None = None,
+    timeout: float = 900,
 ) -> dict:
     thread_id = codex.start_thread(
         cwd=workspace,
@@ -634,95 +114,31 @@ def run_planner(
         developer_instructions=PLANNER_INSTRUCTIONS,
         on_started=on_thread_started,
     )
-
-    toolchain_text = "\n".join(
-        f"- {name}: {path}"
-        for name, path in (toolchain or {}).items()
-    ) or "(not declared)"
-
-    preflight_json = json.dumps(
-        preflight or {},
-        ensure_ascii=False,
-        indent=2,
-    )
-
-    baseline_snapshot_json = json.dumps(
-        baseline_snapshot or {},
-        ensure_ascii=False,
-        indent=2,
-    )
-
-    revision_json = json.dumps(
-        revision_context or {},
-        ensure_ascii=False,
-        indent=2,
-    )
-
-    benchmark_json = json.dumps(
-        benchmark_evidence or {},
-        ensure_ascii=False,
-        indent=2,
-    )
-
     prompt = f"""
-Исходная задача пользователя:
+Исходная задача:
 
 --- BEGIN TASK ---
 {task_prompt}
 --- END TASK ---
 
-Trusted Harness preflight, зафиксированный ДО первой production edit:
+Trusted preflight до изменений:
+{json.dumps(preflight, ensure_ascii=False, indent=2)}
 
---- BEGIN PREFLIGHT ---
-{preflight_json}
---- END PREFLIGHT ---
+{replan_context}
 
-Trusted historical benchmark evidence, если Controller его собрал:
-
---- BEGIN BENCHMARK EVIDENCE ---
-{benchmark_json}
---- END BENCHMARK EVIDENCE ---
-
-Если здесь `baseline_status` = `CONFIRMED_BROKEN`, defect existence уже доказан
-Controller на exact current workspace. Не отменяй это evidence synthetic probe-ом.
-
-Pre-edit filesystem evidence, если Harness уже смог его снять:
-
---- BEGIN BASELINE SNAPSHOT ---
-{baseline_snapshot_json}
---- END BASELINE SNAPSHOT ---
-
-Trusted toolchain, если потребуется для понимания доступного verification:
-
---- BEGIN TOOLCHAIN ---
-{toolchain_text}
---- END TOOLCHAIN ---
-
-Feedback предыдущего Fresh Evaluator для перепланирования, если есть:
-
---- BEGIN REVISION CONTEXT ---
-{revision_json}
---- END REVISION CONTEXT ---
-
-Сначала охарактеризуй существующий contract, затем подготовь planning artifact.
-Protocol contract: `protocol_version` = `planner.v2`; ID-поля должны соответствовать schema буквально.
-Если workspace уже содержит candidate changes, canonical pre-change baseline —
-это preflight.head_sha, а не текущая рабочая копия.
-Код не изменяй.
+Исследуй текущий repository независимо и верни компактный structured plan.
 """.strip()
-
     raw = codex.run_turn(
         thread_id=thread_id,
         prompt=prompt,
         output_schema=PLANNER_SCHEMA,
         skills=explicit_skills,
         on_heartbeat=on_heartbeat,
+        timeout=timeout,
     )
-
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
         raise RuntimeError(
-            "Planner returned invalid structured output.\n"
-            f"Raw final response:\n{raw}"
+            "Planner returned invalid JSON structured output.\n" + raw
         ) from exc
