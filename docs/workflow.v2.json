@@ -1,10 +1,16 @@
 {
-  "schema_version": "workflow.v1",
-  "harness_version": "0.8.0a4",
-  "phase": "phase2-private-control-plane-and-execution-broker",
+  "schema_version": "workflow.v2",
+  "harness_version": "0.8.0a5",
+  "phase": "phase3-task-planner-contract-verification-plan",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",
     "execution_broker": "execution-broker.v1"
+  },
+  "phase3_contracts": {
+    "task_contract": "task-contract.v1",
+    "planner": "planner.v4",
+    "implementation_contract": "implementation-contract.v3",
+    "verification_plan": "verification-plan.v1"
   },
   "stages": [
     {
@@ -17,7 +23,7 @@
       ],
       "skip_codes": [],
       "optional": false,
-      "maturity": "COMPATIBILITY_IMPLEMENTED"
+      "maturity": "PHASE3_IMPLEMENTED"
     },
     {
       "number": 1,
@@ -32,7 +38,7 @@
         "PLANNER_SKIPPED_FAST"
       ],
       "optional": false,
-      "maturity": "COMPATIBILITY_IMPLEMENTED"
+      "maturity": "PHASE3_IMPLEMENTED"
     },
     {
       "number": 2,
@@ -44,7 +50,7 @@
       ],
       "skip_codes": [],
       "optional": false,
-      "maturity": "COMPATIBILITY_IMPLEMENTED"
+      "maturity": "PHASE3_IMPLEMENTED"
     },
     {
       "number": 3,
@@ -195,10 +201,15 @@
     "INVALID"
   ],
   "agent_statuses": {
+    "task_contract": [
+      "READY",
+      "NEEDS_USER_DECISION"
+    ],
     "planner": [
       "READY",
       "BLOCKED",
-      "NEEDS_USER_DECISION"
+      "NEEDS_USER_DECISION",
+      "TASK_CONTRACT_INVALID"
     ],
     "implementer": [
       "COMPLETE",

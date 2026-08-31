@@ -1,275 +1,162 @@
-# Slivin Harness 0.8.0a4 — Phase 2
+# Slivin Harness 0.8.0a5 — Phase 3
 
-Slivin Harness — Controller вокруг Codex App Server для автономной работы над coding-задачами в изолированной Git worktree.
+Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Версия **0.8.0a4** завершает Phase 2 согласованного рефакторинга quality-core и исправляет обнаруженную native Windows несовместимость `0.8.0a3`: filesystem-boundaries теперь сравниваются по каноническому расположению, а не по лексическому написанию `Path`. Model protocols пока не переписываются: сначала authoritative Controller state отделён от agent-writable workspace и введён единый Execution / Capability Broker.
-
-```text
-Phase 1: machine-readable workflow + versioned Run State + candidate_id
-Phase 2: private Controller plane + execution policies + private self-verify receipts
-```
-
-## Что реализовано в Phase 2
-
-Каждый run теперь разделён на две плоскости:
+Версия **0.8.0a5** реализует Phase 3 согласованной архитектуры:
 
 ```text
-runs/<task>/<run>/
-├── controller_private/       # authoritative Controller state
-│   ├── run_state.json
-│   ├── candidate_identity_current.json
-│   ├── implementation_contract_*.json
-│   └── self_verify_receipt_current.json
-├── run_state.json            # public diagnostic mirror
-├── execution_policies.json   # без секретов и env values
-└── остальные public artifacts
-
-<WORKSPACE>/.harness_tmp/     # agent/runtime scratch; never authoritative
+RAW USER REQUEST
+        ↓
+USER TASK CONTRACT task-contract.v1
+        ↓
+PLANNER planner.v4
+        ↓
+IMPLEMENTATION CONTRACT implementation-contract.v3
+        ↓
+VERIFICATION PLAN verification-plan.v1
+        ↓
+owner-boundary + capability gates
+        ↓
+IMPLEMENTER implementer.v1
 ```
 
-`ExecutionBroker` формирует role-specific policy для Planner, Implementer, Controller checks, Runtime, Evaluator и held-out. Он централизует scratch/temp/cache, фильтрует чувствительные environment variables и никогда не передаёт путь private plane в agent environment. Политика честно различает `ENFORCED`, `ADVISORY` и `UNAVAILABLE`: Phase 2 не заявляет OS-sandbox там, где restricted native Windows runner ещё не реализован.
+Machine-readable workflow: **workflow.v2**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller foundation: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Evaluator пока остаётся **evaluator.v4**.
 
-На native Windows один каталог может иметь несколько эквивалентных представлений пути: исходное имя из `tempfile`, resolved/real path, другое написание регистра или filesystem alias. Поэтому security- и ownership-проверки используют каноническое containment. Private-path filtering проверяет как исходный, так и canonical alias и не путает соседний каталог вроде `controller_private_backup` с private plane.
+## Что изменилось в Phase 3
 
-Self-verification внутри worktree остаётся удобным claim агента, но финальным доказательством становится Controller-owned HMAC receipt, привязанный одновременно к `candidate_id`, attempt и revision vector. Поэтому старый PASS нельзя переиспользовать после изменения Contract или Verification Plan даже при неизменном коде.
+### User Task Contract
 
-## Канонический workflow
+Перед Planner отдельный узкий Intake Normalizer сохраняет исходный запрос дословно и извлекает только явно сказанные требования:
 
 ```text
-0. Intake / Preflight
-        ↓ PREFLIGHT_READY
-1. Planner
-        ↓ PLANNER_READY
-2. Implementation Contract
-        ↓ IMPLEMENTATION_CONTRACT_READY
-3. Implementer
-        ↓ IMPLEMENTATION_COMPLETE
-4. Controller deterministic checks
-        ↓ DETERMINISTIC_VERIFICATION_PASS
-5. Runtime / external verification (условно)
-        ↓ RUNTIME_VERIFICATION_PASS или RUNTIME_VERIFICATION_SKIPPED
-6. Blind Evaluator
-        ↓ EVALUATION_PASS
-7. Final Gate / result handoff
-        ↓ HARNESS_TASK_PASS или HARNESS_BENCHMARK_PASS
+intent
+acceptance
+preservation
+forbidden
+owner boundaries
+non-goals
 ```
 
-Полная таблица этапов, переходов и инвалидации находится в [каноническом workflow](docs/WORKFLOW.md). Его machine-readable форма — [`docs/workflow.v1.json`](docs/workflow.v1.json).
+Каждый explicit claim обязан ссылаться на точный непрерывный `source_text` из исходного запроса. Normalizer не читает repository и не придумывает техническое решение.
 
-## Что уже реализовано в фундаменте Phase 1
+### Planner v4
 
-Каждый run теперь создаёт Controller-owned:
+Planner теперь отдельно формирует:
 
 ```text
-runs/<task_id>/<run_id>/
-├── workflow_snapshot.json
-├── run_state.json
-├── candidate_identity_current.json
-├── ... существующие plan/check/evaluation artifacts
-├── candidate.patch
-├── final_acceptance.json
-└── delivery_record.json
+characterization
+bug root cause или feature extension point
+design constraints
+material assumptions
+technical acceptance
+derived preservation
+affected consumers
+conditional State Model
+material risks
+typed Evidence Plan
+documentation decision
 ```
 
-`run_state.json` хранит:
+Planner остаётся read-only и не может заменить пользовательское acceptance собственной формулировкой.
 
-- текущий этап и состояние всех Step 0–7;
-- историю переходов и попыток;
-- `attempt_id`;
-- revision vector для plan, contract, candidate и runtime environment;
-- baseline source/workspace;
-- текущий `candidate_id`;
-- terminal outcome.
+### Implementation Contract v3
 
-`candidate_id` — единая identity candidate. Она связана с baseline SHA и учитывает изменённые пути, фактические bytes, удаления, symlink target и **Git-visible file mode**. На native Windows/NTFS обычный `chmod` может не создавать mode-only working-tree change; если Git не показывает такого изменения в HEAD-to-working-tree diff, для Git-based Harness candidate действительно не изменился. `.harness_tmp/` и `.venv/` не входят в candidate.
-
-Если Controller checks, Evaluator или held-out изменили candidate, run останавливается. Если workspace HEAD изменился, Harness также останавливает run: Git history остаётся зоной Controller.
-
-## Что пока сохранено для совместимости 0.7.1
-
-Phase 2 сохраняет совместимость model roles:
-
-- manifest остаётся `version = 2`;
-- `risk = "low"` всё ещё выбирает FAST compatibility pipeline;
-- `risk = "medium"`/`"high"` выбирает FULL compatibility pipeline;
-- Planner остаётся `planner.v3`;
-- Implementer остаётся `implementer.v1`;
-- Implementation Contract остаётся `implementation-contract.v2`;
-- Evaluator остаётся `evaluator.v4`;
-- текущие fixed repair/replan budgets и turn-timeout continuation пока сохранены;
-- dynamic checks всё ещё регистрируются через существующий Implementation Report;
-- semantic replan пока использует существующую worktree;
-- Runtime Step 5 ещё не имеет executor и пока фиксируется как compatibility skip. Phase 2 также не заявляет, что Controller checks уже исполняются в универсальном OS-level restricted runner.
-
-Такое отображение не утверждает, что будущей production-задаче runtime не нужен. Оно лишь честно показывает текущее состояние executor-а.
-
-## Что Phase 2 ещё не реализует
-
-Следующие согласованные компоненты относятся к последующим фазам:
+Controller детерминированно переносит load-bearing выводы в минимальный Definition of Done:
 
 ```text
-USER TASK CONTRACT
-Verification Plan compiler
-новый Planner contract
-open-world Contract expansion
-inactivity watchdog вместо hard active timeout
-restricted Controller check runner
-Runtime / external verification executor
-двухфазный Blind Evaluator
-clean-worktree semantic replan
-усиленный Final Gate / delivery critical section
+ACCEPTANCE
+PRESERVATION
+STATE            условно
+CONSUMER-N
+RISK-N
+DOCS             условно
 ```
 
-Новых model roles в Phase 1 нет.
+Explicit user acceptance и preservation копируются напрямую из User Task Contract. Отдельного общего `EVIDENCE-1` больше нет: каждый item содержит собственное `required_proof`.
 
-## Быстрый старт
+### Verification Plan v1
 
-### 1. Локальная конфигурация
-
-Скопируйте:
+Typed Verification Plan не пытается угадывать способ проверки из свободного текста. Он сохраняет один или несколько proof-профилей для каждого Contract item:
 
 ```text
-harness.local.example.toml
-→ harness.local.toml
+LOCAL_DETERMINISTIC
+LIVE_LOCAL
+TEST_EXTERNAL
+PROD_OBSERVE
 ```
 
-Пример:
+Разные runtime-профили не схлопываются в один «самый сильный»: requirement может одновременно требовать, например, `LIVE_LOCAL` и `TEST_EXTERNAL`.
 
-```toml
-[codex]
-command = "C:/Users/<user>/Tools/codex-cli/node_modules/.bin/codex.cmd"
+До writable Implementer Controller проверяет:
 
-[workspace]
-root = "C:/Users/<user>/.slivin-harness/workspaces"
-
-[projects.example]
-repo = "C:/Users/<user>/Documents/example-repo"
-base_ref = "HEAD"
-result_mode = "keep_worktree"
-require_clean_source = true
-
-[projects.example.toolchain]
-project_python = "{project_root}/.venv/Scripts/python.exe"
-node = "C:/Users/<user>/Tools/node/node.exe"
-jest = "{project_root}/node_modules/jest/bin/jest.js"
+```text
+owner boundary совместим с планом?
+все требуемые capabilities реально доступны?
 ```
 
-### 2. Проверка Harness
+Если нет — задача останавливается до расходования writable turn.
+
+## Каноническая схема
+
+Полный Step 0–7 workflow генерируется из `slivin_harness/workflow.py`:
+
+- [Понятная схема workflow](docs/WORKFLOW.md)
+- [Machine-readable workflow.v2](docs/workflow.v2.json)
+- [Архитектура](docs/ARCHITECTURE.md)
+- [Модель качества](docs/QUALITY_MODEL.md)
+- [Практическое руководство](docs/PRACTICAL_GUIDE.md)
+- [Windows setup](docs/WINDOWS_SETUP.md)
+
+## Быстрая проверка
 
 ```bash
 ./py tools/self_check.py
 ```
 
-### 3. Проверка manifest
+Ожидаемый финал:
+
+```text
+DOCS_SYNC_PASS harness=0.8.0a5 ...
+HARNESS_SELF_CHECK_PASS
+```
+
+## Проверка manifest
 
 ```bash
-./run examples/project-task.example.toml --validate-only
+./run cases/matrix-all-matching/task.toml --validate-only
 ```
 
-### 4. Запуск задачи
+Manifest пока остаётся `version = 2` для совместимости.
 
-```bash
-./run path/to/task.toml
-```
+## Что Phase 3 ещё не реализует
 
-## Текущий manifest v2
-
-```toml
-version = 2
-
-task_id = "EXAMPLE_SMALL_FIX"
-project = "example"
-workspace_mode = "git_worktree"
-result_mode = "keep_worktree"
-
-risk = "low"
-max_fix_cycles = 1
-max_replan_cycles = 0
-turn_timeout_seconds = 900
-require_clean_git = true
-
-prompt = """
-Исправь конкретный дефект. Не ломай существующее поведение.
-Добавь регрессионный тест и обнови документацию, если меняется контракт.
-"""
-
-[[checks]]
-name = "Unit tests"
-feedback = "repair"
-command = ["{python}", "-m", "pytest", "tests/test_target.py", "-q"]
-timeout_seconds = 180
-
-[[checks]]
-name = "Git diff check"
-feedback = "repair"
-command = ["git", "diff", "--check"]
-timeout_seconds = 30
-```
-
-`feedback = "repair"` — trusted check, доступный текущему self-verify и затем повторяемый Controller.
-
-`feedback = "heldout"` — hidden historical exam. Его assertion не возвращается Implementer в том же benchmark trial.
-
-## Как читать итог
-
-Production run завершается:
+Phase 3 намеренно **не заявляет готовыми**:
 
 ```text
-HARNESS_TASK_PASS
+.worktreeinclude как автоматическую canonical copy policy;
+автоматический bootstrap отдельной project .venv;
+open-world register-obligation/register-check IPC;
+inactivity watchdog вместо active wall-clock timeout;
+universal restricted OS runner для Controller checks;
+LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE executors;
+двухфазный Blind Evaluator;
+clean-worktree semantic replan;
+финальную delivery transaction.
 ```
 
-Historical benchmark завершается отдельным status:
+Если `verification-plan.v1` требует runtime capability, для которой executor ещё не реализован, Harness честно возвращает `REQUIRED_CAPABILITY_MISSING` **до Implementer**. Он не подменяет обязательный runtime proof зелёными unit-тестами.
+
+## Локальная конфигурация
+
+Machine-specific пути остаются в `harness.local.toml`, который не входит в release-архив. Пример: [`harness.local.example.toml`](harness.local.example.toml).
+
+## Режимы результата
+
+Текущий Harness поддерживает существующие режимы:
 
 ```text
-HARNESS_BENCHMARK_PASS
+keep_worktree
+apply_to_source
 ```
 
-При ошибке путь к `RUN_DIR` печатается в консоль. Основной диагностический файл:
-
-```text
-runs/<task>/<run>/run_state.json
-```
-
-Смотрите в нём:
-
-```text
-active_stage
-cursor_stage
-stages
-revisions
-current_candidate
-terminal
-events
-```
-
-## Документация workflow
-
-После изменения `slivin_harness/workflow.py`:
-
-```bash
-./py tools/render_workflow_docs.py
-./py tools/render_workflow_docs.py --check
-./py tools/check_docs_sync.py
-```
-
-Ручное редактирование таблиц в `docs/WORKFLOW.md` запрещено: файл генерируется из кода.
-
-## Result modes
-
-- `keep_worktree` — source repository не изменяется, worktree и patch сохраняются;
-- `apply_to_source` — accepted patch применяется только через существующие source guards.
-
-Harness не делает commit, push, merge или PR.
-
-## Документы
-
-- [Канонический workflow](docs/WORKFLOW.md)
-- [Архитектура Phase 1](docs/ARCHITECTURE.md)
-- [Модель качества](docs/QUALITY_MODEL.md)
-- [Практическая работа](docs/PRACTICAL_GUIDE.md)
-- [Настройка Windows](docs/WINDOWS_SETUP.md)
-- [История и roadmap](docs/HISTORY.md)
-- [Historical Matrix benchmark](cases/matrix-all-matching/README.md)
-
-
-Foundation protocol versions: `controller-plane.v1`, `execution-broker.v1`.
+Branch, commit, push и merge остаются ответственностью пользователя/будущего Publication Layer.

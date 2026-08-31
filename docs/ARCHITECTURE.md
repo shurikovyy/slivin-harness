@@ -1,363 +1,265 @@
-# Архитектура 0.8.0a4 — Phase 2
+# Архитектура Slivin Harness 0.8.0a5 — Phase 3
 
-## 1. Цель Phase 1–2
+## Назначение Phase 3
 
-Phase 1 ввела канонический workflow и versioned Run State. Phase 2 отделяет authoritative Controller state от agent-writable workspace и централизует execution boundaries, не меняя пока смысл model protocols.
+Machine phase id: `phase3-task-planner-contract-verification-plan`.
 
-До этой версии переходы между Planner, Implementer, checks, Evaluator и held-out были зашиты в `task_runner.py` и повторялись в документации вручную. Это позволяло коду и описанию расходиться.
-
-Теперь источник истины один:
+Phase 1 ввела каноническую Step 0–7 state machine. Phase 2 вынесла authoritative Controller state из agent-writable worktree и централизовала execution policy. Phase 3 подключает к реальному pipeline пользовательский контракт, новый Planner, новый Implementation Contract и typed Verification Plan.
 
 ```text
-slivin_harness/workflow.py
-        ├── docs/WORKFLOW.md
-        ├── docs/workflow.v1.json
-        ├── workflow_snapshot.json каждого run
-        └── RunState transition validation
-```
-
-## 2. Канонические компоненты
-
-### `slivin_harness/workflow.py`
-
-Определяет:
-
-```text
-Step 0–7
-stage ids
-stage success codes
-общие routing outcomes
-agent status enums
-allowed stage transitions
-invalidation triggers/rules
-stage maturity
-```
-
-Схема имеет версию и phase id:
-
-```text
-workflow.v1
-phase2-private-control-plane-and-execution-broker
-```
-
-`validate_workflow_definition()` запрещает пропущенный номер этапа, дублирующийся stage id, отсутствующий success transition или trigger без invalidation rule.
-
-### `slivin_harness/run_state.py`
-
-Определяет:
-
-```text
+workflow.v2
 run-state.v1
 candidate.v1
+controller-plane.v1
+execution-broker.v1
+        ↓
+task-contract.v1
+planner.v4
+implementation-contract.v3
+verification-plan.v1
 ```
 
-`RunState` записывает Controller-owned `run_state.json` атомарно и хранит:
+## Реальный pipeline Phase 3
 
 ```text
-workflow/harness version
-mode: PRODUCTION | HISTORICAL_BENCHMARK
-pipeline profile: FAST | FULL
-attempt_id
-stage states
-revision vector
-baseline
-current candidate
-event history
-terminal result
+MANIFEST version = 2
+        ↓
+project/worktree/toolchain preflight
+        ↓
+USER TASK CONTRACT
+        ↓
+Planner v4 или FAST compatibility skip
+        ↓
+Implementation Contract v3
+        ↓
+Verification Plan v1
+        ↓
+owner-boundary gate
+        ↓
+capability gate
+        ↓
+Implementer v1
+        ↓
+Controller checks
+        ↓
+Runtime SKIPPED для local-only proof
+или BLOCKED до Implementer для недоступного runtime proof
+        ↓
+Evaluator v4
+        ↓
+Final Gate compatibility executor
 ```
 
-### `CandidateIdentity`
+## Ownership
 
-Единая identity candidate содержит:
+### User Task Contract
+
+Владелец: Controller.
+
+Intake Normalizer возвращает structured proposal, после чего Controller проверяет:
 
 ```text
-baseline SHA
-workspace HEAD
-changed paths
-file/deletion/symlink state
-Git-visible mode
-SHA-256 фактических bytes
+source_text является точным substring raw request;
+READY имеет intent и acceptance;
+NEEDS_USER_DECISION имеет прямое противоречие и reason;
+fingerprint соответствует содержимому.
 ```
 
-Из identity вычисляется `candidate_id`.
+Authoritative artifact хранится в private Controller plane.
 
-`candidate.v1` фиксирует mode, который Git реально представляет в HEAD-to-working-tree diff. На файловых системах, где Git не наблюдает изменение executable-бита рабочего файла, один `chmod` не считается изменением candidate. Integration test сначала делает capability probe и выполняет mode assertions только когда Git действительно сообщает `100644 → 100755`.
+### Planner artifact
 
-Не входят:
+Владелец semantic reasoning: fresh Planner.
+
+Владелец валидации и сохранения: Controller.
+
+Planner получает raw request, Task Contract и repository. Он не получает reference solution или hidden grader.
+
+### Implementation Contract
+
+Владелец: Controller.
+
+Он строится детерминированно из:
 
 ```text
-.harness_tmp/**
-.venv/**
+Task Contract explicit acceptance/preservation
++
+Planner technical acceptance/preservation/consumers/state/risks/docs
 ```
 
-Так Controller может доказать, что self-verify, deterministic checks, Evaluator, held-out и Final Gate наблюдали один candidate.
+Planner не может удалить explicit user requirements.
 
+### Verification Plan
 
-### `slivin_harness/control_plane.py`
+Владелец: Controller.
 
-Определяет private control plane каждого run:
+Он связывает каждый Contract item с typed proof profiles и capability set. План привязан к fingerprint Implementation Contract.
+
+## Task Contract
+
+Формат: **task-contract.v1**.
+
+```text
+raw_user_request
+raw_request_sha256
+explicit_intent[]
+explicit_acceptance[]
+explicit_preservation[]
+explicit_forbidden[]
+owner_boundaries[]
+non_goals[]
+ambiguities[]
+fingerprint
+```
+
+Каждый explicit row:
+
+```json
+{
+  "claim": "Нормализованная формулировка",
+  "source_text": "точный фрагмент исходного запроса"
+}
+```
+
+Normalizer не имеет repository и не определяет technical scope.
+
+## Planner v4
+
+Формат Planner содержит только поля с downstream consequence:
+
+```text
+characterization
+diagnosis
+assumptions
+technical_contract
+affected_consumers
+state_model
+risks
+evidence_plan
+documentation
+owner_boundary_assessment
+unknowns
+```
+
+Для BUG необходим root cause. Для FEATURE — extension point и design constraints. READY с LOW-confidence bug diagnosis запрещён. Assumption, сужающее compatibility, требует HIGH confidence.
+
+## Implementation Contract v3
+
+Допустимые item types:
+
+```text
+acceptance
+preservation
+state
+consumer
+risk
+documentation
+```
+
+Каждый item:
+
+```text
+id
+type
+source
+requirement
+required_proof
+allow_not_affected
+```
+
+`NOT_AFFECTED` разрешён только consumer. Лимит 14 является soft review threshold: material obligation не отбрасывается ради числа.
+
+## Typed proof model
+
+Planner выдаёт отдельный proof target:
+
+```text
+claim
+level
+capabilities
+```
+
+Contract compiler сохраняет:
+
+```text
+claims[]
+profiles[]
+```
+
+Каждый profile:
+
+```text
+level
+capabilities
+```
+
+Это необходимо, потому что `LIVE_LOCAL`, `TEST_EXTERNAL` и `PROD_OBSERVE` — разные execution routes, а не одна линейная шкала риска.
+
+## Verification Plan v1
+
+```text
+implementation_contract_fingerprint
+requirements[]
+project_gates[]
+task_checks[]
+required_capabilities[]
+runtime_profiles[]
+runtime_required
+fingerprint
+```
+
+Для каждого non-local profile компилятор автоматически добавляет executor capability:
+
+```text
+LIVE_LOCAL      → LIVE_LOCAL_RUNTIME
+TEST_EXTERNAL   → TEST_EXTERNAL_RUNTIME
+PROD_OBSERVE    → PROD_OBSERVE_RUNTIME
+```
+
+Plan validator сверяет summaries с фактическими requirement profiles. Подмена `required_capabilities` с пересчитанным fingerprint всё равно отклоняется.
+
+## Capability gate
+
+Phase 3 реально предоставляет только уже существующие local capabilities:
+
+```text
+GIT
+PROJECT_PYTHON
+NODE
+JEST
+DOCS_SYNC
+```
+
+Объявление будущего runtime capability в config не считается executor implementation. Поэтому required Browser/test-external/prod-observe proof блокируется до Implementer.
+
+## Private Controller plane
+
+Authoritative artifacts продолжают храниться вне agent-writable worktree:
 
 ```text
 RUN_DIR/controller_private/
-→ authoritative Controller state
-
-WORKSPACE/.harness_tmp/
-→ non-authoritative agent/runtime scratch
 ```
 
-Private plane использует atomic writes, run-relative path validation и HMAC-protected self-verification receipts. Public `run_state.json` остаётся диагностическим mirror; Controller читает authoritative copy из `controller_private/run_state.json`.
+Agent scratch в `.harness_tmp` не является доказательством. Self-verify receipt привязывается к revision vector и candidate identity.
 
-### `slivin_harness/execution.py`
-
-`ExecutionBroker` формирует policy и environment для ролей:
+## Версии
 
 ```text
-app_server / planner / implementer / controller_check / runtime / evaluator / heldout
+Harness                     0.8.0a5
+Manifest                    version = 2
+Workflow                    workflow.v2
+Run State                   run-state.v1
+Candidate                   candidate.v1
+Controller plane            controller-plane.v1
+Execution Broker            execution-broker.v1
+Task Contract               task-contract.v1
+Planner                     planner.v4
+Implementer                 implementer.v1
+Implementation Contract     implementation-contract.v3
+Verification Plan           verification-plan.v1
+Evaluator                   evaluator.v4
 ```
 
-Policy описывает readable/writable roots, scratch, network и external mutation, а также реальный enforcement level. `ADVISORY` не маскируется под `ENFORCED`; restricted OS runner будет отдельной последующей фазой.
+## Не реализовано в Phase 3
 
-### Controller-owned self-verification receipt
-
-Agent-writable stamp является только claim. Controller повторно вычисляет candidate и выпускает private receipt, связанный с:
-
-```text
-candidate_id
-task_contract_rev
-plan_rev
-implementation_contract_rev
-verification_plan_rev
-runtime_env_id
-attempt_id
-```
-
-Изменение любого измерения делает старый receipt непригодным.
-
-### `task_runner.py`
-
-Текущий executor 0.7.1 отображён на новый Step 0–7 Run State:
-
-```text
-Step 0  preflight
-Step 1  planner либо FAST skip
-Step 2  implementation contract
-Step 3  implementer
-Step 4  existing repair checks
-Step 5  explicit Phase-1 runtime skip
-Step 6  evaluator либо FAST skip
-Step 7  held-out/result handoff
-```
-
-Каждая стадия обязана начинаться разрешённым переходом. Успешный result code проверяется против конкретного stage.
-
-### Agent protocol modules
-
-Статусы больше не дублируются строками в нескольких местах:
-
-```text
-planner.py     → PlannerStatus
-implementer.py → ImplementerStatus
-evaluator.py   → EvaluatorStatus
-```
-
-Сами schemas/prompts пока остаются:
-
-```text
-planner.v3
-implementer.v1
-implementation-contract.v2
-evaluator.v4
-```
-
-## 3. Понятная схема выполнения
-
-```text
-manifest
-  ↓
-RunState.create
-  ↓
-Step 0 preflight
-  ↓
-Step 1 planner / compatibility skip
-  ↓
-Step 2 contract
-  ↓
-Step 3 implementer + current self-verify
-  ↓
-Step 4 checks; failure → same Implementer repair
-  ↓
-Step 5 explicit runtime skip in Phase 1
-  ↓
-Step 6 evaluator; finding → repair; replan → Planner
-  ↓
-Step 7 held-out if benchmark + result delivery
-```
-
-Точный граф генерируется в [WORKFLOW.md](WORKFLOW.md).
-
-## 4. Revision vector
-
-`run_state.json` содержит:
-
-```text
-task_contract
-plan
-implementation_contract
-verification_plan
-candidate
-runtime_environment
-```
-
-В текущем compatibility executor реально изменяются:
-
-```text
-plan
-implementation_contract
-candidate
-runtime_environment
-```
-
-`task_contract` и `verification_plan` пока могут оставаться `null`, потому что их новые protocols относятся к Phase 3. Наличие полей заранее фиксирует их место в общей state machine.
-
-## 5. Invalidation model
-
-Канонические triggers определены один раз:
-
-```text
-TASK_CONTRACT_CHANGED
-REPLAN_REQUIRED
-CONTRACT_EXPANDED
-CHECK_REGISTERED
-CANDIDATE_CHANGED
-DEPENDENCY_MANIFEST_CHANGED
-RUNTIME_ENV_CHANGED
-RUNTIME_PROFILE_CHANGED
-SOURCE_CHANGED
-HIDDEN_GRADER_CHANGED
-CANDIDATE_CHANGED_AFTER_EVALUATION
-```
-
-При invalidation устаревший stage больше не хранит активный PASS: result/outcome/artifacts очищаются, stage становится `INVALIDATED`, а подробности остаются в event log.
-
-Полная таблица — в [WORKFLOW.md](WORKFLOW.md).
-
-## 6. Stage state и routing outcome — разные понятия
-
-Stage state показывает состояние записи:
-
-```text
-NOT_STARTED
-IN_PROGRESS
-PASSED
-SKIPPED
-STOPPED
-FAILED
-INVALIDATED
-```
-
-Routing outcome объясняет, куда идёт orchestration:
-
-```text
-PASS
-REPAIR
-REPLAN
-BLOCKED
-NEEDS_USER_DECISION
-INVALID
-```
-
-Например:
-
-```text
-Evaluator FINDINGS
-→ stage state FAILED
-→ outcome REPAIR
-→ следующий stage Implementer
-```
-
-Infrastructure или protocol corruption:
-
-```text
-→ outcome INVALID/BLOCKED
-```
-
-а не product finding.
-
-## 7. Final Gate в Phase 1
-
-Step 7 теперь:
-
-1. фиксирует final `candidate_id`;
-2. для benchmark повторно убеждается, что held-out не изменил candidate;
-3. строит `candidate.patch` и его SHA-256;
-4. убеждается, что packaging не изменил managed candidate;
-5. создаёт `final_acceptance.json`;
-6. выполняет текущий result handoff и пишет `delivery_record.json`;
-7. повторно убеждается, что delivery не изменил managed candidate;
-8. выдаёт отдельный `HARNESS_TASK_PASS` или `HARNESS_BENCHMARK_PASS`;
-9. записывает terminal PASS в Run State.
-
-Полный будущий Final Gate с patch reconstruction и delivery critical section относится к последующей фазе.
-
-## 8. Generated documentation
-
-Команда:
-
-```bash
-./py tools/render_workflow_docs.py
-```
-
-создаёт:
-
-```text
-docs/WORKFLOW.md
-docs/workflow.v1.json
-```
-
-Проверка:
-
-```bash
-./py tools/render_workflow_docs.py --check
-./py tools/check_docs_sync.py
-```
-
-`check_docs_sync.py` также проверяет версии:
-
-```text
-0.8.0a4
-workflow.v1
-run-state.v1
-candidate.v1
-planner.v3
-implementer.v1
-implementation-contract.v2
-evaluator.v4
-```
-
-## 9. Что намеренно не реализовано в Phase 1
-
-Phase 1 не утверждает готовность целевой архитектуры целиком. Пока отсутствуют:
-
-```text
-User Task Contract normalizer/alignment
-Verification Plan compiler
-private Controller control plane
-Execution / Capability Broker
-new Planner protocol
-open-world Contract transaction
-runtime executor
-restricted Controller runner
-two-phase Evaluator
-clean-worktree semantic replan
-new no-progress/watchdog policy
-publication automation
-```
-
-Это защищает от большого недоказуемого rewrite: сначала фиксируется state ownership, затем по одной фазе меняются capabilities и model contracts.
-
-
-Foundation protocol versions: `controller-plane.v1`, `execution-broker.v1`.
-
-## Native Windows path identity
-
-Controller-plane и Broker boundaries сравниваются по каноническому filesystem location. Лексическое `Path.is_relative_to()` не используется как security proof: на Windows исходный путь, resolved path, junction/alias и вариант регистра могут обозначать один каталог, но иметь разные строки. Для environment filtering Broker сохраняет исходный и canonical private-root aliases, а path-valued entries дополнительно разрешает через canonical containment. Соседние имена с общим текстовым префиксом не считаются descendants.
+Phase 3 не объявляет готовыми open-world IPC, runtime executors, двухфазный Evaluator, inactivity watchdog, restricted Controller runner или новую Final Gate transaction. Эти границы описываются как последующие фазы, а не как уже работающие гарантии.

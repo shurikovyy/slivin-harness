@@ -4,8 +4,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Iterable, TypeVar
 
-WORKFLOW_VERSION = "workflow.v1"
-WORKFLOW_PHASE = "phase2-private-control-plane-and-execution-broker"
+WORKFLOW_VERSION = "workflow.v2"
+WORKFLOW_PHASE = "phase3-task-planner-contract-verification-plan"
 
 
 class _TextEnum(str, Enum):
@@ -50,6 +50,7 @@ class StageState(_TextEnum):
 
 
 class StageMaturity(_TextEnum):
+    PHASE3_IMPLEMENTED = "PHASE3_IMPLEMENTED"
     COMPATIBILITY_IMPLEMENTED = "COMPATIBILITY_IMPLEMENTED"
     PLANNED = "PLANNED"
 
@@ -88,10 +89,16 @@ class StageResultCode(_TextEnum):
     INVALID = "INVALID"
 
 
+class TaskContractStatus(_TextEnum):
+    READY = "READY"
+    NEEDS_USER_DECISION = "NEEDS_USER_DECISION"
+
+
 class PlannerStatus(_TextEnum):
     READY = "READY"
     BLOCKED = "BLOCKED"
     NEEDS_USER_DECISION = "NEEDS_USER_DECISION"
+    TASK_CONTRACT_INVALID = "TASK_CONTRACT_INVALID"
 
 
 class ImplementerStatus(_TextEnum):
@@ -189,7 +196,7 @@ STAGES: tuple[StageDefinition, ...] = (
         (StageResultCode.PREFLIGHT_READY,),
         (),
         False,
-        StageMaturity.COMPATIBILITY_IMPLEMENTED,
+        StageMaturity.PHASE3_IMPLEMENTED,
     ),
     StageDefinition(
         1,
@@ -199,7 +206,7 @@ STAGES: tuple[StageDefinition, ...] = (
         (StageResultCode.PLANNER_READY, StageResultCode.PLANNER_SKIPPED_FAST),
         (StageResultCode.PLANNER_SKIPPED_FAST,),
         False,
-        StageMaturity.COMPATIBILITY_IMPLEMENTED,
+        StageMaturity.PHASE3_IMPLEMENTED,
     ),
     StageDefinition(
         2,
@@ -209,7 +216,7 @@ STAGES: tuple[StageDefinition, ...] = (
         (StageResultCode.IMPLEMENTATION_CONTRACT_READY,),
         (),
         False,
-        StageMaturity.COMPATIBILITY_IMPLEMENTED,
+        StageMaturity.PHASE3_IMPLEMENTED,
     ),
     StageDefinition(
         3,
@@ -443,6 +450,10 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
     validate_workflow_definition()
     from slivin_harness.control_plane import CONTROL_PLANE_VERSION
     from slivin_harness.execution import EXECUTION_BROKER_VERSION
+    from slivin_harness.implementer import IMPLEMENTATION_CONTRACT_VERSION
+    from slivin_harness.protocol import PLANNER_PROTOCOL_VERSION
+    from slivin_harness.task_contract import TASK_CONTRACT_VERSION
+    from slivin_harness.verification import VERIFICATION_PLAN_VERSION
 
     return {
         "schema_version": WORKFLOW_VERSION,
@@ -451,6 +462,12 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
         "controller_foundation": {
             "control_plane": CONTROL_PLANE_VERSION,
             "execution_broker": EXECUTION_BROKER_VERSION,
+        },
+        "phase3_contracts": {
+            "task_contract": TASK_CONTRACT_VERSION,
+            "planner": PLANNER_PROTOCOL_VERSION,
+            "implementation_contract": IMPLEMENTATION_CONTRACT_VERSION,
+            "verification_plan": VERIFICATION_PLAN_VERSION,
         },
         "stages": [
             {
@@ -476,6 +493,7 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
         "stage_states": _enum_snapshot(StageState),
         "stage_result_codes": _enum_snapshot(StageResultCode),
         "agent_statuses": {
+            "task_contract": _enum_snapshot(TaskContractStatus),
             "planner": _enum_snapshot(PlannerStatus),
             "implementer": _enum_snapshot(ImplementerStatus),
             "evaluator": _enum_snapshot(EvaluatorStatus),
@@ -575,7 +593,7 @@ def render_workflow_markdown(*, harness_version: str) -> str:
 | ---: | --- | --- | --- | :---: | --- | --- |
 {chr(10).join(rows)}
 
-`COMPATIBILITY_IMPLEMENTED` означает: существующий executor 0.7.1 отображён на новый Run State, но полный новый контракт этапа будет внедряться последующими фазами. `PLANNED` означает: этап присутствует в канонической state machine, но его executor ещё не реализован. В Phase 2 Runtime всё ещё честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `RUNTIME_LAYER_NOT_IMPLEMENTED_PHASE2`; это compatibility record, а не доказательство, что runtime конкретной будущей задачи не нужен.
+`COMPATIBILITY_IMPLEMENTED` означает: существующий executor 0.7.1 отображён на новый Run State, но полный новый контракт этапа будет внедряться последующими фазами. `PLANNED` означает: этап присутствует в канонической state machine, но его executor ещё не реализован. В Phase 3 Runtime всё ещё честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED` для local-only плана; обязательный runtime proof блокируется capability gate до Implementer; это compatibility record, а не доказательство, что runtime конкретной будущей задачи не нужен.
 
 ## Разрешённые петли
 
@@ -612,7 +630,7 @@ runtime_environment_rev
 attempt_id
 ```
 
-В Phase 1 ещё не созданные будущие artifacts имеют revision `null`. Candidate получает отдельный `candidate_id`, который включает baseline SHA, изменённые пути, удаления, Git-visible file mode и SHA-256 фактических bytes. На filesystem, где Git не сообщает mode-only working-tree change в HEAD-to-working-tree diff, один `chmod` не меняет candidate identity.
+Ещё не созданные artifacts последующих фаз имеют revision `null`. Candidate получает отдельный `candidate_id`, который включает baseline SHA, изменённые пути, удаления, Git-visible file mode и SHA-256 фактических bytes. На filesystem, где Git не сообщает mode-only working-tree change в HEAD-to-working-tree diff, один `chmod` не меняет candidate identity.
 
 ## Правила инвалидации
 
@@ -620,16 +638,18 @@ attempt_id
 | --- | --- | --- | :---: | --- |
 {chr(10).join(invalidation_rows)}
 
-## Что именно реализует Phase 1
+## Что именно реализует Phase 3
 
 ```text
-machine-readable workflow
-+ единые enums статусов
-+ versioned run_state.json
-+ единый candidate_id
-+ таблица invalidation rules
-+ generated WORKFLOW.md / workflow.v1.json
+machine-readable workflow и versioned Run State
++ private Controller plane / Execution Broker foundation
++ USER TASK CONTRACT task-contract.v1
++ PLANNER planner.v4
++ IMPLEMENTATION CONTRACT implementation-contract.v3
++ typed VERIFICATION PLAN verification-plan.v1
++ owner-boundary и capability gates до Implementer
++ generated WORKFLOW.md / workflow.v2.json
 ```
 
-Phase 1 **не меняет model prompts и не заявляет, что уже реализованы** User Task Contract, Verification Plan compiler, private Controller plane, Runtime executor или двухфазный Evaluator. Эти возможности будут добавляться по следующим фазам поверх уже фиксированной state machine.
+Phase 3 **не заявляет, что уже реализованы** open-world IPC, inactivity watchdog, restricted Controller check runner, Runtime executor, двухфазный Evaluator или финальная delivery transaction. Эти возможности остаются последующими фазами.
 """

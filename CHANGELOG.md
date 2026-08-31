@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0a5 — Phase 3: task, planning and verification contracts
+
+- Added `task-contract.v1`: raw user request is preserved verbatim and every explicit normalized claim is bound to exact `source_text`.
+- Upgraded Planner to `planner.v4`: characterization, bug root cause / feature extension point, material assumptions, technical acceptance, consumers, conditional State Model, risks and typed evidence plan.
+- Upgraded the Controller-owned Definition of Done to `implementation-contract.v3`; explicit user acceptance/preservation can no longer disappear through Planner paraphrase.
+- Added `verification-plan.v1` with typed `LOCAL_DETERMINISTIC`, `LIVE_LOCAL`, `TEST_EXTERNAL` and `PROD_OBSERVE` profiles. Distinct runtime profiles are preserved rather than collapsed into one scalar level.
+- Added owner-boundary and required-capability gates before the writable Implementer turn. Runtime proof whose executor is not implemented remains fail-closed.
+- Bumped canonical workflow to `workflow.v2`; generated docs and docs-sync now bind all Phase 3 protocol versions.
+- Added Phase 3 contract, tamper and pipeline integration regressions.
+
+
 ## 0.8.0a4 — Phase 2: native Windows canonical-path fix
 
 - Fixed four native Windows self-check failures caused by comparing resolved Controller/Broker paths with unresolved `tempfile` paths through lexical `Path.is_relative_to()` semantics.

@@ -1,201 +1,135 @@
-# Модель качества 0.8.0a4 — Phase 2
+# Модель качества Slivin Harness 0.8.0a5 — Phase 3
 
-## 1. Что доказывает Phase 1
-
-Phase 1 не делает агента умнее напрямую. Она устраняет фундаментальную неоднозначность:
-
-> Какой этап сейчас выполняется, какая версия Contract/candidate проверялась и какие прежние доказательства уже устарели?
-
-До Phase 1 эти факты выводились из console flow. Теперь они являются machine state.
-
-## 2. Один candidate — одно evidence lineage
-
-Единый `candidate_id` связывает candidate с:
+## Основная формула
 
 ```text
-baseline SHA
-workspace HEAD
-changed paths
-bytes
-удалениями
-symlink targets
-Git-visible file modes
+explicit user intent
+→ доказанная technical model
+→ load-bearing Definition of Done
+→ typed proof requirements
+→ implementation
+→ independent verification
 ```
 
-`Git-visible` означает, что mode должен существовать в HEAD-to-working-tree diff. На native Windows/NTFS один `chmod` может не создавать такого изменения; в этом случае candidate действительно остаётся тем же с точки зрения Git. Self-check не маскирует настоящий mode change: он сначала подтверждает, что Git видит `100644 → 100755`, и только при отсутствии такой filesystem capability честно пропускает integration test.
+Phase 3 реализует первые четыре звена как реальные structured artifacts.
 
-Если candidate меняется, его identity меняется. Если Controller check, Evaluator или held-out изменяет candidate, run не может продолжить как PASS.
+## Что теперь нельзя потерять между этапами
 
-## 3. Версии и инвалидация
+### User acceptance
 
-`run_state.json` хранит revision vector:
+Explicit acceptance копируется в `ACCEPTANCE-1` напрямую из `task-contract.v1`. Planner может добавить technical mapping, но не заменить product outcome.
+
+### User preservation
+
+Explicit preservation, forbidden и owner boundaries попадают в `PRESERVE-1`. Они не становятся необязательными заметками Planner.
+
+### Consumers и risks
+
+Каждый material consumer и risk получает отдельный Contract item с собственным required proof. Это защищает от ситуации:
 
 ```text
-task_contract_rev
-plan_rev
-implementation_contract_rev
-verification_plan_rev
-candidate_rev
-runtime_environment_rev
-attempt_id
+Planner нашёл проблему
+→ Implementer забыл её при написании patch
 ```
 
-Phase 1 уже использует plan, implementation contract, candidate и runtime environment revisions. Остальные поля зарезервированы для следующих фаз и пока имеют `null`.
+### Stateful semantics
 
-Главное правило:
+Если Planner считает задачу stateful, один `STATE-1` объединяет representation, authority, lifecycle и reachable boundaries. Отдельные REP/AUTH/LIFE реестры не возвращаются.
+
+## Typed proof вместо свободного текста
+
+`verification-plan.v1` отвечает на два вопроса:
 
 ```text
-изменилось основание доказательства
-→ старое evidence больше не считается текущим
+каким уровнем нужно доказывать requirement?
+какие capabilities для этого обязательны?
 ```
 
-Например:
+Уровни:
 
 ```text
-REPLAN_REQUIRED
-→ Planner и downstream stages INVALIDATED
-→ attempt_id увеличивается
-→ Planner запускается заново
+LOCAL_DETERMINISTIC
+LIVE_LOCAL
+TEST_EXTERNAL
+PROD_OBSERVE
 ```
 
-## 4. Stage result validation
+Requirement может иметь несколько профилей одновременно. Это важно: Browser flow и fresh external readback не являются взаимозаменяемыми доказательствами.
 
-`RunState` не принимает произвольный успешный code.
+## Fail-closed capability gate
 
-Нельзя записать:
+Если required proof невозможно исполнить, Harness блокируется до Implementer:
 
 ```text
-Intake / Preflight
-→ EVALUATION_PASS
+REQUIRED_CAPABILITY_MISSING
 ```
 
-Для каждого этапа канонически задан допустимый success code. `RunState` также различает настоящий `PASSED` и разрешённый compatibility `SKIPPED`: skip-code нельзя записать как обычный PASS, а обязательный этап нельзя пропустить с его pass-code. Финальный код дополнительно связан с режимом run: production не может завершиться `HARNESS_BENCHMARK_PASS`, а benchmark — `HARNESS_TASK_PASS`. Это защищает от логически невозможного результата из-за ошибки Controller-кода.
-
-## 5. Self-verify и Controller checks
-
-Текущая модель 0.7.1 сохраняется:
+Это лучше, чем:
 
 ```text
-Implementer self-verify
-≠
-Controller deterministic verification
+Implementer сделал candidate
+→ unit tests зелёные
+→ обязательный runtime proof тихо пропущен
 ```
 
-Self-verify помогает Implementer исправиться до сдачи. Controller затем повторяет checks независимо.
+## Что Phase 3 доказывает
 
-Phase 1 переводит fingerprint self-verify на единый `candidate_id`, но private Controller plane и dynamic check registration до `COMPLETE` ещё относятся к следующим фазам.
-
-## 6. Runtime и Evaluator
-
-Канонический workflow уже содержит:
+Phase 3 механически доказывает:
 
 ```text
-Step 5 Runtime / external verification
-Step 6 Blind Evaluator
+raw request сохранён;
+explicit claims имеют verbatim source;
+Planner artifact соответствует planner.v4;
+BUG/FEATURE diagnosis структурирован;
+Task Contract не потерян при Contract compilation;
+Contract items имеют typed proof;
+Verification Plan согласован с Contract;
+capability summary не подменён;
+owner conflict и missing capability останавливают writable pipeline.
 ```
 
-В 0.8.0a4:
+## Что Phase 3 ещё не доказывает
 
-- Runtime executor ещё не реализован и всегда получает explicit compatibility skip;
-- Evaluator остаётся однопроходным `evaluator.v4` и получает прежний context;
-- двухфазный blind/contract audit будет реализован позже.
-
-Документация намеренно не выдаёт будущий target за текущую capability.
-
-## 7. Production и benchmark
-
-Workflow mode вычисляется Controller:
+Пока не реализованы:
 
 ```text
-нет benchmark/heldout → PRODUCTION
-benchmark config или heldout → HISTORICAL_BENCHMARK
+полноценный runtime proof;
+restricted OS-level execution всех agent-written tests;
+open-world Contract expansion во время Implementer;
+двухфазная blind evaluation;
+clean-worktree semantic replan;
+новая result-delivery transaction.
 ```
 
-Финальные статусы разделены:
+Поэтому `0.8.0a5` — промежуточная alpha-фаза, а не завершённый Quality Core.
+
+## Compatibility layers
 
 ```text
-HARNESS_TASK_PASS
-HARNESS_BENCHMARK_PASS
+implementer.v1
+evaluator.v4
+manifest version = 2
 ```
 
-Held-out по-прежнему не возвращается Implementer как repair feedback.
+остаются для постепенного внедрения. Их наличие не означает, что утверждённые будущие Step 3–7 контракты уже полностью выполнены.
 
-## 8. Что означает `HARNESS_SELF_CHECK_PASS`
+## Anti-monster rules
 
-Он доказывает:
+1. Поле существует только при downstream consequence.
+2. Task Contract не содержит repository reasoning.
+3. Planner context не превращается целиком в obligations.
+4. Contract item count имеет soft threshold, но correctness не обрезается.
+5. Runtime включается по required proof, а не по общей метке риска.
+6. Missing executor блокирует задачу честно.
+
+## Критерий Phase 3
 
 ```text
-Python sources compile
-manifest schemas valid
-unit tests pass
-generated workflow docs current
-workflow definition internally consistent
-benchmark calibration artifacts consistent
+task-contract.v1 valid
+planner.v4 valid
+implementation-contract.v3 valid
+verification-plan.v1 valid
+owner/capability gate выполнен
+pipeline integration tests PASS
+docs-sync PASS
 ```
-
-Он не доказывает:
-
-```text
-автономную надёжность на любом project;
-готовность ещё не реализованных Phase 2–6 capabilities;
-отсутствие всех semantic defects.
-```
-
-## 9. Метрики Phase 1
-
-Полезные artifacts:
-
-```text
-run_state.json
-workflow_snapshot.json
-candidate_identity_current.json
-execution_metrics.json
-final_acceptance.json
-```
-
-Они позволяют измерять:
-
-```text
-attempts per task
-repair/replan cycles
-first_evaluation_pass
-candidate revisions
-terminal failure stage
-```
-
-После следующих фаз к ним добавятся Task Contract и Verification Plan revisions.
-
-## 10. Anti-monster принцип
-
-В Phase 1 не добавлен ни один новый model reviewer.
-
-Сложность добавлена туда, где она детерминированна и проверяема:
-
-```text
-workflow definition
-state ownership
-artifact identity
-invalidation
-status routing
-```
-
-Planner/Implementer/Evaluator prompts будут меняться отдельными фазами и после каждой фазы проверяться на historical corpus.
-
-## Private authority и execution honesty
-
-Phase 2 добавляет два инварианта качества:
-
-```text
-agent-writable artifact != authoritative evidence
-
-declared sandbox policy != enforced sandbox capability
-```
-
-Run State, current candidate identity, Implementation Contract copies и self-verify receipts находятся в Controller private plane. Execution policy публикуется без secrets и явно помечает enforcement как `ENFORCED`, `ADVISORY` или `UNAVAILABLE`. Это предотвращает ложный PASS, основанный на модифицированном агентом stamp, и ложные security-claims о ещё не реализованном restricted runner.
-
-Self-verify receipt связан не только с bytes candidate, но и с revision vector. Contract/Verification Plan change автоматически требует новое доказательство.
-
-
-Foundation protocol versions: `controller-plane.v1`, `execution-broker.v1`.
-
-Canonical-path invariant: filesystem ownership и private-plane non-disclosure оцениваются по фактическому canonical location, а не по совпадению строковых/лексических `Path` representations. Это обязательно для native Windows, где один каталог может быть представлен несколькими эквивалентными путями. Проверки остаются fail-closed при cross-drive или неразрешимой canonicalization.

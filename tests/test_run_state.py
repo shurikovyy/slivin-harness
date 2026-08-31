@@ -138,13 +138,14 @@ class RunStateTests(unittest.TestCase):
             path=root / "run_state.json",
             task_id="TASK",
             harness_version="test",
-            workflow_version="workflow.v1",
+            workflow_version="workflow.v2",
             mode=WorkflowMode.PRODUCTION,
             pipeline_profile=PipelineProfile.FULL,
         )
 
     def advance_to_contract(self, state: RunState) -> None:
         state.begin_stage(StageId.INTAKE_PREFLIGHT)
+        state.bump_revision(RevisionKind.TASK_CONTRACT, artifact="task_contract_01.json")
         state.pass_stage(StageId.INTAKE_PREFLIGHT, StageResultCode.PREFLIGHT_READY)
         state.begin_stage(StageId.PLANNER)
         state.bump_revision(RevisionKind.PLAN, artifact="plan_01.json")
@@ -153,6 +154,10 @@ class RunStateTests(unittest.TestCase):
         state.bump_revision(
             RevisionKind.IMPLEMENTATION_CONTRACT,
             artifact="implementation_contract_01.json",
+        )
+        state.bump_revision(
+            RevisionKind.VERIFICATION_PLAN,
+            artifact="verification_plan_01.json",
         )
         state.pass_stage(
             StageId.IMPLEMENTATION_CONTRACT,
@@ -163,8 +168,10 @@ class RunStateTests(unittest.TestCase):
         state = self.make_state()
         self.advance_to_contract(state)
         payload = json.loads(state.path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["revisions"]["task_contract"], 1)
         self.assertEqual(payload["revisions"]["plan"], 1)
         self.assertEqual(payload["revisions"]["implementation_contract"], 1)
+        self.assertEqual(payload["revisions"]["verification_plan"], 1)
         self.assertEqual(payload["cursor_stage"], StageId.IMPLEMENTATION_CONTRACT.value)
         self.assertGreaterEqual(len(payload["events"]), 8)
 
@@ -220,6 +227,7 @@ class RunStateTests(unittest.TestCase):
     def test_skip_code_cannot_be_recorded_as_passed(self) -> None:
         state = self.make_state()
         state.begin_stage(StageId.INTAKE_PREFLIGHT)
+        state.bump_revision(RevisionKind.TASK_CONTRACT, artifact="task_contract_01.json")
         state.pass_stage(StageId.INTAKE_PREFLIGHT, StageResultCode.PREFLIGHT_READY)
         state.begin_stage(StageId.PLANNER)
         with self.assertRaises(WorkflowStateError):

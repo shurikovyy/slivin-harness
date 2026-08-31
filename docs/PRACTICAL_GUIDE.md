@@ -1,214 +1,157 @@
-# Практическая работа с Harness 0.8.0a4
+# Практическая работа с Slivin Harness 0.8.0a5
 
-> Native Windows: используйте `0.8.0a4` или новее. `0.8.0a3` имел несовместимость между resolved Controller paths и лексическими `tempfile` paths; она проявлялась четырьмя failures в `test_control_plane` / `test_execution`.
+## Установка
 
-## 1. Что изменилось для пользователя
-
-Команды запуска не изменились:
+Распакуйте release в отдельный каталог и перенесите только локальный `harness.local.toml`.
 
 ```bash
+cd ~/Tools/slivin-harness-080a5-phase3
+./py -c "import slivin_harness; print(slivin_harness.__version__)"
 ./py tools/self_check.py
-./run path/to/task.toml --validate-only
-./run path/to/task.toml
 ```
 
-Главное изменение — после старта появляется понятная нумерованная схема Step 0–7 и Controller сохраняет `run_state.json`.
-
-## 2. Текущий compatibility pipeline
-
-### `risk = "low"`
+Ожидаемая версия:
 
 ```text
-0 Preflight
-→ 1 Planner SKIPPED
-→ 2 Contract
-→ 3 Implementer
-→ 4 Checks
-→ 5 Runtime SKIPPED
-→ 6 Evaluator SKIPPED
-→ 7 Final
+0.8.0a5
 ```
 
-### `risk = "medium"` или `"high"`
+## Что происходит при FULL-задаче
 
 ```text
-0 Preflight
-→ 1 Planner
-→ 2 Contract
-→ 3 Implementer
-→ 4 Checks
-→ 5 Runtime SKIPPED
-→ 6 Evaluator
-→ 7 Final
+1. Manifest и repository preflight
+2. User Task Contract normalizer
+3. Fresh Planner v4
+4. Implementation Contract v3
+5. Verification Plan v1
+6. owner/capability gates
+7. Implementer v1
+8. existing Controller checks
+9. runtime skip для local-only proof
+10. Evaluator v4
+11. Final Gate compatibility executor
 ```
 
-Это compatibility mapping 0.7.1. Будущий FULL quality mode и conditional Runtime будут внедрены позже.
+## Какие artifacts искать
 
-## 3. Что смотреть во время run
-
-В начале Controller печатает:
+В run directory:
 
 ```text
-WORKFLOW_MODE
-PIPELINE_PROFILE
-PIPELINE
-WORKSPACE
-RUN_DIR
+controller_private/task_contract_01.json
+controller_private/plan_01.json
+controller_private/implementation_contract_01.json
+controller_private/verification_plan_01.json
+controller_private/capability_gate_01.json
 ```
 
-При ошибке `RUN_DIR` также печатается в stderr.
+Публичное зеркало зависит от текущего Recorder policy. Authoritative версия всегда находится в private Controller plane.
 
-## 4. Как читать `run_state.json`
+## Как читать Task Contract
 
-Основные поля:
+Проверьте:
 
 ```text
-cursor_stage     — последний завершённый этап
-active_stage     — этап, выполняющийся сейчас
-attempt_id       — номер technical attempt
-revisions        — версии artifacts/candidate/environment
-current_candidate— identity текущего candidate
-stages           — последнее состояние каждого Step 0–7
-events           — полная последовательность переходов
-terminal         — итог run
+raw_user_request не изменён;
+explicit acceptance отражает слова пользователя;
+explicit preservation не превратился в общую фразу;
+source_text дословно присутствует в raw request;
+normalizer не добавил техническое решение.
 ```
 
-Пример успешного terminal:
+## Как читать Planner v4
+
+Для bug должны быть:
+
+```text
+observed behavior
+existing intended contract
+root cause + evidence
+confidence HIGH или допустимый MEDIUM
+```
+
+Для feature:
+
+```text
+extension point
+design constraints
+```
+
+Для shared/stateful change смотрите consumers, State Model и risks.
+
+## Как читать Implementation Contract
+
+Он не должен быть пересказом всего Planner. Основные items:
+
+```text
+ACCEPTANCE-1
+PRESERVE-1
+STATE-1          если применимо
+CONSUMER-N
+RISK-N
+DOCS-1           если нужно
+```
+
+Каждый item содержит claims и один или несколько typed proof profiles.
+
+## Как читать Verification Plan
+
+Пример local-only требования:
 
 ```json
 {
-  "outcome": "PASS",
-  "result_code": "HARNESS_TASK_PASS",
-  "reason_code": null
+  "profiles": [
+    {"level": "LOCAL_DETERMINISTIC", "capabilities": []}
+  ]
 }
 ```
 
-## 5. Как читать stage state
+Пример двух разных runtime proofs:
 
-```text
-NOT_STARTED  — этап ещё не запускался
-IN_PROGRESS  — выполняется сейчас
-PASSED       — успешный обязательный этап
-SKIPPED      — осознанный успешный skip
-STOPPED      — BLOCKED или NEEDS_USER_DECISION
-FAILED       — repair/replan/invalid route
-INVALIDATED  — прежнее evidence устарело
+```json
+{
+  "profiles": [
+    {"level": "LIVE_LOCAL", "capabilities": ["BROWSER_DOM", "LIVE_LOCAL_RUNTIME"]},
+    {"level": "TEST_EXTERNAL", "capabilities": ["TEST_EXTERNAL_FRESH_READ", "TEST_EXTERNAL_RUNTIME"]}
+  ]
+}
 ```
 
-`INVALIDATED` не означает, что старый artifact удалён. Он остаётся в event history, но больше не считается действующим.
+## Capability gate
 
-## 6. Candidate identity
-
-Файл:
+Если runtime executor ещё не реализован, ожидаемый результат:
 
 ```text
-candidate_identity_current.json
+HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING ...
 ```
 
-показывает:
+Это корректный fail-closed outcome Phase 3, а не причина вручную снижать proof до unit-теста.
 
-```text
-baseline_sha
-workspace_head
-candidate_id
-changed_paths
-entries
-```
+## FAST compatibility profile
 
-Если agent неожиданно сделал commit и изменил workspace HEAD, Harness останавливается.
+Manifest `risk = "low"` пока сохраняет старый FAST pipeline. User Task Contract всё равно создаётся, Planner/Evaluator могут быть compatibility-skipped. Обычный будущий production workflow будет переведён на FULL после последующих фаз; Phase 3 не скрывает эту совместимость.
 
-## 7. Результаты
+## Документация workflow
 
-Production:
-
-```text
-HARNESS_TASK_PASS
-```
-
-Historical benchmark:
-
-```text
-HARNESS_BENCHMARK_PASS
-```
-
-Файлы:
-
-```text
-candidate.patch
-final_acceptance.json
-run_state.json
-```
-
-`final_acceptance.json` связывает final candidate с patch SHA-256 и result mode.
-
-## 8. Repair и replan в текущей версии
-
-Current 0.7.1 behavior пока сохранён:
-
-- deterministic failure возвращается тому же Implementer;
-- Evaluator finding возвращается тому же Implementer;
-- Evaluator `REPLAN_REQUIRED` запускает fresh Planner, но остаётся в той же worktree;
-- fixed `max_fix_cycles`, `max_replan_cycles` и timeout continuation пока действуют.
-
-Run State уже отражает эти переходы и invalidation, но clean-worktree replan и no-progress/watchdog policy будут следующими фазами.
-
-## 9. Runtime Step 5
-
-В 0.8.0a4 он записывается:
-
-```text
-state = SKIPPED
-result_code = RUNTIME_VERIFICATION_SKIPPED
-reason_code = RUNTIME_LAYER_NOT_IMPLEMENTED_PHASE1
-```
-
-Это не product verdict. Runtime executor ещё не существует.
-
-## 10. Документация workflow
-
-Не редактируйте `WORKFLOW.md` вручную.
-
-После изменения workflow:
+После изменения state machine:
 
 ```bash
 ./py tools/render_workflow_docs.py
-./py tools/render_workflow_docs.py --check
 ./py tools/check_docs_sync.py
 ```
 
-## 11. Что писать в задаче сейчас
+Не редактируйте generated таблицы `WORKFLOW.md` и `workflow.v2.json` вручную.
 
-Manifest v2 и prompt пока остаются прежними. Пользователь описывает product outcome и preservation обычным языком.
+## Ограничения Phase 3
 
-Пример:
-
-```text
-После «Выбрать все N найденных» исчезает «Подтвердить распред».
-Исправь и не ломай остальные сценарии выбора.
-```
-
-User Task Contract normalizer появится в следующей фазе; в Phase 1 raw prompt по-прежнему напрямую передаётся существующим roles.
-
-## 12. Что не считать доказанным
-
-Наличие Step 5/двухфазного Evaluator в target documentation не означает, что они уже работают. Ориентируйтесь на колонку «Состояние в Phase 1» в [WORKFLOW.md](WORKFLOW.md).
-
-
-## Как читать Phase 2 artifacts
-
-Для обычной диагностики используйте public mirror:
+Не ожидайте пока:
 
 ```text
-runs/<task>/<run>/run_state.json
-execution_policies.json
+автоматической .worktreeinclude copy policy;
+автоматического venv bootstrap;
+Browser/test-external execution;
+нового Implementer protocol;
+двухфазного Evaluator;
+полного inactivity watchdog.
 ```
 
-Authoritative Controller state находится в:
-
-```text
-runs/<task>/<run>/controller_private/
-```
-
-Его не нужно копировать в prompt или редактировать вручную. `.harness_tmp` внутри worktree — только scratch; его наличие или содержимое никогда не является основанием для `PASS`.
-
-В `execution_policies.json` проверяйте поле enforcement. `ADVISORY` означает, что Harness сформировал правильный intent/environment, но OS-level boundary ещё не доказана на данной платформе.
+Они должны быть реализованы последовательно и проверены отдельными historical trials.

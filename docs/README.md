@@ -1,27 +1,36 @@
-# Документация Slivin Harness
+# Документация Slivin Harness 0.8.0a5
 
-Актуальная версия: **0.8.0a4 — Phase 2**.
+Актуальная версия: **0.8.0a5 — Phase 3**.
 
-Начните с:
+Основные документы:
 
-- [WORKFLOW.md](WORKFLOW.md) — генерируемая понятная схема Step 0–7, переходы и invalidation rules;
-- [`workflow.v1.json`](workflow.v1.json) — тот же workflow в machine-readable форме;
-- [ARCHITECTURE.md](ARCHITECTURE.md) — как Phase 1 встроена в код;
-- [QUALITY_MODEL.md](QUALITY_MODEL.md) — что новая state machine реально доказывает и чего ещё не доказывает;
-- [PRACTICAL_GUIDE.md](PRACTICAL_GUIDE.md) — как запускать Harness и читать `run_state.json`;
-- [WINDOWS_SETUP.md](WINDOWS_SETUP.md) — установка и Windows-диагностика;
-- [HISTORY.md](HISTORY.md) — история упрощения и дальнейший маршрут.
+- [`WORKFLOW.md`](WORKFLOW.md) — понятная Step 0–7 схема, генерируемая из кода;
+- [`workflow.v2.json`](workflow.v2.json) — та же state machine в machine-readable виде;
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — ownership, artifacts и связи модулей;
+- [`QUALITY_MODEL.md`](QUALITY_MODEL.md) — что именно доказывает каждый слой;
+- [`PRACTICAL_GUIDE.md`](PRACTICAL_GUIDE.md) — запуск и чтение artifacts;
+- [`WINDOWS_SETUP.md`](WINDOWS_SETUP.md) — Windows/Git Bash setup и ограничения;
+- [`HISTORY.md`](HISTORY.md) — история архитектурных изменений.
 
-Канонический workflow находится в `slivin_harness/workflow.py`. `docs/WORKFLOW.md` и `docs/workflow.v1.json` генерируются из него.
-
-Проверка актуальности:
+Канонический workflow находится в `slivin_harness/workflow.py`. Файлы `WORKFLOW.md` и `workflow.v2.json` генерируются командой:
 
 ```bash
-./py tools/render_workflow_docs.py --check
-./py tools/check_docs_sync.py
+./py tools/render_workflow_docs.py
 ```
 
-Код, manifests и self-check остаются источником текущей исполняемой capability. В документации явно разделены уже реализованная Phase 1 foundation и target-контракты следующих фаз.
+И проверяются в:
 
+```bash
+./py tools/self_check.py
+```
 
-Phase 2 добавляет `control_plane.py` и `execution.py`: authoritative artifacts находятся вне agent-writable worktree, а execution policies публикуются с честным enforcement level.
+Phase 3 добавляет:
+
+```text
+task-contract.v1
+planner.v4
+implementation-contract.v3
+verification-plan.v1
+```
+
+`implementer.v1`, `evaluator.v4`, `run-state.v1`, `candidate.v1`, `controller-plane.v1` и `execution-broker.v1` сохраняются.

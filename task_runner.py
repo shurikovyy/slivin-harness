@@ -30,9 +30,10 @@ from slivin_harness.implementer import (
     build_implementation_contract,
     compact_plan_context,
     parse_implementation_report,
+    validate_implementation_contract,
     validate_implementation_report,
 )
-from slivin_harness.planner import run_planner
+from slivin_harness.planner import run_planner, validate_plan_artifact as validate_planner_artifact
 from slivin_harness.protocol import (
     ArtifactContractError,
     EVALUATOR_PROTOCOL_VERSION,
@@ -46,6 +47,19 @@ from slivin_harness.protocol import (
     stable_fingerprint,
 )
 from slivin_harness.run_state import RunState, build_candidate_identity
+from slivin_harness.task_contract import (
+    TASK_CONTRACT_VERSION,
+    run_task_contract_normalizer,
+    validate_task_contract,
+)
+from slivin_harness.verification import (
+    VERIFICATION_PLAN_VERSION,
+    available_capabilities,
+    compile_verification_plan,
+    configured_capabilities,
+    required_capability_gaps,
+    validate_verification_plan,
+)
 from slivin_harness.workflow import (
     EvaluatorStatus,
     InvalidationTrigger,
@@ -55,6 +69,7 @@ from slivin_harness.workflow import (
     RevisionKind,
     StageId,
     StageResultCode,
+    TaskContractStatus,
     WORKFLOW_VERSION,
     WorkflowMode,
     WorkflowOutcome,
@@ -81,13 +96,14 @@ IMPLEMENTER_INSTRUCTIONS = """
 
 Правила работы:
 - сначала проверь исходную задачу и compact plan по реальному коду;
-- Implementation Contract — обязательный список результата, preservation и найденных Planner consumers; plan остаётся гипотезой, а не готовым patch;
-- до завершения явно проверь каждый contract item; consumer можно отметить NOT_APPLICABLE только с конкретным evidence, что он недостижим/не затронут;
+- USER TASK CONTRACT задаёт неизменяемый product intent; Implementation Contract — обязательный минимум результата, preservation, state, consumers и risks; Planner context остаётся гипотезой, а не готовым patch;
+- до завершения явно проверь каждый contract item; consumer можно отметить NOT_AFFECTED только с конкретным evidence, что он недостижим/не затронут;
 - делай минимальное целостное исправление, включая достижимых sibling consumers;
 - сохрани явно требуемое старое поведение и target уже начатого stateful action;
 - обнови документацию, если contract требует это или реально изменился пользовательский/API/архитектурный контракт;
 - добавь contract-oriented regression tests, а не проверку конкретной формы patch;
 - обязательно запусти перед завершением Harness-owned SELF_VERIFY_COMMAND: он использует тот же trusted toolchain и те же repair checks, что затем независимо повторит Controller;
+- typed Verification Plan задаёт обязательный уровень доказательства; не подменяй runtime proof локальным тестом;
 - если при исследовании найдены дополнительные существующие test files для materially affected consumers, укажи их в additional_check_paths; Controller безопасно перезапустит поддерживаемые test paths;
 - temp/cache размещай в .harness_tmp;
 - если две разные попытки записи завершаются Permission denied/Access denied, не повторяй их: зафиксируй инфраструктурную блокировку;
@@ -867,124 +883,15 @@ def checks_summary(results: list[CheckResult], *, output_limit: int = 8_000) -> 
     return "\n\n".join(blocks)
 
 
-def validate_plan_artifact(plan: dict, *, workspace: Path) -> None:
-    allowed = {
-        "protocol_version",
-        "status",
-        "summary",
-        "observed_behavior",
-        "expected_behavior",
-        "root_cause",
-        "change_plan",
-        "preserve",
-        "consumers_to_check",
-        "risks",
-        "test_plan",
-        "documentation",
-        "likely_paths",
-        "unknowns",
-    }
-    ensure_exact_keys(plan, allowed=allowed, required=allowed, field="plan")
-    if plan["protocol_version"] != PLANNER_PROTOCOL_VERSION:
-        raise ArtifactContractError(
-            code="PLANNER_VERSION",
-            field="protocol_version",
-            message="Planner protocol version mismatch",
-            expected=PLANNER_PROTOCOL_VERSION,
-            actual=plan["protocol_version"],
-        )
-    if plan["status"] not in set(enum_values(PlannerStatus)):
-        raise ArtifactContractError(
-            code="PLANNER_STATUS",
-            field="status",
-            message="Unknown Planner status",
-            expected="/".join(enum_values(PlannerStatus)),
-            actual=plan["status"],
-        )
-    for field in (
-        "observed_behavior",
-        "expected_behavior",
-        "change_plan",
-        "preserve",
-        "consumers_to_check",
-        "risks",
-        "test_plan",
-        "likely_paths",
-        "unknowns",
-    ):
-        require_string_list(plan[field], field=field)
-    require_type(plan["summary"], str, field="summary")
-    root = plan["root_cause"]
-    require_type(root, dict, field="root_cause")
-    ensure_exact_keys(
-        root,
-        allowed={"claim", "evidence", "confidence"},
-        required={"claim", "evidence", "confidence"},
-        field="root_cause",
+def validate_plan_artifact(
+    plan: dict, *, workspace: Path, task_contract: dict
+) -> None:
+    """Compatibility entry point backed by the planner.v4 validator."""
+    validate_planner_artifact(
+        plan,
+        workspace=workspace,
+        task_contract=task_contract,
     )
-    require_type(root["claim"], str, field="root_cause.claim")
-    require_string_list(root["evidence"], field="root_cause.evidence")
-    if root["confidence"] not in {"HIGH", "MEDIUM", "LOW"}:
-        raise ArtifactContractError(
-            code="PLANNER_CONFIDENCE",
-            field="root_cause.confidence",
-            message="Invalid root cause confidence",
-            expected="HIGH/MEDIUM/LOW",
-            actual=root["confidence"],
-        )
-    documentation = plan["documentation"]
-    require_type(documentation, dict, field="documentation")
-    ensure_exact_keys(
-        documentation,
-        allowed={"required", "paths", "reason"},
-        required={"required", "paths", "reason"},
-        field="documentation",
-    )
-    require_type(documentation["required"], bool, field="documentation.required")
-    require_type(documentation["reason"], str, field="documentation.reason")
-    require_string_list(documentation["paths"], field="documentation.paths")
-    for index, raw in enumerate(plan["likely_paths"]):
-        safe_repo_relative(raw, field=f"likely_paths[{index}]")
-    for index, raw in enumerate(documentation["paths"]):
-        safe_repo_relative(raw, field=f"documentation.paths[{index}]")
-
-    if plan["status"] == PlannerStatus.READY.value:
-        # READY means the remaining uncertainty is non-blocking. A Planner may
-        # keep honest unknowns instead of pretending the repository is fully
-        # understood. Blocking semantic/evidence gaps belong to
-        # NEEDS_USER_DECISION or BLOCKED and require a concrete reason below.
-        if not root["claim"].strip() or not root["evidence"]:
-            raise ArtifactContractError(
-                code="PLANNER_ROOT_CAUSE_MISSING",
-                field="root_cause",
-                message="READY requires a root cause with evidence",
-                expected="Non-empty claim and evidence",
-                actual=root,
-            )
-        if not plan["change_plan"] or not plan["test_plan"]:
-            raise ArtifactContractError(
-                code="PLANNER_PLAN_INCOMPLETE",
-                field="change_plan/test_plan",
-                message="READY requires change_plan and test_plan",
-                expected="Non-empty arrays",
-                actual={"change_plan": plan["change_plan"], "test_plan": plan["test_plan"]},
-            )
-    elif not plan["unknowns"]:
-        raise ArtifactContractError(
-            code="PLANNER_STOP_WITHOUT_REASON",
-            field="unknowns",
-            message="BLOCKED/NEEDS_USER_DECISION requires a concrete unresolved reason",
-            expected="Non-empty unknowns",
-            actual=[],
-        )
-
-    # Ensure paths actually resolve under repository, without requiring them to exist.
-    root_resolved = workspace.resolve()
-    for raw in plan["likely_paths"] + documentation["paths"]:
-        candidate = (workspace / safe_repo_relative(raw)).resolve()
-        if candidate != root_resolved and root_resolved not in candidate.parents:
-            raise RuntimeError(f"Planner path escapes workspace: {raw}")
-
 
 def validate_evaluation_artifact(evaluation: dict) -> None:
     allowed = {
@@ -1073,14 +980,16 @@ def build_implementation_prompt(
     task_prompt: str,
     plan: dict | None,
     *,
+    task_contract: dict,
     implementation_contract: dict,
+    verification_plan: dict,
     self_verify_command: list[str],
     toolchain: dict[str, str],
     allowed_paths: list[str],
 ) -> str:
     compact_plan = compact_plan_context(plan)
     plan_block = (
-        "Для risk=low отдельный Planner не запускался. Самостоятельно исследуй задачу."
+        "FAST profile: no separate Planner artifact. Investigate implementation details yourself."
         if compact_plan is None
         else (
             f"PLAN_FINGERPRINT: {plan_fingerprint(plan)}\n"
@@ -1092,19 +1001,27 @@ def build_implementation_prompt(
     boundary = (
         "Owner-defined hard path boundary:\n" + json.dumps(allowed_paths, ensure_ascii=False)
         if allowed_paths
-        else "Owner did not set a hard path boundary. Planner likely_paths are hints only."
+        else "Owner did not set a hard path boundary. Discover the smallest complete technical surface."
     )
     return f"""
-Исходная задача:
---- BEGIN TASK ---
+RAW USER REQUEST:
+--- BEGIN RAW USER REQUEST ---
 {task_prompt}
---- END TASK ---
+--- END RAW USER REQUEST ---
+
+--- BEGIN USER TASK CONTRACT ---
+{json.dumps(task_contract, ensure_ascii=False, indent=2)}
+--- END USER TASK CONTRACT ---
 
 {plan_block}
 
 --- BEGIN IMPLEMENTATION CONTRACT ---
 {json.dumps(implementation_contract, ensure_ascii=False, indent=2)}
 --- END IMPLEMENTATION CONTRACT ---
+
+--- BEGIN VERIFICATION PLAN ---
+{json.dumps(verification_plan, ensure_ascii=False, indent=2)}
+--- END VERIFICATION PLAN ---
 
 {boundary}
 
@@ -1114,16 +1031,14 @@ TRUSTED_TOOLCHAIN:
 SELF_VERIFY_COMMAND:
 {_display_command(self_verify_command)}
 
-Сначала реализуй целостный fix. Затем обязательно запусти SELF_VERIFY_COMMAND и сам
-исправляй найденные ошибки, пока он не выдаст SELF_VERIFY_PASS. После этого проверь каждый
-Implementation Contract item и только затем верни structured Implementation Report.
+Сделай самое небольшое полное решение. USER TASK CONTRACT и Implementation Contract
+обязательны; compact Planner context остаётся проверяемой гипотезой. Не заменяй required
+runtime/external proof локальным тестом. Затем запусти SELF_VERIFY_COMMAND, исправляй ошибки
+до SELF_VERIFY_PASS и дай конкретное evidence по каждому active Contract item.
 
-Если по ходу исследования найдены дополнительные существующие/новые test files для
-materially affected consumers, добавь их repo-relative paths в additional_check_paths.
-Controller сам построит безопасную команду из trusted toolchain; произвольные команды
-туда передавать не нужно.
+Дополнительные test paths для materially affected consumers можно передать только через
+additional_check_paths; Controller сам выберет trusted runner.
 """.strip()
-
 
 def _repair_contract_block(
     *, implementation_contract: dict, self_verify_command: list[str]
@@ -1444,9 +1359,6 @@ def run_implementer_report(
             current_label = f"{label} CONTINUE"
     report = parse_implementation_report(raw)
     changed_paths = collect_changed_paths(workspace)
-    documentation_paths = []
-    if plan and plan["documentation"]["required"]:
-        documentation_paths = list(plan["documentation"]["paths"])
     validate_implementation_report(
         report,
         contract=implementation_contract,
@@ -1457,7 +1369,7 @@ def run_implementer_report(
             control_plane=control_plane,
             run_state=run_state,
         ),
-        documentation_paths=documentation_paths,
+        documentation_paths=[],
     )
     print("=== IMPLEMENTATION REPORT ===")
     print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -1647,10 +1559,10 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "PIPELINE:",
             "0 PREFLIGHT → 1 PLANNER[SKIP] → 2 CONTRACT → 3 IMPLEMENT → "
-            "4 CHECKS → 5 RUNTIME[SKIP] → 6 EVALUATOR[SKIP] → 7 FINAL"
+            "4 CHECKS → 5 RUNTIME[CONDITIONAL] → 6 EVALUATOR[SKIP] → 7 FINAL"
             if pipeline_profile == PipelineProfile.FAST
             else "0 PREFLIGHT → 1 PLANNER → 2 CONTRACT → 3 IMPLEMENT → "
-            "4 CHECKS → 5 RUNTIME[SKIP] → 6 EVALUATOR → 7 FINAL",
+            "4 CHECKS → 5 RUNTIME[CONDITIONAL] → 6 EVALUATOR → 7 FINAL",
         )
 
         benchmark_evidence = None
@@ -1678,18 +1590,6 @@ def main(argv: list[str] | None = None) -> int:
             source_repo=str(session.source_repo) if session.source_repo else None,
             workspace=str(workspace),
         )
-        run_state.pass_stage(
-            StageId.INTAKE_PREFLIGHT,
-            StageResultCode.PREFLIGHT_READY,
-            artifacts=(
-                "manifest_snapshot.json",
-                "workflow_snapshot.json",
-                "preflight.json",
-                "repo_context.json",
-                "execution_policies.json",
-            ),
-        )
-
         runtime_tmp = execution_broker.scratch_root(ExecutionRole.APP_SERVER)
         codex_cmd = resolve_codex_cmd(local_config)
         app_server_policy = execution_broker.policy_for(ExecutionRole.APP_SERVER)
@@ -1706,6 +1606,44 @@ def main(argv: list[str] | None = None) -> int:
             process_env=app_server_env,
             execution_policy=app_server_policy.to_dict(),
         ) as codex:
+            print("=== USER TASK CONTRACT ===")
+            task_contract = run_task_contract_normalizer(
+                codex,
+                cwd=execution_broker.scratch_root(ExecutionRole.INTAKE),
+                raw_request=manifest["prompt"],
+                on_heartbeat=make_heartbeat("INTAKE"),
+                on_thread_started=_thread_recorder(recorder, "task_contract_1"),
+                timeout=min(timeout, 300),
+            )
+            validate_task_contract(task_contract)
+            recorder.write_authoritative_json("task_contract_01.json", task_contract)
+            run_state.bump_revision(
+                RevisionKind.TASK_CONTRACT, artifact="task_contract_01.json"
+            )
+            print(json.dumps(task_contract, ensure_ascii=False, indent=2))
+            if task_contract["status"] != TaskContractStatus.READY.value:
+                run_state.route_stage(
+                    StageId.INTAKE_PREFLIGHT,
+                    outcome=WorkflowOutcome.NEEDS_USER_DECISION,
+                    result_code=StageResultCode.NEEDS_USER_DECISION,
+                    reason_code="TASK_CONTRACT_NEEDS_USER_DECISION",
+                    artifacts=("task_contract_01.json",),
+                )
+                print("HARNESS_TASK_STOPPED: NEEDS_USER_DECISION")
+                return 2
+            run_state.pass_stage(
+                StageId.INTAKE_PREFLIGHT,
+                StageResultCode.PREFLIGHT_READY,
+                artifacts=(
+                    "manifest_snapshot.json",
+                    "workflow_snapshot.json",
+                    "preflight.json",
+                    "repo_context.json",
+                    "execution_policies.json",
+                    "task_contract_01.json",
+                ),
+            )
+
             plan: dict | None = None
             run_state.begin_stage(StageId.PLANNER)
             if pipeline_profile == PipelineProfile.FULL:
@@ -1714,33 +1652,38 @@ def main(argv: list[str] | None = None) -> int:
                     codex,
                     workspace=workspace,
                     task_prompt=manifest["prompt"],
+                    task_contract=task_contract,
                     preflight=preflight,
+                    owner_allowed_paths=allowed_paths,
                     replan_context=planner_benchmark_context(benchmark_evidence),
                     on_heartbeat=make_heartbeat("PLAN"),
                     on_thread_started=_thread_recorder(recorder, "planner_1"),
                     timeout=timeout,
                 )
-                validate_plan_artifact(plan, workspace=workspace)
-                recorder.write_json("plan_01.json", plan)
+                validate_plan_artifact(plan, workspace=workspace, task_contract=task_contract)
+                recorder.write_authoritative_json("plan_01.json", plan)
                 run_state.bump_revision(RevisionKind.PLAN, artifact="plan_01.json")
                 print(json.dumps(plan, ensure_ascii=False, indent=2))
                 if plan["status"] != PlannerStatus.READY.value:
                     if plan["status"] == PlannerStatus.BLOCKED.value:
-                        run_state.route_stage(
-                            StageId.PLANNER,
-                            outcome=WorkflowOutcome.BLOCKED,
-                            result_code=StageResultCode.BLOCKED,
-                            reason_code="PLANNER_BLOCKED",
-                            artifacts=("plan_01.json",),
-                        )
+                        outcome = WorkflowOutcome.BLOCKED
+                        result_code = StageResultCode.BLOCKED
+                        reason_code = "PLANNER_BLOCKED"
+                    elif plan["status"] == PlannerStatus.TASK_CONTRACT_INVALID.value:
+                        outcome = WorkflowOutcome.INVALID
+                        result_code = StageResultCode.INVALID
+                        reason_code = "TASK_CONTRACT_INVALID"
                     else:
-                        run_state.route_stage(
-                            StageId.PLANNER,
-                            outcome=WorkflowOutcome.NEEDS_USER_DECISION,
-                            result_code=StageResultCode.NEEDS_USER_DECISION,
-                            reason_code="PLANNER_NEEDS_USER_DECISION",
-                            artifacts=("plan_01.json",),
-                        )
+                        outcome = WorkflowOutcome.NEEDS_USER_DECISION
+                        result_code = StageResultCode.NEEDS_USER_DECISION
+                        reason_code = "PLANNER_NEEDS_USER_DECISION"
+                    run_state.route_stage(
+                        StageId.PLANNER,
+                        outcome=outcome,
+                        result_code=result_code,
+                        reason_code=reason_code,
+                        artifacts=("plan_01.json",),
+                    )
                     print("HARNESS_TASK_STOPPED:", plan["status"])
                     return 2
                 run_state.pass_stage(
@@ -1757,8 +1700,9 @@ def main(argv: list[str] | None = None) -> int:
 
             run_state.begin_stage(StageId.IMPLEMENTATION_CONTRACT)
             implementation_contract = build_implementation_contract(
-                plan, task_prompt=manifest["prompt"]
+                plan, task_contract=task_contract
             )
+            validate_implementation_contract(implementation_contract)
             recorder.write_authoritative_json(
                 "implementation_contract_01.json", implementation_contract
             )
@@ -1766,13 +1710,80 @@ def main(argv: list[str] | None = None) -> int:
                 RevisionKind.IMPLEMENTATION_CONTRACT,
                 artifact="implementation_contract_01.json",
             )
+            verification_plan = compile_verification_plan(
+                implementation_contract,
+                project_checks=repair_specs,
+            )
+            validate_verification_plan(verification_plan)
+            recorder.write_authoritative_json(
+                "verification_plan_01.json", verification_plan
+            )
+            run_state.bump_revision(
+                RevisionKind.VERIFICATION_PLAN,
+                artifact="verification_plan_01.json",
+            )
+            declared_capabilities = configured_capabilities(
+                local_config, project_name=session.project_name
+            )
+            resolved_capabilities = available_capabilities(
+                toolchain=toolchain, configured=declared_capabilities
+            )
+            capability_record = {
+                "schema_version": "capability-gate.v1",
+                "declared": declared_capabilities,
+                "available": sorted(resolved_capabilities),
+                "required": list(verification_plan["required_capabilities"]),
+            }
+            capability_record["missing"] = required_capability_gaps(
+                verification_plan, available=resolved_capabilities
+            )
+            recorder.write_authoritative_json(
+                "capability_gate_01.json", capability_record
+            )
+            if plan is not None and not plan["owner_boundary_assessment"]["compatible"]:
+                run_state.route_stage(
+                    StageId.IMPLEMENTATION_CONTRACT,
+                    outcome=WorkflowOutcome.BLOCKED,
+                    result_code=StageResultCode.BLOCKED,
+                    reason_code="OWNER_BOUNDARY_CONFLICT",
+                    artifacts=(
+                        "implementation_contract_01.json",
+                        "verification_plan_01.json",
+                        "capability_gate_01.json",
+                    ),
+                )
+                print("HARNESS_TASK_STOPPED: OWNER_BOUNDARY_CONFLICT")
+                return 2
+            if capability_record["missing"]:
+                run_state.route_stage(
+                    StageId.IMPLEMENTATION_CONTRACT,
+                    outcome=WorkflowOutcome.BLOCKED,
+                    result_code=StageResultCode.BLOCKED,
+                    reason_code="REQUIRED_CAPABILITY_MISSING",
+                    artifacts=(
+                        "implementation_contract_01.json",
+                        "verification_plan_01.json",
+                        "capability_gate_01.json",
+                    ),
+                )
+                print(
+                    "HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING",
+                    ", ".join(capability_record["missing"]),
+                )
+                return 2
             run_state.pass_stage(
                 StageId.IMPLEMENTATION_CONTRACT,
                 StageResultCode.IMPLEMENTATION_CONTRACT_READY,
-                artifacts=("implementation_contract_01.json",),
+                artifacts=(
+                    "implementation_contract_01.json",
+                    "verification_plan_01.json",
+                    "capability_gate_01.json",
+                ),
             )
             print("=== IMPLEMENTATION CONTRACT ===")
             print(json.dumps(implementation_contract, ensure_ascii=False, indent=2))
+            print("=== VERIFICATION PLAN ===")
+            print(json.dumps(verification_plan, ensure_ascii=False, indent=2))
 
             dynamic_specs: list[dict] = []
             dynamic_notes: list[str] = []
@@ -1820,7 +1831,9 @@ def main(argv: list[str] | None = None) -> int:
                 prompt=build_implementation_prompt(
                     manifest["prompt"],
                     plan,
+                    task_contract=task_contract,
                     implementation_contract=implementation_contract,
+                    verification_plan=verification_plan,
                     self_verify_command=self_verify_command,
                     toolchain=toolchain,
                     allowed_paths=allowed_paths,
@@ -1965,10 +1978,21 @@ def main(argv: list[str] | None = None) -> int:
                     artifacts=(checks_artifact, "candidate_identity_current.json"),
                 )
                 run_state.begin_stage(StageId.RUNTIME_VERIFICATION)
+                if verification_plan["runtime_required"]:
+                    run_state.route_stage(
+                        StageId.RUNTIME_VERIFICATION,
+                        outcome=WorkflowOutcome.BLOCKED,
+                        result_code=StageResultCode.BLOCKED,
+                        reason_code="RUNTIME_EXECUTOR_NOT_IMPLEMENTED_PHASE3",
+                        artifacts=("verification_plan_01.json",),
+                    )
+                    print("HARNESS_TASK_STOPPED: RUNTIME_EXECUTOR_NOT_IMPLEMENTED_PHASE3")
+                    return 2
                 run_state.skip_stage(
                     StageId.RUNTIME_VERIFICATION,
                     StageResultCode.RUNTIME_VERIFICATION_SKIPPED,
-                    reason_code="RUNTIME_LAYER_NOT_IMPLEMENTED_PHASE2",
+                    reason_code="NO_RUNTIME_PROOF_REQUIRED",
+                    artifacts=("verification_plan_01.json",),
                 )
 
                 if pipeline_profile == PipelineProfile.FAST:
@@ -1990,7 +2014,9 @@ def main(argv: list[str] | None = None) -> int:
                     codex,
                     workspace=workspace,
                     task_prompt=manifest["prompt"],
+                    task_contract=task_contract,
                     preflight=preflight,
+                    owner_allowed_paths=allowed_paths,
                     changed_paths=changed_paths,
                     diff_text=current_diff_text(workspace),
                     checks_summary=evaluator_check_summary,
@@ -2116,7 +2142,9 @@ def main(argv: list[str] | None = None) -> int:
                         codex,
                         workspace=workspace,
                         task_prompt=manifest["prompt"],
+                        task_contract=task_contract,
                         preflight=preflight,
+                        owner_allowed_paths=allowed_paths,
                         replan_context=(
                             "Current candidate was rejected by a blind Evaluator. "
                             "Observed reason (not a reference implementation):\n"
@@ -2126,27 +2154,30 @@ def main(argv: list[str] | None = None) -> int:
                         on_thread_started=_thread_recorder(recorder, f"planner_replan_{replan_cycles}"),
                         timeout=timeout,
                     )
-                    validate_plan_artifact(plan, workspace=workspace)
+                    validate_plan_artifact(plan, workspace=workspace, task_contract=task_contract)
                     replan_artifact = f"replan_{replan_cycles:02d}.json"
-                    recorder.write_json(replan_artifact, plan)
+                    recorder.write_authoritative_json(replan_artifact, plan)
                     run_state.bump_revision(RevisionKind.PLAN, artifact=replan_artifact)
                     if plan["status"] != PlannerStatus.READY.value:
                         if plan["status"] == PlannerStatus.BLOCKED.value:
-                            run_state.route_stage(
-                                StageId.PLANNER,
-                                outcome=WorkflowOutcome.BLOCKED,
-                                result_code=StageResultCode.BLOCKED,
-                                reason_code="PLANNER_BLOCKED_AFTER_REPLAN",
-                                artifacts=(replan_artifact,),
-                            )
+                            outcome = WorkflowOutcome.BLOCKED
+                            result_code = StageResultCode.BLOCKED
+                            reason_code = "PLANNER_BLOCKED_AFTER_REPLAN"
+                        elif plan["status"] == PlannerStatus.TASK_CONTRACT_INVALID.value:
+                            outcome = WorkflowOutcome.INVALID
+                            result_code = StageResultCode.INVALID
+                            reason_code = "TASK_CONTRACT_INVALID_AFTER_REPLAN"
                         else:
-                            run_state.route_stage(
-                                StageId.PLANNER,
-                                outcome=WorkflowOutcome.NEEDS_USER_DECISION,
-                                result_code=StageResultCode.NEEDS_USER_DECISION,
-                                reason_code="PLANNER_NEEDS_USER_DECISION_AFTER_REPLAN",
-                                artifacts=(replan_artifact,),
-                            )
+                            outcome = WorkflowOutcome.NEEDS_USER_DECISION
+                            result_code = StageResultCode.NEEDS_USER_DECISION
+                            reason_code = "PLANNER_NEEDS_USER_DECISION_AFTER_REPLAN"
+                        run_state.route_stage(
+                            StageId.PLANNER,
+                            outcome=outcome,
+                            result_code=result_code,
+                            reason_code=reason_code,
+                            artifacts=(replan_artifact,),
+                        )
                         print("HARNESS_TASK_STOPPED:", plan["status"])
                         return 2
                     run_state.pass_stage(
@@ -2156,8 +2187,9 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     run_state.begin_stage(StageId.IMPLEMENTATION_CONTRACT)
                     implementation_contract = build_implementation_contract(
-                        plan, task_prompt=manifest["prompt"]
+                        plan, task_contract=task_contract
                     )
+                    validate_implementation_contract(implementation_contract)
                     contract_artifact = f"implementation_contract_replan_{replan_cycles:02d}.json"
                     recorder.write_authoritative_json(
                         contract_artifact, implementation_contract
@@ -2166,10 +2198,45 @@ def main(argv: list[str] | None = None) -> int:
                         RevisionKind.IMPLEMENTATION_CONTRACT,
                         artifact=contract_artifact,
                     )
+                    verification_plan = compile_verification_plan(
+                        implementation_contract, project_checks=repair_specs
+                    )
+                    validate_verification_plan(verification_plan)
+                    verification_artifact = f"verification_plan_replan_{replan_cycles:02d}.json"
+                    recorder.write_authoritative_json(
+                        verification_artifact, verification_plan
+                    )
+                    run_state.bump_revision(
+                        RevisionKind.VERIFICATION_PLAN,
+                        artifact=verification_artifact,
+                    )
+                    missing = required_capability_gaps(
+                        verification_plan, available=resolved_capabilities
+                    )
+                    if not plan["owner_boundary_assessment"]["compatible"]:
+                        run_state.route_stage(
+                            StageId.IMPLEMENTATION_CONTRACT,
+                            outcome=WorkflowOutcome.BLOCKED,
+                            result_code=StageResultCode.BLOCKED,
+                            reason_code="OWNER_BOUNDARY_CONFLICT_AFTER_REPLAN",
+                            artifacts=(contract_artifact, verification_artifact),
+                        )
+                        print("HARNESS_TASK_STOPPED: OWNER_BOUNDARY_CONFLICT")
+                        return 2
+                    if missing:
+                        run_state.route_stage(
+                            StageId.IMPLEMENTATION_CONTRACT,
+                            outcome=WorkflowOutcome.BLOCKED,
+                            result_code=StageResultCode.BLOCKED,
+                            reason_code="REQUIRED_CAPABILITY_MISSING_AFTER_REPLAN",
+                            artifacts=(contract_artifact, verification_artifact),
+                        )
+                        print("HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING", ", ".join(missing))
+                        return 2
                     run_state.pass_stage(
                         StageId.IMPLEMENTATION_CONTRACT,
                         StageResultCode.IMPLEMENTATION_CONTRACT_READY,
-                        artifacts=(contract_artifact,),
+                        artifacts=(contract_artifact, verification_artifact),
                     )
                     current_specs = active_repair_specs()
                     _, stamp_path, self_verify_command = prepare_self_verify_runner(
@@ -2185,7 +2252,9 @@ def main(argv: list[str] | None = None) -> int:
                         prompt=build_implementation_prompt(
                             manifest["prompt"],
                             plan,
+                            task_contract=task_contract,
                             implementation_contract=implementation_contract,
+                            verification_plan=verification_plan,
                             self_verify_command=self_verify_command,
                             toolchain=toolchain,
                             allowed_paths=allowed_paths,

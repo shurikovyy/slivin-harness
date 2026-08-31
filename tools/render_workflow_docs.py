@@ -13,7 +13,7 @@ from slivin_harness import __version__
 from slivin_harness.workflow import render_workflow_markdown, workflow_snapshot
 
 MARKDOWN_PATH = ROOT / "docs" / "WORKFLOW.md"
-JSON_PATH = ROOT / "docs" / "workflow.v1.json"
+JSON_PATH = ROOT / "docs" / "workflow.v2.json"
 
 
 def expected_outputs() -> dict[Path, str]:

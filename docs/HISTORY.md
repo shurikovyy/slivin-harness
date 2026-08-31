@@ -1,5 +1,16 @@
 # История и дальнейший маршрут
 
+## Phase 3 — 0.8.0a5
+
+Phase 3 впервые провела обычный пользовательский запрос через отдельный `task-contract.v1`, затем через `planner.v4`, Controller-owned `implementation-contract.v3` и `verification-plan.v1`.
+
+Ключевое изменение — перенос product intent больше не зависит от того, насколько удачно Planner пересказал запрос. Explicit acceptance/preservation копируются напрямую, а technical mapping добавляется рядом.
+
+Typed proof routing устранил следующую неоднозначность: `LIVE_LOCAL`, `TEST_EXTERNAL` и `PROD_OBSERVE` не являются ступенями одной шкалы и могут требоваться одновременно. Verification Plan хранит все необходимые profiles и блокирует writable работу при отсутствии обязательной capability.
+
+Фаза намеренно не реализовала runtime executor и следующие Step 3–7 contracts целиком. Это остаётся последовательной дальнейшей работой, а не скрытым ограничением PASS.
+
+
 ## 1. Почему 0.5.x стал перегруженным
 
 Предыдущая архитектура содержала:

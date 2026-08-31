@@ -6,6 +6,7 @@ import unittest
 from slivin_harness.evaluator import EVALUATOR_SCHEMA
 from slivin_harness.implementer import IMPLEMENTER_REPORT_SCHEMA
 from slivin_harness.planner import PLANNER_SCHEMA
+from slivin_harness.task_contract import TASK_CONTRACT_NORMALIZER_SCHEMA
 from slivin_harness.workflow import (
     ALLOWED_STAGE_TRANSITIONS,
     INVALIDATION_RULES,
@@ -15,6 +16,7 @@ from slivin_harness.workflow import (
     ImplementerStatus,
     InvalidationTrigger,
     PlannerStatus,
+    TaskContractStatus,
     StageId,
     enum_values,
     render_workflow_markdown,
@@ -83,6 +85,10 @@ class WorkflowDefinitionTests(unittest.TestCase):
 
     def test_agent_schemas_use_canonical_status_enums(self) -> None:
         self.assertEqual(
+            TASK_CONTRACT_NORMALIZER_SCHEMA["properties"]["status"]["enum"],
+            enum_values(TaskContractStatus),
+        )
+        self.assertEqual(
             PLANNER_SCHEMA["properties"]["status"]["enum"],
             enum_values(PlannerStatus),
         )
@@ -101,13 +107,14 @@ class WorkflowDefinitionTests(unittest.TestCase):
         self.assertIn("runtime_verification", encoded)
         self.assertIn("CANDIDATE_CHANGED_AFTER_EVALUATION", encoded)
         self.assertEqual(len(snapshot["stages"]), 8)
+        self.assertEqual(snapshot["phase3_contracts"]["planner"], "planner.v4")
 
     def test_rendered_workflow_is_understandable_and_generated(self) -> None:
         rendered = render_workflow_markdown(harness_version="test")
         self.assertIn("0. Intake / Preflight", rendered)
         self.assertIn("5. Runtime / external verification (условно)", rendered)
         self.assertIn("7. Final Gate / result handoff", rendered)
-        self.assertIn("не меняет model prompts", rendered)
+        self.assertIn("USER TASK CONTRACT task-contract.v1", rendered)
 
 
 if __name__ == "__main__":

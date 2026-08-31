@@ -7,13 +7,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from slivin_harness.app_server import TurnTimeoutError
 from slivin_harness.implementer import (
     IMPLEMENTER_PROTOCOL_VERSION,
     IMPLEMENTATION_CONTRACT_VERSION,
     build_implementation_contract,
     validate_implementation_report,
 )
-from slivin_harness.app_server import TurnTimeoutError
 from task_runner import (
     build_dynamic_check_specs,
     candidate_content_fingerprint,
@@ -21,7 +21,7 @@ from task_runner import (
     run_implementer_report,
     verify_self_verification_stamp,
 )
-from test_protocol import valid_plan
+from test_protocol import proof, valid_plan, valid_task_contract
 
 
 def git(repo: Path, *args: str) -> str:
@@ -46,24 +46,26 @@ class ImplementerContractTests(unittest.TestCase):
         git(repo, "commit", "-m", "baseline")
         return repo
 
-    def test_contract_keeps_consumers_explicit_without_obligation_explosion(self) -> None:
-        plan = valid_plan()
-        contract = build_implementation_contract(plan, task_prompt="task")
-        ids = [item["id"] for item in contract["items"]]
-        self.assertEqual(
-            ids,
-            ["OUTCOME-1", "PRESERVE-1", "CONSUMER-1", "CONSUMER-2", "RISK-1", "EVIDENCE-1"],
+    def contract(self, plan=None):
+        return build_implementation_contract(
+            valid_plan() if plan is None else plan,
+            task_contract=valid_task_contract(),
         )
+
+    def test_contract_keeps_user_requirements_and_consumers_explicit(self) -> None:
+        contract = self.contract()
+        ids = [item["id"] for item in contract["items"]]
+        self.assertEqual(ids, ["ACCEPTANCE-1", "PRESERVE-1", "CONSUMER-1", "RISK-1"])
         self.assertEqual(contract["protocol_version"], IMPLEMENTATION_CONTRACT_VERSION)
-        self.assertIn("Matrix", contract["items"][2]["text"])
-        self.assertIn("Distribution", contract["items"][3]["text"])
-        self.assertIn("stale token", contract["items"][4]["text"])
-        self.assertLessEqual(len(contract["items"]), 14)
+        self.assertIn("target.txt contains after", contract["items"][0]["requirement"])
+        self.assertIn("Do not change other files", contract["items"][1]["requirement"])
+        self.assertIn("Target fixture consumer", contract["items"][2]["requirement"])
+        self.assertNotIn("EVIDENCE-1", ids)
+        self.assertTrue(all("required_proof" in item for item in contract["items"]))
 
     def test_complete_report_requires_every_contract_item_and_current_self_verify(self) -> None:
         repo = self.make_repo()
-        plan = valid_plan()
-        contract = build_implementation_contract(plan, task_prompt="task")
+        contract = self.contract()
         (repo / "src" / "a.py").write_text("VALUE = 2\n", encoding="utf-8")
         report = {
             "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
@@ -78,27 +80,18 @@ class ImplementerContractTests(unittest.TestCase):
             "blockers": [],
         }
         validate_implementation_report(
-            report,
-            contract=contract,
-            changed_paths=["src/a.py"],
-            self_verification_ok=True,
-            documentation_paths=[],
+            report, contract=contract, changed_paths=["src/a.py"],
+            self_verification_ok=True, documentation_paths=[]
         )
         report["contract_evidence"].pop()
         with self.assertRaisesRegex(RuntimeError, "every Implementation Contract item"):
             validate_implementation_report(
-                report,
-                contract=contract,
-                changed_paths=["src/a.py"],
-                self_verification_ok=True,
-                documentation_paths=[],
+                report, contract=contract, changed_paths=["src/a.py"],
+                self_verification_ok=True, documentation_paths=[]
             )
 
-
-    def test_not_applicable_is_only_allowed_for_consumers(self) -> None:
-        repo = self.make_repo()
-        plan = valid_plan()
-        contract = build_implementation_contract(plan, task_prompt="task")
+    def test_not_affected_is_only_allowed_for_consumers(self) -> None:
+        contract = self.contract()
         report = {
             "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
             "status": "COMPLETE",
@@ -111,24 +104,48 @@ class ImplementerContractTests(unittest.TestCase):
             "additional_check_paths": [],
             "blockers": [],
         }
-        report["contract_evidence"][0]["status"] = "NOT_APPLICABLE"
-        with self.assertRaisesRegex(RuntimeError, "cannot be NOT_APPLICABLE"):
+        report["contract_evidence"][0]["status"] = "NOT_AFFECTED"
+        with self.assertRaisesRegex(RuntimeError, "cannot be NOT_AFFECTED"):
             validate_implementation_report(
-                report, contract=contract, changed_paths=[], self_verification_ok=True, documentation_paths=[]
+                report, contract=contract, changed_paths=[], self_verification_ok=True,
+                documentation_paths=[]
             )
+        consumer_index = next(
+            i for i, item in enumerate(contract["items"]) if item["type"] == "consumer"
+        )
+        report["contract_evidence"][0]["status"] = "VERIFIED"
+        report["contract_evidence"][consumer_index]["status"] = "NOT_AFFECTED"
+        validate_implementation_report(
+            report, contract=contract, changed_paths=[], self_verification_ok=True,
+            documentation_paths=[]
+        )
 
     def test_planner_risks_are_required_contract_items(self) -> None:
         plan = valid_plan()
-        plan["risks"] = ["Risk A", "Risk B"]
-        contract = build_implementation_contract(plan, task_prompt="task")
-        risk_items = [item for item in contract["items"] if item["kind"] == "risk"]
+        plan["risks"] = [
+            {"condition": "A", "failure_mode": "Risk A", "required_proof": proof("Proof A")},
+            {"condition": "B", "failure_mode": "Risk B", "required_proof": proof("Proof B")},
+        ]
+        contract = self.contract(plan)
+        risk_items = [item for item in contract["items"] if item["type"] == "risk"]
         self.assertEqual([item["id"] for item in risk_items], ["RISK-1", "RISK-2"])
-        self.assertTrue(all(item["allow_not_applicable"] is False for item in risk_items))
+        self.assertTrue(all(item["allow_not_affected"] is False for item in risk_items))
+
+    def test_contract_soft_threshold_does_not_drop_material_items(self) -> None:
+        plan = valid_plan()
+        plan["affected_consumers"] = [
+            {"name": f"Consumer {i}", "why_affected": "shared", "must_verify": "preserved", "required_proof": proof(f"consumer {i} proof")}
+            for i in range(15)
+        ]
+        contract = self.contract(plan)
+        self.assertGreater(len(contract["items"]), 14)
+        self.assertTrue(contract["warnings"])
+        self.assertEqual(len([x for x in contract["items"] if x["type"] == "consumer"]), 15)
 
     def test_implementer_timeout_continues_same_thread_once(self) -> None:
         repo = self.make_repo()
         plan = valid_plan()
-        contract = build_implementation_contract(plan, task_prompt="task")
+        contract = self.contract(plan)
         report = {
             "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
             "status": "BLOCKED",
@@ -143,8 +160,7 @@ class ImplementerContractTests(unittest.TestCase):
         }
 
         class FakeCodex:
-            def __init__(self):
-                self.calls = []
+            def __init__(self): self.calls = []
             def run_turn(self, **kwargs):
                 self.calls.append(kwargs)
                 if len(self.calls) == 1:
@@ -153,16 +169,10 @@ class ImplementerContractTests(unittest.TestCase):
 
         codex = FakeCodex()
         result = run_implementer_report(
-            codex,
-            thread_id="thread-1",
-            prompt="initial",
-            timeout=900,
-            label="IMPLEMENT",
-            implementation_contract=contract,
-            self_verify_command=[sys.executable, "self_verify.py"],
-            workspace=repo,
-            stamp_path=repo / "missing-stamp.json",
-            plan=plan,
+            codex, thread_id="thread-1", prompt="initial", timeout=900,
+            label="IMPLEMENT", implementation_contract=contract,
+            self_verify_command=[sys.executable, "self_verify.py"], workspace=repo,
+            stamp_path=repo / "missing-stamp.json", plan=plan,
         )
         self.assertEqual(result["status"], "BLOCKED")
         self.assertEqual(len(codex.calls), 2)
@@ -174,15 +184,12 @@ class ImplementerContractTests(unittest.TestCase):
         repo = self.make_repo()
         (repo / "src" / "a.py").write_text("VALUE = 2\n", encoding="utf-8")
         specs = [{
-            "name": "simple",
-            "feedback": "repair",
+            "name": "simple", "feedback": "repair",
             "command": ["{python}", "-c", "from pathlib import Path; assert 'VALUE = 2' in Path('src/a.py').read_text()"],
             "timeout_seconds": 30,
         }]
         _, stamp, command = prepare_self_verify_runner(
-            workspace=repo,
-            specs=specs,
-            toolchain={"project_python": sys.executable},
+            workspace=repo, specs=specs, toolchain={"project_python": sys.executable}
         )
         result = subprocess.run(command, cwd=repo, check=False)
         self.assertEqual(result.returncode, 0)
@@ -197,10 +204,8 @@ class ImplementerContractTests(unittest.TestCase):
         js = repo / "tests" / "thing.test.cjs"
         js.write_text("test('x', () => expect(1).toBe(1));\n", encoding="utf-8")
         specs, notes = build_dynamic_check_specs(
-            ["tests/thing.test.cjs", "src/a.py"],
-            workspace=repo,
-            toolchain={"node": "C:/node.exe", "jest": "C:/jest.js"},
-            base_specs=[],
+            ["tests/thing.test.cjs", "src/a.py"], workspace=repo,
+            toolchain={"node": "C:/node.exe", "jest": "C:/jest.js"}, base_specs=[]
         )
         self.assertEqual(len(specs), 1)
         self.assertIn("thing.test.cjs", specs[0]["name"])

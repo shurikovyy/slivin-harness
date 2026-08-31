@@ -12,8 +12,9 @@ from unittest import mock
 
 import task_runner
 from slivin_harness.implementer import IMPLEMENTER_PROTOCOL_VERSION
-from slivin_harness.protocol import EVALUATOR_PROTOCOL_VERSION, PLANNER_PROTOCOL_VERSION
+from slivin_harness.protocol import EVALUATOR_PROTOCOL_VERSION
 from slivin_harness.workflow import StageResultCode, StageState
+from test_protocol import valid_plan, valid_task_contract
 
 
 def git(repo: Path, *args: str) -> str:
@@ -115,31 +116,11 @@ timeout_seconds = 30
                 self.root = run_root
                 self.root.mkdir(parents=True, exist_ok=True)
 
+        def fake_task_contract(*_args, **_kwargs):
+            return valid_task_contract()
+
         def fake_planner(*_args, **_kwargs):
-            return {
-                "protocol_version": PLANNER_PROTOCOL_VERSION,
-                "status": "READY",
-                "summary": "target.txt contains the wrong baseline value",
-                "observed_behavior": ["target.txt contains before"],
-                "expected_behavior": ["target.txt contains after"],
-                "root_cause": {
-                    "claim": "The tracked fixture contains the old value",
-                    "evidence": ["target.txt contains before"],
-                    "confidence": "HIGH",
-                },
-                "change_plan": ["Replace the value in target.txt"],
-                "preserve": ["Do not change other files"],
-                "consumers_to_check": [],
-                "risks": [],
-                "test_plan": ["Run the configured candidate-content check"],
-                "documentation": {
-                    "required": False,
-                    "paths": [],
-                    "reason": "No public contract changes",
-                },
-                "likely_paths": ["target.txt"],
-                "unknowns": [],
-            }
+            return valid_plan()
 
         def fake_evaluator(*_args, **_kwargs):
             return {
@@ -194,6 +175,7 @@ timeout_seconds = 30
             mock.patch.object(task_runner, "RunRecorder", _Recorder),
             mock.patch.object(task_runner, "CodexAppServer", _FakeCodexAppServer),
             mock.patch.object(task_runner, "resolve_codex_cmd", return_value=Path(sys.executable)),
+            mock.patch.object(task_runner, "run_task_contract_normalizer", side_effect=fake_task_contract),
             mock.patch.object(task_runner, "run_planner", side_effect=fake_planner),
             mock.patch.object(task_runner, "run_evaluator", side_effect=fake_evaluator),
             mock.patch.object(task_runner, "run_implementer_report", side_effect=fake_implementer_report),
@@ -257,8 +239,12 @@ timeout_seconds = 30
             state["stages"]["final_gate"]["result_code"],
             StageResultCode.HARNESS_TASK_PASS.value,
         )
+        self.assertEqual(state["revisions"]["task_contract"], 1)
         self.assertEqual(state["revisions"]["plan"], 1)
         self.assertEqual(state["revisions"]["implementation_contract"], 1)
+        self.assertEqual(state["revisions"]["verification_plan"], 1)
+        self.assertTrue((run_root / "task_contract_01.json").is_file())
+        self.assertTrue((run_root / "verification_plan_01.json").is_file())
         self.assertIn("0 PREFLIGHT → 1 PLANNER → 2 CONTRACT", output)
 
     def test_benchmark_run_has_distinct_terminal_status_and_heldout_artifact(self) -> None:

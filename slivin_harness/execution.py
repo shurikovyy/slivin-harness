@@ -14,6 +14,7 @@ EXECUTION_BROKER_VERSION = "execution-broker.v1"
 
 class ExecutionRole(str, Enum):
     APP_SERVER = "app_server"
+    INTAKE = "intake"
     PLANNER = "planner"
     IMPLEMENTER = "implementer"
     CONTROLLER_CHECK = "controller_check"
@@ -172,7 +173,7 @@ class ExecutionBroker:
             writable = (str(self.workspace),)
             fs_level = EnforcementLevel.ENFORCED
             notes = ("Codex workspace-write sandbox; Controller private plane is outside cwd.",)
-        elif role in {ExecutionRole.PLANNER, ExecutionRole.EVALUATOR}:
+        elif role in {ExecutionRole.INTAKE, ExecutionRole.PLANNER, ExecutionRole.EVALUATOR}:
             writable = (str(scratch),)
             fs_level = EnforcementLevel.ADVISORY
             notes = (
