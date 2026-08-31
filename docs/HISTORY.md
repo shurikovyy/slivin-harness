@@ -127,6 +127,12 @@ candidate.v1
 
 Generated `WORKFLOW.md` и `workflow.v1.json` теперь проверяются docs-sync, поэтому нумерация и переходы не должны снова расходиться вручную.
 
+## 3l. Native Windows canonical-path fix 0.8.0a4
+
+Первый self-check Phase 2 на целевой Windows-машине выявил четыре failures. Два теста ошибочно использовали лексический `Path.is_relative_to()` для сравнения с уже resolved paths. Ещё один failure обнаружил реальный security gap: Broker искал private root только как строковый resolved marker и не распознавал эквивалентный unresolved Windows path.
+
+`0.8.0a4` вводит единое canonical containment, проверяет исходный и resolved aliases private root и разрешает path-valued environment entries перед сравнением. Одновременно добавлена component-boundary проверка, чтобы `controller_private_backup` не считался private plane. Это portability/correctness fix Phase 2; serialized versions `controller-plane.v1` и `execution-broker.v1` не изменились.
+
 ## 3k. Private Controller plane и Execution Broker 0.8.0a3
 
 Authoritative Run State и receipts вынесены в `RUN_DIR/controller_private`. `.harness_tmp` окончательно закреплён как non-authoritative scratch. Добавлен role-aware Execution Broker, environment filtering, Windows-safe path validation и enforcement levels `ENFORCED / ADVISORY / UNAVAILABLE`. Self-verify claim теперь повышается Controller в HMAC receipt, связанный с candidate и revision vector.

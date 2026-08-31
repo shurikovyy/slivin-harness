@@ -61,14 +61,29 @@ def safe_artifact_name(raw: str, *, field: str = "artifact") -> str:
     return "/".join(parts)
 
 
+def canonical_path(path: Path) -> Path:
+    """Return a filesystem-canonical path without requiring the leaf to exist.
+
+    Native Windows may expose the same directory through different lexical
+    spellings (case, junctions, long/short-name aliases, or an unresolved
+    temporary-directory path).  Security and ownership checks must compare
+    canonical filesystem identities rather than ``Path.is_relative_to()``,
+    which is intentionally lexical.
+    """
+    return path.expanduser().resolve(strict=False)
+
+
 def is_within(root: Path, candidate: Path) -> bool:
-    """Return True when candidate resolves under root, including drive checks."""
+    """Return True when candidate canonically resolves under root.
+
+    ``os.path.commonpath`` also rejects cross-drive comparisons on Windows.
+    """
     try:
-        root_resolved = root.resolve()
-        candidate_resolved = candidate.resolve()
+        root_resolved = canonical_path(root)
+        candidate_resolved = canonical_path(candidate)
         common = os.path.commonpath([str(root_resolved), str(candidate_resolved)])
         return os.path.normcase(common) == os.path.normcase(str(root_resolved))
-    except (OSError, ValueError):
+    except (OSError, RuntimeError, ValueError):
         return False
 
 
@@ -102,7 +117,7 @@ class ControllerPlane:
     """
 
     def __init__(self, run_root: Path) -> None:
-        self.run_root = run_root.resolve()
+        self.run_root = canonical_path(run_root)
         self.private_root = self.run_root / "controller_private"
         self.private_root.mkdir(parents=True, exist_ok=True)
         self._secret_path = self.private_root / ".receipt_key"

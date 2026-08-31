@@ -1,4 +1,4 @@
-# Архитектура 0.8.0a3 — Phase 2
+# Архитектура 0.8.0a4 — Phase 2
 
 ## 1. Цель Phase 1–2
 
@@ -324,7 +324,7 @@ docs/workflow.v1.json
 `check_docs_sync.py` также проверяет версии:
 
 ```text
-0.8.0a3
+0.8.0a4
 workflow.v1
 run-state.v1
 candidate.v1
@@ -357,3 +357,7 @@ publication automation
 
 
 Foundation protocol versions: `controller-plane.v1`, `execution-broker.v1`.
+
+## Native Windows path identity
+
+Controller-plane и Broker boundaries сравниваются по каноническому filesystem location. Лексическое `Path.is_relative_to()` не используется как security proof: на Windows исходный путь, resolved path, junction/alias и вариант регистра могут обозначать один каталог, но иметь разные строки. Для environment filtering Broker сохраняет исходный и canonical private-root aliases, а path-valued entries дополнительно разрешает через canonical containment. Соседние имена с общим текстовым префиксом не считаются descendants.

@@ -1,4 +1,6 @@
-# Практическая работа с Harness 0.8.0a3
+# Практическая работа с Harness 0.8.0a4
+
+> Native Windows: используйте `0.8.0a4` или новее. `0.8.0a3` имел несовместимость между resolved Controller paths и лексическими `tempfile` paths; она проявлялась четырьмя failures в `test_control_plane` / `test_execution`.
 
 ## 1. Что изменилось для пользователя
 
@@ -152,7 +154,7 @@ Run State уже отражает эти переходы и invalidation, но 
 
 ## 9. Runtime Step 5
 
-В 0.8.0a3 он записывается:
+В 0.8.0a4 он записывается:
 
 ```text
 state = SKIPPED

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from slivin_harness.control_plane import is_within
 from slivin_harness.execution import (
     EnforcementLevel,
     ExecutionBroker,
@@ -42,11 +43,25 @@ class ExecutionBrokerTests(unittest.TestCase):
 
     def test_extra_environment_cannot_expose_private_path(self) -> None:
         broker, _, private = self.make_broker()
-        with self.assertRaisesRegex(RuntimeError, "private path"):
-            broker.environment_for(
-                ExecutionRole.IMPLEMENTER,
-                extra={"BAD": str(private / "secret.json")},
-            )
+        aliases = (
+            private / "secret.json",
+            private.parent / "lexical-alias" / ".." / private.name / "secret.json",
+        )
+        for alias in aliases:
+            with self.subTest(alias=alias), self.assertRaisesRegex(RuntimeError, "private path"):
+                broker.environment_for(
+                    ExecutionRole.IMPLEMENTER,
+                    extra={"BAD": str(alias)},
+                )
+
+    def test_private_path_prefix_does_not_reject_unrelated_sibling(self) -> None:
+        broker, _, private = self.make_broker()
+        sibling = private.with_name(private.name + "_backup") / "public.json"
+        env = broker.environment_for(
+            ExecutionRole.IMPLEMENTER,
+            extra={"PUBLIC_CACHE": str(sibling)},
+        )
+        self.assertEqual(env["PUBLIC_CACHE"], str(sibling))
 
     def test_sensitive_extra_environment_requires_explicit_preservation(self) -> None:
         broker, _, _ = self.make_broker()
@@ -87,7 +102,7 @@ class ExecutionBrokerTests(unittest.TestCase):
         broker, workspace, _ = self.make_broker()
         roots = {broker.scratch_root(role) for role in ExecutionRole}
         self.assertEqual(len(roots), len(ExecutionRole))
-        self.assertTrue(all(root.is_relative_to(workspace / ".harness_tmp") for root in roots))
+        self.assertTrue(all(is_within(workspace / ".harness_tmp", root) for root in roots))
 
 
 if __name__ == "__main__":

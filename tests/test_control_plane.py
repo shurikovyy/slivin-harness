@@ -10,6 +10,7 @@ from slivin_harness.control_plane import (
     ControlPlaneError,
     ControllerPlane,
     SelfVerifyBinding,
+    is_within,
     safe_artifact_name,
 )
 
@@ -20,8 +21,8 @@ class ControlPlaneTests(unittest.TestCase):
         plane = ControllerPlane(root)
         private_path = plane.write_private_json("state/run.json", {"authority": True})
         public_path = plane.write_public_json("run.json", {"diagnostic": True})
-        self.assertTrue(private_path.is_relative_to(root / "controller_private"))
-        self.assertEqual(public_path, root / "run.json")
+        self.assertTrue(is_within(root / "controller_private", private_path))
+        self.assertEqual(public_path, (root / "run.json").resolve())
         self.assertNotEqual(private_path, public_path)
 
     def test_artifact_paths_reject_escape_absolute_drive_and_unc(self) -> None:
@@ -32,6 +33,15 @@ class ControlPlaneTests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(ControlPlaneError):
                 safe_artifact_name(raw)
         self.assertEqual(safe_artifact_name("nested/state.json"), "nested/state.json")
+
+    def test_canonical_containment_accepts_alias_and_rejects_sibling(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="slivin-containment-"))
+        private = root / "controller_private"
+        private.mkdir()
+        alias = private / "temporary-segment" / ".." / "state.json"
+        sibling = root / "controller_private_backup" / "state.json"
+        self.assertTrue(is_within(private, alias))
+        self.assertFalse(is_within(private, sibling))
 
     def test_private_receipt_is_bound_to_every_revision_dimension(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="slivin-receipt-"))
@@ -74,8 +84,8 @@ class ControlPlaneTests(unittest.TestCase):
         scratch = plane.write_text(
             "probe/output.txt", "ok", visibility=ArtifactVisibility.SCRATCH
         )
-        self.assertTrue(scratch.is_relative_to(root / "scratch"))
-        self.assertFalse(scratch.is_relative_to(plane.private_root))
+        self.assertTrue(is_within(root / "scratch", scratch))
+        self.assertFalse(is_within(plane.private_root, scratch))
 
 
 if __name__ == "__main__":

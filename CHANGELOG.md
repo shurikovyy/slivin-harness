@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0a4 — Phase 2: native Windows canonical-path fix
+
+- Fixed four native Windows self-check failures caused by comparing resolved Controller/Broker paths with unresolved `tempfile` paths through lexical `Path.is_relative_to()` semantics.
+- Added one canonical filesystem-containment primitive for Controller artifact roots and role scratch roots; cross-drive/path-alias comparisons remain fail-closed.
+- Fixed a real private-plane filtering gap: environment values are now checked against both lexical and canonical private-root aliases, including paths containing `..`.
+- Added component-boundary matching so an unrelated sibling such as `controller_private_backup` is not rejected as the private plane.
+- Added platform-independent regressions for canonical aliases, private-path environment rejection, sibling-prefix safety and scratch/private separation.
+- Kept `controller-plane.v1` and `execution-broker.v1`: serialized policy/receipt schemas are unchanged; this is a portability and enforcement-correctness fix.
+
 ## 0.8.0a3 — Phase 2: private Controller plane and execution broker
 
 - authoritative Run State, candidate/contract snapshots and self-verification receipts live under `RUN_DIR/controller_private`; public `run_state.json` is a diagnostic mirror;

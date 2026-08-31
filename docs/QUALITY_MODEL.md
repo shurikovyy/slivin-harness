@@ -1,4 +1,4 @@
-# Модель качества 0.8.0a3 — Phase 2
+# Модель качества 0.8.0a4 — Phase 2
 
 ## 1. Что доказывает Phase 1
 
@@ -94,7 +94,7 @@ Step 5 Runtime / external verification
 Step 6 Blind Evaluator
 ```
 
-В 0.8.0a3:
+В 0.8.0a4:
 
 - Runtime executor ещё не реализован и всегда получает explicit compatibility skip;
 - Evaluator остаётся однопроходным `evaluator.v4` и получает прежний context;
@@ -197,3 +197,5 @@ Self-verify receipt связан не только с bytes candidate, но и �
 
 
 Foundation protocol versions: `controller-plane.v1`, `execution-broker.v1`.
+
+Canonical-path invariant: filesystem ownership и private-plane non-disclosure оцениваются по фактическому canonical location, а не по совпадению строковых/лексических `Path` representations. Это обязательно для native Windows, где один каталог может быть представлен несколькими эквивалентными путями. Проверки остаются fail-closed при cross-drive или неразрешимой canonicalization.

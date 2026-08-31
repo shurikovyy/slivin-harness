@@ -2,7 +2,7 @@
 
 > Этот файл генерируется из `slivin_harness/workflow.py`. Не редактируйте таблицы вручную; запустите `./py tools/render_workflow_docs.py`.
 
-- Harness: **0.8.0a3**
+- Harness: **0.8.0a4**
 - Workflow schema: **workflow.v1**
 - Реализуемая фаза: **phase2-private-control-plane-and-execution-broker**
 

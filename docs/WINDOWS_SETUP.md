@@ -207,3 +207,27 @@ Phase 1 пока сохраняет существующий timeout continuatio
 Phase 2 централизует execution policy, но намеренно не называет Planner/Controller-check filesystem boundary `ENFORCED`, пока отдельный native Windows restricted runner не пройдёт capability smoke test. В `execution_policies.json` такие профили отображаются как `ADVISORY`. Это корректный статус, а не ошибка self-check.
 
 Private Controller state размещается в `RUN_DIR/controller_private`, то есть вне managed worktree. Agent environment не получает этот path.
+
+## Phase 2: canonical path boundary
+
+На native Windows нельзя проверять принадлежность private/scratch path через простое:
+
+```python
+path.is_relative_to(unresolved_root)
+```
+
+`tempfile`, `Path.resolve()`, регистр, junction/alias и long/short-name representation могут дать разные строки для одного filesystem location. Начиная с `0.8.0a4` Harness использует canonical containment и отдельно проверяет private-root aliases в environment. Ожидаемый self-check не должен содержать failures:
+
+```text
+test_private_plane_is_separate_and_public_mirror_is_explicit
+test_scratch_class_is_non_authoritative
+test_each_role_gets_task_local_scratch
+test_extra_environment_cannot_expose_private_path
+```
+
+Если они появились, убедитесь, что запущена именно версия `0.8.0a4` или новее:
+
+```bash
+./py -c "import slivin_harness; print(slivin_harness.__version__)"
+./py tools/self_check.py
+```

@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a3 — Phase 2
+# Slivin Harness 0.8.0a4 — Phase 2
 
 Slivin Harness — Controller вокруг Codex App Server для автономной работы над coding-задачами в изолированной Git worktree.
 
-Версия **0.8.0a3** завершает Phase 2 согласованного рефакторинга quality-core. Model protocols пока не переписываются: сначала authoritative Controller state отделён от agent-writable workspace и введён единый Execution / Capability Broker.
+Версия **0.8.0a4** завершает Phase 2 согласованного рефакторинга quality-core и исправляет обнаруженную native Windows несовместимость `0.8.0a3`: filesystem-boundaries теперь сравниваются по каноническому расположению, а не по лексическому написанию `Path`. Model protocols пока не переписываются: сначала authoritative Controller state отделён от agent-writable workspace и введён единый Execution / Capability Broker.
 
 ```text
 Phase 1: machine-readable workflow + versioned Run State + candidate_id
@@ -28,6 +28,8 @@ runs/<task>/<run>/
 ```
 
 `ExecutionBroker` формирует role-specific policy для Planner, Implementer, Controller checks, Runtime, Evaluator и held-out. Он централизует scratch/temp/cache, фильтрует чувствительные environment variables и никогда не передаёт путь private plane в agent environment. Политика честно различает `ENFORCED`, `ADVISORY` и `UNAVAILABLE`: Phase 2 не заявляет OS-sandbox там, где restricted native Windows runner ещё не реализован.
+
+На native Windows один каталог может иметь несколько эквивалентных представлений пути: исходное имя из `tempfile`, resolved/real path, другое написание регистра или filesystem alias. Поэтому security- и ownership-проверки используют каноническое containment. Private-path filtering проверяет как исходный, так и canonical alias и не путает соседний каталог вроде `controller_private_backup` с private plane.
 
 Self-verification внутри worktree остаётся удобным claim агента, но финальным доказательством становится Controller-owned HMAC receipt, привязанный одновременно к `candidate_id`, attempt и revision vector. Поэтому старый PASS нельзя переиспользовать после изменения Contract или Verification Plan даже при неизменном коде.
 
