@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0a6 — Phase 4: Implementer and deterministic Controller verification
+
+- Upgraded the writable protocol to `implementer.v2` with `COMPLETE`, `REPLAN_REQUIRED`, `BLOCKED`, and `NEEDS_USER_DECISION`; non-COMPLETE outcomes require concrete reason/evidence without a fake per-item blocked ledger.
+- Added a Controller-private typed check registry. Agents may register validated repository test paths or trusted check IDs, never arbitrary authoritative shell commands.
+- Bound self-verification receipts to candidate identity, Task/Plan/Contract/Verification revisions, runtime environment, attempt, and check-registry digest.
+- Replaced short active-turn wall-clock interruption with activity-aware watchdog behavior; an active tool suppresses inactivity interruption.
+- Added deterministic Controller result classes: `CHECK_PASS`, `CHECK_FAIL`, `CHECK_TIMEOUT`, `CHECK_INFRA_ERROR`, and `CHECK_MUTATED_CANDIDATE`.
+- Added candidate freeze guards around Controller checks, changed-test coverage validation, and progress/no-progress repair guards instead of a normal two-cycle cutoff.
+- Added `docs/PHASE4_EXECUTION.md`, upgraded the canonical workflow to `workflow.v3`, and added executable Phase 4 unit/integration regressions.
+- Kept the alpha boundary explicit: automatic Contract/Verification Plan recompilation, worktree-local environment rebuild, and universal OS-enforced Controller subprocess isolation remain follow-up work.
+
 ## 0.8.0a5 — Phase 3: task, planning and verification contracts
 
 - Added `task-contract.v1`: raw user request is preserved verbatim and every explicit normalized claim is bound to exact `source_text`.

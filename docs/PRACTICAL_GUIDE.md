@@ -1,11 +1,11 @@
-# Практическая работа с Slivin Harness 0.8.0a5
+# Практическая работа с Slivin Harness 0.8.0a6
 
 ## Установка
 
 Распакуйте release в отдельный каталог и перенесите только локальный `harness.local.toml`.
 
 ```bash
-cd ~/Tools/slivin-harness-080a5-phase3
+cd ~/Tools/slivin-harness-080a6-phase4
 ./py -c "import slivin_harness; print(slivin_harness.__version__)"
 ./py tools/self_check.py
 ```
@@ -13,7 +13,7 @@ cd ~/Tools/slivin-harness-080a5-phase3
 Ожидаемая версия:
 
 ```text
-0.8.0a5
+0.8.0a6
 ```
 
 ## Что происходит при FULL-задаче
@@ -25,11 +25,12 @@ cd ~/Tools/slivin-harness-080a5-phase3
 4. Implementation Contract v3
 5. Verification Plan v1
 6. owner/capability gates
-7. Implementer v1
-8. existing Controller checks
-9. runtime skip для local-only proof
-10. Evaluator v4
-11. Final Gate compatibility executor
+7. Implementer v2
+8. typed check registration + revision-bound SELF VERIFY
+9. independent Controller deterministic checks
+10. runtime skip для local-only proof
+11. Evaluator v4
+12. Final Gate compatibility executor
 ```
 
 ## Какие artifacts искать
@@ -124,11 +125,11 @@ DOCS-1           если нужно
 HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING ...
 ```
 
-Это корректный fail-closed outcome Phase 3, а не причина вручную снижать proof до unit-теста.
+Это корректный fail-closed outcome Phase 4, а не причина вручную снижать proof до unit-теста.
 
 ## FAST compatibility profile
 
-Manifest `risk = "low"` пока сохраняет старый FAST pipeline. User Task Contract всё равно создаётся, Planner/Evaluator могут быть compatibility-skipped. Обычный будущий production workflow будет переведён на FULL после последующих фаз; Phase 3 не скрывает эту совместимость.
+Manifest `risk = "low"` пока сохраняет старый FAST pipeline. User Task Contract всё равно создаётся, Planner/Evaluator могут быть compatibility-skipped. Обычный будущий production workflow будет переведён на FULL после последующих фаз; Phase 4 не скрывает эту совместимость.
 
 ## Документация workflow
 
@@ -139,19 +140,25 @@ Manifest `risk = "low"` пока сохраняет старый FAST pipeline. 
 ./py tools/check_docs_sync.py
 ```
 
-Не редактируйте generated таблицы `WORKFLOW.md` и `workflow.v2.json` вручную.
+Не редактируйте generated таблицы `WORKFLOW.md` и `workflow.v3.json` вручную.
 
-## Ограничения Phase 3
+## Ограничения Phase 4
 
-Не ожидайте пока:
+Пока не реализованы полностью:
 
 ```text
-автоматической .worktreeinclude copy policy;
-автоматического venv bootstrap;
-Browser/test-external execution;
-нового Implementer protocol;
-двухфазного Evaluator;
-полного inactivity watchdog.
+автоматическая .worktreeinclude copy policy;
+worktree-local .venv bootstrap/rebuild;
+автоматическая перекомпиляция active Contract/Verification Plan из discoveries;
+universal OS-enforced sandbox для Controller subprocess;
+LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE executors;
+двухфазный Evaluator;
+clean-worktree semantic replan;
+финальная delivery transaction.
 ```
 
-Они должны быть реализованы последовательно и проверены отдельными historical trials.
+## Implementer и Controller checks
+
+Implementer делает smallest complete fix, регистрирует material tests до `COMPLETE`, запускает self-verification и указывает конкретное evidence для каждого active Contract item. `REPLAN_REQUIRED`, `BLOCKED` и `NEEDS_USER_DECISION` являются отдельными terminal explanations и не требуют искусственных `BLOCKED`-строк по каждому item.
+
+Typed check registry хранится в private Controller plane. После добавления нового check старый self-verification receipt становится stale. Controller затем независимо повторяет trusted suite в изолированных temp/cache-каталогах и отклоняет check, который изменил candidate. Активный Implementer контролируется inactivity watchdog: running tool считается activity, Controller heartbeat — нет.

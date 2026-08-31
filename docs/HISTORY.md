@@ -1,5 +1,11 @@
 # История и дальнейший маршрут
 
+## Phase 4 — 0.8.0a6
+
+Phase 4 перевела writable execution loop на `implementer.v2`, добавила Controller-private typed check registry, revision-bound self-verification receipts, activity-based watchdog, deterministic check classifications и candidate freeze guards. Эта фаза напрямую закрывает два исторических execution gaps Matrix: потерю полезной работы из-за фиксированного 900-секундного timeout и слишком позднее подключение найденных consumer tests.
+
+Machine phase id: `phase4-implementer-controller-verification`. Автоматическая перекомпиляция active Contract/Verification Plan, worktree-local environment rebuild и universal OS-enforced Controller subprocess isolation остаются честно обозначенной alpha-границей.
+
 ## Phase 3 — 0.8.0a5
 
 Phase 3 впервые провела обычный пользовательский запрос через отдельный `task-contract.v1`, затем через `planner.v4`, Controller-owned `implementation-contract.v3` и `verification-plan.v1`.
@@ -215,4 +221,3 @@ controller-owned hidden graders
 ```
 
 Если ответа нет, слой не добавляется.
-

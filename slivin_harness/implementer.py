@@ -9,7 +9,7 @@ from slivin_harness.task_contract import validate_task_contract
 from slivin_harness.verification import merged_required_proof, validate_merged_required_proof
 from slivin_harness.workflow import ImplementerStatus, enum_values
 
-IMPLEMENTER_PROTOCOL_VERSION = "implementer.v1"
+IMPLEMENTER_PROTOCOL_VERSION = "implementer.v2"
 IMPLEMENTATION_CONTRACT_VERSION = "implementation-contract.v3"
 CONTRACT_ITEM_TYPES = {"acceptance", "preservation", "state", "consumer", "risk", "documentation"}
 CONTRACT_ITEM_SOURCES = {"USER", "PLANNER", "USER+PLANNER", "DISCOVERED"}
@@ -21,6 +21,8 @@ IMPLEMENTER_REPORT_SCHEMA = {
         "protocol_version": {"type": "string", "enum": [IMPLEMENTER_PROTOCOL_VERSION]},
         "status": {"type": "string", "enum": enum_values(ImplementerStatus)},
         "summary": {"type": "string"},
+        "reason": {"type": "string"},
+        "evidence": {"type": "array", "items": {"type": "string"}},
         "contract_evidence": {
             "type": "array",
             "items": {
@@ -30,8 +32,7 @@ IMPLEMENTER_REPORT_SCHEMA = {
                     "item_id": {"type": "string"},
                     "status": {
                         "type": "string",
-                        # NOT_APPLICABLE remains accepted as an implementer.v1
-                        # compatibility alias; v3 prompts use NOT_AFFECTED.
+                        # NOT_APPLICABLE is accepted as a compatibility alias.
                         "enum": ["VERIFIED", "NOT_AFFECTED", "NOT_APPLICABLE", "BLOCKED"],
                     },
                     "evidence": {"type": "array", "items": {"type": "string"}},
@@ -46,16 +47,43 @@ IMPLEMENTER_REPORT_SCHEMA = {
                 "status": {"type": "string", "enum": ["PASS", "FAIL", "NOT_RUN"]},
                 "command": {"type": "string"},
                 "evidence": {"type": "array", "items": {"type": "string"}},
+                "receipt_id": {"type": "string"},
             },
-            "required": ["status", "command", "evidence"],
+            "required": ["status"],
         },
         "additional_check_paths": {"type": "array", "items": {"type": "string"}},
+        "registered_checks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "kind": {"type": "string", "enum": ["path", "check_id"]},
+                    "value": {"type": "string"},
+                },
+                "required": ["kind", "value"],
+            },
+        },
+        "discovered_obligations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "kind": {"type": "string", "enum": ["consumer", "risk"]},
+                    "name": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "required_behavior": {"type": "string"},
+                    "evidence": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["kind", "name", "reason", "required_behavior", "evidence"],
+            },
+        },
         "blockers": {"type": "array", "items": {"type": "string"}},
     },
-    "required": [
-        "protocol_version", "status", "summary", "contract_evidence",
-        "self_verification", "additional_check_paths", "blockers",
-    ],
+    # Status-specific completeness is enforced by Controller code. Keeping the
+    # schema compact lets BLOCKED/REPLAN_REQUIRED avoid a fake full ledger.
+    "required": ["protocol_version", "status", "summary"],
 }
 
 
@@ -317,76 +345,70 @@ def validate_implementation_report(
     self_verification_ok: bool,
     documentation_paths: list[str] | None = None,
 ) -> None:
+    """Validate implementer.v2 while retaining v1-shaped BLOCKED compatibility.
+
+    COMPLETE is strict and must close every active item. Non-complete terminal
+    statuses need one concrete reason/evidence package, not a fabricated row for
+    every contract item.
+    """
     validate_implementation_contract(contract)
     if report.get("protocol_version") != IMPLEMENTER_PROTOCOL_VERSION:
         raise RuntimeError(f"Implementer protocol mismatch: {report.get('protocol_version')!r}")
-    if report.get("status") not in set(enum_values(ImplementerStatus)):
-        raise RuntimeError("Implementer status must be COMPLETE or BLOCKED")
-    if not isinstance(report.get("summary"), str):
-        raise RuntimeError("Implementer summary must be a string")
 
-    items = {item["id"]: item for item in contract["items"]}
-    evidence_rows = report.get("contract_evidence")
-    if not isinstance(evidence_rows, list):
-        raise RuntimeError("Implementer contract_evidence must be an array")
-    by_id: dict[str, dict[str, Any]] = {}
-    for row in evidence_rows:
-        if not isinstance(row, dict):
-            raise RuntimeError("Implementer contract_evidence rows must be objects")
-        item_id = str(row.get("item_id"))
-        if item_id in by_id:
-            raise RuntimeError(f"Duplicate Implementer contract evidence: {item_id}")
-        by_id[item_id] = row
-    if set(by_id) != set(items):
+    status_value = report.get("status")
+    if status_value not in set(enum_values(ImplementerStatus)):
         raise RuntimeError(
-            "Implementer must account for every Implementation Contract item exactly once: "
-            f"expected={sorted(items)}, actual={sorted(by_id)}"
+            "Implementer status must be COMPLETE, REPLAN_REQUIRED, BLOCKED, or "
+            "NEEDS_USER_DECISION"
+        )
+    summary = report.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise RuntimeError("Implementer summary must be a non-empty string")
+
+    # Validate paths regardless of terminal status; report data must not escape
+    # the repository even when the agent is blocked.
+    for index, raw in enumerate(report.get("additional_check_paths", [])):
+        safe_repo_relative(raw, field=f"additional_check_paths[{index}]")
+    for raw in changed_paths:
+        safe_repo_relative(raw, field="changed_path")
+
+    if status_value != ImplementerStatus.COMPLETE.value:
+        blockers = report.get("blockers", [])
+        reason = report.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            if isinstance(blockers, list):
+                reason = next((str(item).strip() for item in blockers if str(item).strip()), "")
+        evidence = report.get("evidence")
+        if not isinstance(evidence, list) or not any(str(item).strip() for item in evidence):
+            derived: list[str] = []
+            for row in report.get("contract_evidence", []):
+                if isinstance(row, Mapping):
+                    derived.extend(
+                        str(item).strip()
+                        for item in row.get("evidence", [])
+                        if str(item).strip()
+                    )
+            if isinstance(blockers, list):
+                derived.extend(str(item).strip() for item in blockers if str(item).strip())
+            evidence = derived
+        if not reason:
+            raise RuntimeError(f"{status_value} requires a concrete reason")
+        if not evidence:
+            raise RuntimeError(f"{status_value} requires concrete evidence")
+        return
+
+    from .phase4 import validate_implementer_report as validate_phase4_report
+
+    validate_phase4_report(
+        report,
+        active_contract_items=contract["items"],
+        require_receipt=False,
+    )
+    if not self_verification_ok:
+        raise RuntimeError(
+            "Implementer COMPLETE requires trusted self-verification PASS on the current candidate"
         )
 
-    blocked_items: list[str] = []
-    for item_id, contract_item in items.items():
-        row = by_id[item_id]
-        status = row.get("status")
-        if status == "NOT_APPLICABLE":
-            status = "NOT_AFFECTED"
-        evidence = row.get("evidence")
-        if status not in {"VERIFIED", "NOT_AFFECTED", "BLOCKED"}:
-            raise RuntimeError(f"Invalid contract status for {item_id}: {status}")
-        if not isinstance(evidence, list) or not evidence or not all(
-            isinstance(line, str) and line.strip() for line in evidence
-        ):
-            raise RuntimeError(f"Contract item {item_id} requires concrete evidence")
-        if status == "NOT_AFFECTED" and not contract_item["allow_not_affected"]:
-            raise RuntimeError(f"Contract item {item_id} cannot be NOT_AFFECTED")
-        if status == "BLOCKED":
-            blocked_items.append(item_id)
-
-    additional = report.get("additional_check_paths")
-    if not isinstance(additional, list):
-        raise RuntimeError("additional_check_paths must be an array")
-    for index, raw in enumerate(additional):
-        safe_repo_relative(raw, field=f"additional_check_paths[{index}]")
-
-    blockers = report.get("blockers")
-    if not isinstance(blockers, list) or not all(isinstance(item, str) for item in blockers):
-        raise RuntimeError("blockers must be an array of strings")
-    self_verification = report.get("self_verification")
-    if not isinstance(self_verification, dict):
-        raise RuntimeError("self_verification must be an object")
-
-    if report["status"] == ImplementerStatus.COMPLETE.value:
-        if blocked_items or blockers:
-            raise RuntimeError("Implementer COMPLETE cannot retain blocked items or blockers")
-        if self_verification.get("status") != "PASS" or not self_verification_ok:
-            raise RuntimeError(
-                "Implementer COMPLETE requires trusted self-verification PASS on the current candidate"
-            )
-        # Documentation correctness is a semantic Contract item. Phase 3 no
-        # longer requires changing a Planner-guessed filename.
-        sorted(safe_repo_relative(item, field="changed_path") for item in changed_paths)
-    else:
-        if not blockers and not blocked_items:
-            raise RuntimeError("Implementer BLOCKED requires a concrete blocker")
 
 
 def parse_implementation_report(raw: str) -> dict[str, Any]:

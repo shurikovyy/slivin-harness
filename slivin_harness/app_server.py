@@ -16,6 +16,26 @@ class TurnTimeoutError(RuntimeError):
 from typing import Callable
 
 
+def _phase4_inactivity_expired(
+    *,
+    now: float,
+    last_real_activity_at: float,
+    inactivity_timeout_seconds: float,
+    active_tools: int,
+) -> bool:
+    """Return true only after real inactivity with no active tool.
+
+    Total elapsed time is intentionally not used. Controller-generated heartbeats
+    do not call this function with a newer activity timestamp.
+    """
+
+    if active_tools > 0:
+        return False
+    return max(0.0, now - last_real_activity_at) >= max(
+        0.0, inactivity_timeout_seconds
+    )
+
+
 class CodexAppServer:
     """Small synchronous JSON-RPC client for Codex App Server.
 
@@ -49,6 +69,7 @@ class CodexAppServer:
         self._stderr_tail: deque[str] = deque(maxlen=80)
         self._next_request_id = 1
         self._last_message_at = time.monotonic()
+        self._active_tools = 0
         self._stdout_closed = threading.Event()
         self._stderr_closed = threading.Event()
         self._thread_metadata: dict[str, dict] = {}
@@ -184,6 +205,7 @@ class CodexAppServer:
             "stdout_closed": self._stdout_closed.is_set(),
             "stderr_closed": self._stderr_closed.is_set(),
             "last_activity_seconds": max(0.0, time.monotonic() - self._last_message_at),
+            "active_tools": self._active_tools,
         }
 
     def stderr_tail(self) -> str:
@@ -259,7 +281,10 @@ class CodexAppServer:
                 "params": params,
             }
         )
-        deadline = time.monotonic() + timeout
+        # JSON-RPC request/response calls are bounded deterministic operations.
+        # The long-running agent-turn inactivity policy below must not change
+        # their ordinary timeout semantics.
+        deadline = time.monotonic() + float(timeout)
         deferred: list[dict] = []
         try:
             while True:
@@ -351,6 +376,13 @@ class CodexAppServer:
         output_schema: dict | None = None,
         skills: list[dict[str, str]] | None = None,
     ) -> str:
+        """Run one App Server turn with an inactivity watchdog.
+
+        ``timeout`` is the maximum period without real model/App Server activity,
+        not a short total wall-clock budget. A running tool suppresses inactivity
+        interruption. A seven-day phase4 emergency ceiling remains only as a final
+        owner-safety bound.
+        """
         skill_items = list(skills or [])
         visible_prompt = prompt
         if skill_items:
@@ -367,23 +399,44 @@ class CodexAppServer:
 
         turn_id = str(self.request("turn/start", turn_params)["turn"]["id"])
         started = time.monotonic()
-        deadline = started + timeout
+        last_real_activity = started
+        inactivity_timeout = max(0.0, float(timeout))
+        emergency_deadline = started + 7 * 24 * 60 * 60  # phase4 emergency ceiling
         next_heartbeat = started + heartbeat_interval
         final_messages: list[str] = []
         fallback_messages: list[str] = []
-        timed_out = False
+        interrupted = False
+        interrupt_deadline: float | None = None
+        active_tool_ids: set[str] = set()
+
+        def tool_key(item: dict) -> str:
+            value = item.get("id") or item.get("itemId") or item.get("callId")
+            return str(value) if value is not None else f"anonymous:{id(item)}"
 
         while True:
             now = time.monotonic()
-            if now >= deadline and not timed_out:
-                timed_out = True
+            inactive = _phase4_inactivity_expired(
+                now=now,
+                last_real_activity_at=last_real_activity,
+                inactivity_timeout_seconds=inactivity_timeout,
+                active_tools=len(active_tool_ids),
+            )
+            emergency_expired = now >= emergency_deadline
+            if not interrupted and (inactive or emergency_expired):
+                interrupted = True
                 self._interrupt_turn(thread_id=thread_id, turn_id=turn_id)
-                deadline = now + 15
-            if now >= deadline and timed_out:
+                interrupt_deadline = now + 15
+            elif interrupted and interrupt_deadline is not None and now >= interrupt_deadline:
                 raise TurnTimeoutError(f"Turn timeout after interrupt: {turn_id}")
 
             self._ensure_alive(operation=f"turn {turn_id}")
-            message = self._receive_raw_optional(min(1.0, max(0.01, deadline - now)))
+            if interrupted and interrupt_deadline is not None:
+                wait_budget = max(0.01, interrupt_deadline - now)
+            elif active_tool_ids:
+                wait_budget = 1.0
+            else:
+                wait_budget = max(0.01, inactivity_timeout - (now - last_real_activity))
+            message = self._receive_raw_optional(min(1.0, wait_budget))
             now = time.monotonic()
             if on_heartbeat and heartbeat_interval > 0 and now >= next_heartbeat:
                 on_heartbeat(
@@ -392,17 +445,28 @@ class CodexAppServer:
                         "thread_id": thread_id,
                         "turn_id": turn_id,
                         "turn_elapsed_seconds": now - started,
+                        "active_tools": len(active_tool_ids),
+                        "inactivity_seconds": max(0.0, now - last_real_activity),
                     }
                 )
                 next_heartbeat = now + heartbeat_interval
             if message is None:
                 continue
+
+            # Any received App Server message is real activity. Controller heartbeat
+            # output is produced above and deliberately does not update this timestamp.
+            last_real_activity = now
             if "id" in message and "method" in message:
                 self._answer_server_request(message)
                 continue
 
             method = message.get("method")
             params = message.get("params", {})
+            if method == "item/started":
+                item = params.get("item", {})
+                if isinstance(item, dict) and item.get("type") != "agentMessage":
+                    active_tool_ids.add(tool_key(item))
+                continue
             if method == "item/agentMessage/delta":
                 delta = str(params.get("delta", ""))
                 if delta and on_delta:
@@ -410,12 +474,15 @@ class CodexAppServer:
                 continue
             if method == "item/completed":
                 item = params.get("item", {})
-                if item.get("type") == "agentMessage":
-                    text = item.get("text")
-                    if text:
-                        (final_messages if item.get("phase") == "final_answer" else fallback_messages).append(str(text))
-                    if on_message_end:
-                        on_message_end()
+                if isinstance(item, dict):
+                    active_tool_ids.discard(tool_key(item))
+                    if item.get("type") == "agentMessage":
+                        text = item.get("text")
+                        if text:
+                            target = final_messages if item.get("phase") == "final_answer" else fallback_messages
+                            target.append(str(text))
+                        if on_message_end:
+                            on_message_end()
                 continue
             if method == "error":
                 error_thread_id = str(params.get("threadId") or "")
@@ -440,8 +507,8 @@ class CodexAppServer:
             if str(turn.get("id")) != turn_id:
                 continue
             status = str(turn.get("status"))
-            if timed_out or status == "interrupted":
-                raise TurnTimeoutError(f"Turn interrupted after timeout: {turn_id}")
+            if interrupted or status == "interrupted":
+                raise TurnTimeoutError(f"Turn interrupted after inactivity timeout: {turn_id}")
             if status != "completed":
                 raise RuntimeError(f"Turn finished with status {status}: {turn}")
             if final_messages:

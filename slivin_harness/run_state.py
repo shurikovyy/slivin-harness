@@ -329,7 +329,12 @@ class RunState:
             mirror_temp.write_text(payload, encoding="utf-8", newline="\n")
             os.replace(mirror_temp, self.public_mirror_path)
 
-    def verification_binding(self, *, candidate_id: str) -> dict[str, Any]:
+    def verification_binding(
+        self,
+        *,
+        candidate_id: str,
+        check_registry_digest: str | None = None,
+    ) -> dict[str, Any]:
         revisions = self._revision_snapshot()
         return {
             "candidate_id": candidate_id,
@@ -341,6 +346,7 @@ class RunState:
             "verification_plan_rev": revisions.get(RevisionKind.VERIFICATION_PLAN.value),
             "runtime_env_id": revisions.get(RevisionKind.RUNTIME_ENVIRONMENT.value),
             "attempt_id": int(self.data["attempt_id"]),
+            "check_registry_digest": check_registry_digest,
         }
 
     def set_baseline(

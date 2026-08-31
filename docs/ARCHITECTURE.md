@@ -1,13 +1,13 @@
-# Архитектура Slivin Harness 0.8.0a5 — Phase 3
+# Архитектура Slivin Harness 0.8.0a6 — Phase 4
 
-## Назначение Phase 3
+## Назначение Phase 4
 
-Machine phase id: `phase3-task-planner-contract-verification-plan`.
+Machine phase id: `phase4-implementer-controller-verification`.
 
-Phase 1 ввела каноническую Step 0–7 state machine. Phase 2 вынесла authoritative Controller state из agent-writable worktree и централизовала execution policy. Phase 3 подключает к реальному pipeline пользовательский контракт, новый Planner, новый Implementation Contract и typed Verification Plan.
+Phase 1 ввела каноническую Step 0–7 state machine. Phase 2 вынесла authoritative Controller state из agent-writable worktree и централизовала execution policy. Phase 3 подключила User Task Contract, Planner v4, Implementation Contract v3 и typed Verification Plan. Phase 4 связывает этот фундамент с writable Implementer v2, Controller-private typed check registry, activity watchdog и независимыми deterministic Controller checks.
 
 ```text
-workflow.v2
+workflow.v3
 run-state.v1
 candidate.v1
 controller-plane.v1
@@ -19,7 +19,7 @@ implementation-contract.v3
 verification-plan.v1
 ```
 
-## Реальный pipeline Phase 3
+## Реальный pipeline Phase 4
 
 ```text
 MANIFEST version = 2
@@ -38,9 +38,11 @@ owner-boundary gate
         ↓
 capability gate
         ↓
-Implementer v1
+Implementer v2
         ↓
-Controller checks
+typed check registration + revision-bound SELF VERIFY
+        ↓
+independent Controller deterministic checks
         ↓
 Runtime SKIPPED для local-only proof
 или BLOCKED до Implementer для недоступного runtime proof
@@ -220,7 +222,7 @@ Plan validator сверяет summaries с фактическими requirement 
 
 ## Capability gate
 
-Phase 3 реально предоставляет только уже существующие local capabilities:
+Phase 4 предоставляет существующие local capabilities и подключает их к typed check registry:
 
 ```text
 GIT
@@ -245,21 +247,27 @@ Agent scratch в `.harness_tmp` не является доказательств
 ## Версии
 
 ```text
-Harness                     0.8.0a5
+Harness                     0.8.0a6
 Manifest                    version = 2
-Workflow                    workflow.v2
+Workflow                    workflow.v3
 Run State                   run-state.v1
 Candidate                   candidate.v1
 Controller plane            controller-plane.v1
 Execution Broker            execution-broker.v1
 Task Contract               task-contract.v1
 Planner                     planner.v4
-Implementer                 implementer.v1
+Implementer                 implementer.v2
 Implementation Contract     implementation-contract.v3
 Verification Plan           verification-plan.v1
 Evaluator                   evaluator.v4
 ```
 
-## Не реализовано в Phase 3
+## Implementer v2 и deterministic Controller verification
 
-Phase 3 не объявляет готовыми open-world IPC, runtime executors, двухфазный Evaluator, inactivity watchdog, restricted Controller runner или новую Final Gate transaction. Эти границы описываются как последующие фазы, а не как уже работающие гарантии.
+Authoritative check registry, revision bindings, self-verification receipts и Controller check records находятся в `RUN_DIR/controller_private`. Agent-writable `.harness_tmp` остаётся scratch и не является источником окончательной истины. Implementer может предложить typed test path или trusted check ID, но не произвольную authoritative shell-команду.
+
+Self-verification receipt относится одновременно к candidate, revision vector, runtime environment, attempt и check-registry digest. Controller независимо повторяет проверки, фиксирует candidate до/после suite и различает behavioral failure, timeout, infrastructure error и mutation candidate. Активная работа Implementer регулируется inactivity watchdog, а не коротким total wall-clock deadline.
+
+## Границы Phase 4 alpha
+
+Phase 4 не объявляет полностью готовыми автоматическую перекомпиляцию active Contract/Verification Plan из discoveries, worktree-local `.venv` bootstrap/rebuild, universal OS-enforced Controller subprocess sandbox, runtime executors, двухфазный Evaluator, clean-worktree semantic replan или новую Final Gate delivery transaction. Execution Broker сохраняет фактический статус `ENFORCED` / `ADVISORY` / `UNAVAILABLE` вместо ложного заявления об изоляции.

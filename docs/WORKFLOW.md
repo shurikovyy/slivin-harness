@@ -2,9 +2,9 @@
 
 > Этот файл генерируется из `slivin_harness/workflow.py`. Не редактируйте таблицы вручную; запустите `./py tools/render_workflow_docs.py`.
 
-- Harness: **0.8.0a5**
-- Workflow schema: **workflow.v2**
-- Реализуемая фаза: **phase3-task-planner-contract-verification-plan**
+- Harness: **0.8.0a6**
+- Workflow schema: **workflow.v3**
+- Реализуемая фаза: **phase4-implementer-controller-verification**
 
 ## Понятная схема
 
@@ -31,16 +31,16 @@
 
 | Step | Machine id | Название | Единственная основная задача | Условный | Успешный result code | Состояние в текущей фазе |
 | ---: | --- | --- | --- | :---: | --- | --- |
-| 0 | `intake_preflight` | Intake / Preflight | Фиксирует задачу, baseline, workspace и доступные инструменты. | нет | PREFLIGHT_READY | PHASE3_IMPLEMENTED |
-| 1 | `planner` | Planner | Read-only исследование и техническая модель задачи. | нет | PLANNER_READY / PLANNER_SKIPPED_FAST | PHASE3_IMPLEMENTED |
-| 2 | `implementation_contract` | Implementation Contract | Controller превращает load-bearing выводы в обязательный минимум результата. | нет | IMPLEMENTATION_CONTRACT_READY | PHASE3_IMPLEMENTED |
+| 0 | `intake_preflight` | Intake / Preflight | Фиксирует задачу, baseline, workspace и доступные инструменты. | нет | PREFLIGHT_READY | IMPLEMENTED |
+| 1 | `planner` | Planner | Read-only исследование и техническая модель задачи. | нет | PLANNER_READY / PLANNER_SKIPPED_FAST | IMPLEMENTED |
+| 2 | `implementation_contract` | Implementation Contract | Controller превращает load-bearing выводы в обязательный минимум результата. | нет | IMPLEMENTATION_CONTRACT_READY | IMPLEMENTED |
 | 3 | `implementer` | Implementer | Создаёт candidate, tests/docs и собственное evidence. | нет | IMPLEMENTATION_COMPLETE | COMPATIBILITY_IMPLEMENTED |
 | 4 | `deterministic_checks` | Controller deterministic checks | Независимо запускает локальные машинные проверки candidate. | нет | DETERMINISTIC_VERIFICATION_PASS | COMPATIBILITY_IMPLEMENTED |
 | 5 | `runtime_verification` | Runtime / external verification | Условно проверяет observable runtime outcome, если local checks недостаточны. | да | RUNTIME_VERIFICATION_PASS / RUNTIME_VERIFICATION_SKIPPED | PLANNED |
 | 6 | `evaluator` | Blind Evaluator | Независимо пытается опровергнуть полноту и корректность candidate. | нет | EVALUATION_PASS / EVALUATION_SKIPPED_FAST | COMPATIBILITY_IMPLEMENTED |
 | 7 | `final_gate` | Final Gate / result handoff | Сверяет identity доказательств и безопасно выдаёт принятый result. | нет | HARNESS_TASK_PASS / HARNESS_BENCHMARK_PASS | COMPATIBILITY_IMPLEMENTED |
 
-`COMPATIBILITY_IMPLEMENTED` означает: существующий executor 0.7.1 отображён на новый Run State, но полный новый контракт этапа будет внедряться последующими фазами. `PLANNED` означает: этап присутствует в канонической state machine, но его executor ещё не реализован. В Phase 3 Runtime всё ещё честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED` для local-only плана; обязательный runtime proof блокируется capability gate до Implementer; это compatibility record, а не доказательство, что runtime конкретной будущей задачи не нужен.
+`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на новый Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 4 Runtime честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED` только для local-only плана; обязательный runtime proof блокируется capability gate до Implementer.
 
 ## Разрешённые петли
 
@@ -95,7 +95,7 @@ attempt_id
 | `HIDDEN_GRADER_CHANGED` | `final_gate` | `final_gate` | нет | Изменение hidden grader требует новой calibration перед benchmark final gate. |
 | `CANDIDATE_CHANGED_AFTER_EVALUATION` | `implementer` | `implementer` | нет | Candidate mutation после evaluation инвалидирует implementation evidence и все gates. |
 
-## Что именно реализует Phase 3
+## Что именно реализует Phase 4
 
 ```text
 machine-readable workflow и versioned Run State
@@ -104,8 +104,15 @@ machine-readable workflow и versioned Run State
 + PLANNER planner.v4
 + IMPLEMENTATION CONTRACT implementation-contract.v3
 + typed VERIFICATION PLAN verification-plan.v1
-+ owner-boundary и capability gates до Implementer
-+ generated WORKFLOW.md / workflow.v2.json
++ IMPLEMENTER implementer.v2
++ Controller-private typed check registry
++ revision-bound self-verification receipts
++ inactivity watchdog с active-tool awareness
++ independent Controller check classification
++ candidate freeze до/после deterministic suite
++ changed-test coverage guard
++ progress/no-progress repair guard
++ generated WORKFLOW.md / workflow.v3.json
 ```
 
-Phase 3 **не заявляет, что уже реализованы** open-world IPC, inactivity watchdog, restricted Controller check runner, Runtime executor, двухфазный Evaluator или финальная delivery transaction. Эти возможности остаются последующими фазами.
+Phase 4 **не заявляет полностью готовыми** автоматическую перекомпиляцию active Contract/Verification Plan из discoveries, worktree-local `.venv` bootstrap/rebuild, universal OS-enforced Controller subprocess sandbox, Runtime executor, двухфазный Evaluator, clean-worktree semantic replan или финальную delivery transaction. Execution Broker сохраняет фактический статус `ENFORCED` / `ADVISORY` / `UNAVAILABLE` вместо ложного заявления об изоляции.

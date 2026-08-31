@@ -138,7 +138,7 @@ class RunStateTests(unittest.TestCase):
             path=root / "run_state.json",
             task_id="TASK",
             harness_version="test",
-            workflow_version="workflow.v2",
+            workflow_version="workflow.v3",
             mode=WorkflowMode.PRODUCTION,
             pipeline_profile=PipelineProfile.FULL,
         )

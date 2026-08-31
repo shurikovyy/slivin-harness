@@ -11,7 +11,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping
 
 CONTROL_PLANE_VERSION = "controller-plane.v1"
-SELF_VERIFY_RECEIPT_VERSION = "self-verify-receipt.v1"
+SELF_VERIFY_RECEIPT_VERSION = "self-verify-receipt.v2"
 
 
 class ControlPlaneError(RuntimeError):
@@ -103,6 +103,7 @@ class SelfVerifyBinding:
     verification_plan_rev: int | None
     runtime_env_id: int | None
     attempt_id: int
+    check_registry_digest: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

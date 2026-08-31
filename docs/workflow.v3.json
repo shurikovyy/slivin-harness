@@ -1,12 +1,12 @@
 {
-  "schema_version": "workflow.v2",
-  "harness_version": "0.8.0a5",
-  "phase": "phase3-task-planner-contract-verification-plan",
+  "schema_version": "workflow.v3",
+  "harness_version": "0.8.0a6",
+  "phase": "phase4-implementer-controller-verification",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",
     "execution_broker": "execution-broker.v1"
   },
-  "phase3_contracts": {
+  "contract_versions": {
     "task_contract": "task-contract.v1",
     "planner": "planner.v4",
     "implementation_contract": "implementation-contract.v3",
@@ -23,7 +23,7 @@
       ],
       "skip_codes": [],
       "optional": false,
-      "maturity": "PHASE3_IMPLEMENTED"
+      "maturity": "IMPLEMENTED"
     },
     {
       "number": 1,
@@ -38,7 +38,7 @@
         "PLANNER_SKIPPED_FAST"
       ],
       "optional": false,
-      "maturity": "PHASE3_IMPLEMENTED"
+      "maturity": "IMPLEMENTED"
     },
     {
       "number": 2,
@@ -50,7 +50,7 @@
       ],
       "skip_codes": [],
       "optional": false,
-      "maturity": "PHASE3_IMPLEMENTED"
+      "maturity": "IMPLEMENTED"
     },
     {
       "number": 3,
@@ -213,7 +213,9 @@
     ],
     "implementer": [
       "COMPLETE",
-      "BLOCKED"
+      "REPLAN_REQUIRED",
+      "BLOCKED",
+      "NEEDS_USER_DECISION"
     ],
     "evaluator": [
       "PASS",

@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a5 — Phase 3
+# Slivin Harness 0.8.0a6 — Phase 4
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Версия **0.8.0a5** реализует Phase 3 согласованной архитектуры:
+Версия **0.8.0a6** реализует Phase 4 поверх уже принятого фундамента Phase 1–3:
 
 ```text
 RAW USER REQUEST
@@ -17,16 +17,20 @@ VERIFICATION PLAN verification-plan.v1
         ↓
 owner-boundary + capability gates
         ↓
-IMPLEMENTER implementer.v1
+IMPLEMENTER implementer.v2
+        ↓
+SELF VERIFY + Controller-private typed check registry
+        ↓
+CONTROLLER DETERMINISTIC CHECKS
 ```
 
-Machine-readable workflow: **workflow.v2**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller foundation: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Evaluator пока остаётся **evaluator.v4**.
+Machine-readable workflow: **workflow.v3**. Реализуемая фаза: **phase4-implementer-controller-verification**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller plane: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Evaluator пока остаётся **evaluator.v4**.
 
-## Что изменилось в Phase 3
+## Фундамент Phase 3
 
 ### User Task Contract
 
-Перед Planner отдельный узкий Intake Normalizer сохраняет исходный запрос дословно и извлекает только явно сказанные требования:
+До Planner узкий Intake Normalizer сохраняет исходный запрос дословно и извлекает только явно сказанные требования:
 
 ```text
 intent
@@ -41,7 +45,7 @@ non-goals
 
 ### Planner v4
 
-Planner теперь отдельно формирует:
+Planner формирует:
 
 ```text
 characterization
@@ -72,11 +76,11 @@ RISK-N
 DOCS             условно
 ```
 
-Explicit user acceptance и preservation копируются напрямую из User Task Contract. Отдельного общего `EVIDENCE-1` больше нет: каждый item содержит собственное `required_proof`.
+Explicit user acceptance и preservation копируются напрямую из User Task Contract. Отдельного общего `EVIDENCE-1` нет: каждый item содержит собственное `required_proof`.
 
 ### Verification Plan v1
 
-Typed Verification Plan не пытается угадывать способ проверки из свободного текста. Он сохраняет один или несколько proof-профилей для каждого Contract item:
+Typed Verification Plan сохраняет один или несколько proof-профилей для каждого Contract item:
 
 ```text
 LOCAL_DETERMINISTIC
@@ -85,23 +89,63 @@ TEST_EXTERNAL
 PROD_OBSERVE
 ```
 
-Разные runtime-профили не схлопываются в один «самый сильный»: requirement может одновременно требовать, например, `LIVE_LOCAL` и `TEST_EXTERNAL`.
+До writable Implementer Controller проверяет owner boundary и наличие требуемых capabilities. Неисполняемый обязательный runtime proof блокирует задачу до расходования writable turn.
 
-До writable Implementer Controller проверяет:
+## Что добавляет Phase 4
+
+### Implementer v2
+
+Implementer может завершить turn только одним из четырёх статусов:
 
 ```text
-owner boundary совместим с планом?
-все требуемые capabilities реально доступны?
+COMPLETE
+REPLAN_REQUIRED
+BLOCKED
+NEEDS_USER_DECISION
 ```
 
-Если нет — задача останавливается до расходования writable turn.
+Только `COMPLETE` требует полного закрытия active Contract и актуальной self-verification. Остальные статусы требуют конкретной причины и evidence, но не искусственного `BLOCKED`-ledger по каждому item.
+
+### Typed check registry и self-verification receipts
+
+Task-specific tests регистрируются как typed path/check ID в Controller-private registry. Произвольная authoritative shell-команда от агента не принимается. Self-verification receipt связывает:
+
+```text
+candidate
+Task/Plan/Contract/Verification revisions
+runtime environment
+attempt
+check-registry digest
+```
+
+Изменение candidate, Contract или набора проверок делает старый receipt недействительным.
+
+### Inactivity watchdog
+
+Активный Implementer больше не прерывается только из-за общего elapsed time. Watchdog учитывает реальную App Server/model/tool activity; выполняющаяся команда считается activity, а Controller heartbeat — нет.
+
+### Независимые Controller checks
+
+Controller повторно запускает trusted checks и классифицирует результат:
+
+```text
+CHECK_PASS
+CHECK_FAIL
+CHECK_TIMEOUT
+CHECK_INFRA_ERROR
+CHECK_MUTATED_CANDIDATE
+```
+
+Candidate фиксируется до и после suite. Проверка, которая переписала candidate, не принимается даже при зелёных assertions. Изменённые/new test-файлы должны быть покрыты project suite или typed task-check registry.
+
+Подробности: [Phase 4 execution](docs/PHASE4_EXECUTION.md).
 
 ## Каноническая схема
 
 Полный Step 0–7 workflow генерируется из `slivin_harness/workflow.py`:
 
 - [Понятная схема workflow](docs/WORKFLOW.md)
-- [Machine-readable workflow.v2](docs/workflow.v2.json)
+- [Machine-readable workflow.v3](docs/workflow.v3.json)
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Модель качества](docs/QUALITY_MODEL.md)
 - [Практическое руководство](docs/PRACTICAL_GUIDE.md)
@@ -116,7 +160,7 @@ owner boundary совместим с планом?
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a5 ...
+DOCS_SYNC_PASS harness=0.8.0a6 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -128,23 +172,22 @@ HARNESS_SELF_CHECK_PASS
 
 Manifest пока остаётся `version = 2` для совместимости.
 
-## Что Phase 3 ещё не реализует
+## Границы Phase 4 alpha
 
-Phase 3 намеренно **не заявляет готовыми**:
+`0.8.0a6` намеренно **не заявляет готовыми**:
 
 ```text
 .worktreeinclude как автоматическую canonical copy policy;
-автоматический bootstrap отдельной project .venv;
-open-world register-obligation/register-check IPC;
-inactivity watchdog вместо active wall-clock timeout;
-universal restricted OS runner для Controller checks;
+автоматический bootstrap/rebuild отдельной project .venv;
+автоматическую перекомпиляцию active Contract/Verification Plan из discoveries;
+universal OS-enforced sandbox для Controller subprocess;
 LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE executors;
 двухфазный Blind Evaluator;
 clean-worktree semantic replan;
 финальную delivery transaction.
 ```
 
-Если `verification-plan.v1` требует runtime capability, для которой executor ещё не реализован, Harness честно возвращает `REQUIRED_CAPABILITY_MISSING` **до Implementer**. Он не подменяет обязательный runtime proof зелёными unit-тестами.
+Execution Broker честно фиксирует `ENFORCED`, `ADVISORY` или `UNAVAILABLE`. Advisory subprocess не выдаётся за полноценную OS-изоляцию.
 
 ## Локальная конфигурация
 
@@ -152,7 +195,7 @@ Machine-specific пути остаются в `harness.local.toml`, которы
 
 ## Режимы результата
 
-Текущий Harness поддерживает существующие режимы:
+Текущий Harness поддерживает:
 
 ```text
 keep_worktree

@@ -42,6 +42,7 @@ from task_runner import (
 EXPECTED_MAIN_DOCS = {
     "ARCHITECTURE.md",
     "HISTORY.md",
+    "PHASE4_EXECUTION.md",
     "PRACTICAL_GUIDE.md",
     "QUALITY_MODEL.md",
     "README.md",
@@ -91,12 +92,12 @@ def _check_one_h1(path: Path) -> None:
 
 
 def main() -> int:
-    _assert(__version__ == "0.8.0a5", f"Unexpected Harness version: {__version__}")
+    _assert(__version__ == "0.8.0a6", f"Unexpected Harness version: {__version__}")
     _assert(MANIFEST_VERSION == 2, f"Unexpected manifest version: {MANIFEST_VERSION}")
     _assert(PLANNER_PROTOCOL_VERSION == "planner.v4", PLANNER_PROTOCOL_VERSION)
     _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v3", IMPLEMENTATION_CONTRACT_VERSION)
     _assert(EVALUATOR_PROTOCOL_VERSION == "evaluator.v4", EVALUATOR_PROTOCOL_VERSION)
-    _assert(WORKFLOW_VERSION == "workflow.v2", WORKFLOW_VERSION)
+    _assert(WORKFLOW_VERSION == "workflow.v3", WORKFLOW_VERSION)
     _assert(RUN_STATE_VERSION == "run-state.v1", RUN_STATE_VERSION)
     _assert(CANDIDATE_IDENTITY_VERSION == "candidate.v1", CANDIDATE_IDENTITY_VERSION)
     _assert(CONTROL_PLANE_VERSION == "controller-plane.v1", CONTROL_PLANE_VERSION)
@@ -117,8 +118,8 @@ def main() -> int:
         indent=2,
     ) + "\n"
     _assert(
-        (docs_dir / "workflow.v2.json").read_text(encoding="utf-8") == generated_json,
-        "docs/workflow.v2.json is stale; run ./py tools/render_workflow_docs.py",
+        (docs_dir / "workflow.v3.json").read_text(encoding="utf-8") == generated_json,
+        "docs/workflow.v3.json is stale; run ./py tools/render_workflow_docs.py",
     )
 
     actual_docs = {path.name for path in docs_dir.glob("*.md")}
@@ -138,11 +139,11 @@ def main() -> int:
         for path in [ROOT / "README.md", docs_dir / "ARCHITECTURE.md", docs_dir / "QUALITY_MODEL.md"]
     )
     for marker in (
-        "0.8.0a5",
+        "0.8.0a6",
         "version = 2",
         "task-contract.v1",
         "planner.v4",
-        "implementer.v1",
+        "implementer.v2",
         "implementation-contract.v3",
         "verification-plan.v1",
         "evaluator.v4",

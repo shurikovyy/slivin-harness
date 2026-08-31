@@ -4,8 +4,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Iterable, TypeVar
 
-WORKFLOW_VERSION = "workflow.v2"
-WORKFLOW_PHASE = "phase3-task-planner-contract-verification-plan"
+WORKFLOW_VERSION = "workflow.v3"
+WORKFLOW_PHASE = "phase4-implementer-controller-verification"
 
 
 class _TextEnum(str, Enum):
@@ -50,7 +50,7 @@ class StageState(_TextEnum):
 
 
 class StageMaturity(_TextEnum):
-    PHASE3_IMPLEMENTED = "PHASE3_IMPLEMENTED"
+    IMPLEMENTED = "IMPLEMENTED"
     COMPATIBILITY_IMPLEMENTED = "COMPATIBILITY_IMPLEMENTED"
     PLANNED = "PLANNED"
 
@@ -103,7 +103,9 @@ class PlannerStatus(_TextEnum):
 
 class ImplementerStatus(_TextEnum):
     COMPLETE = "COMPLETE"
+    REPLAN_REQUIRED = "REPLAN_REQUIRED"
     BLOCKED = "BLOCKED"
+    NEEDS_USER_DECISION = "NEEDS_USER_DECISION"
 
 
 class EvaluatorStatus(_TextEnum):
@@ -196,7 +198,7 @@ STAGES: tuple[StageDefinition, ...] = (
         (StageResultCode.PREFLIGHT_READY,),
         (),
         False,
-        StageMaturity.PHASE3_IMPLEMENTED,
+        StageMaturity.IMPLEMENTED,
     ),
     StageDefinition(
         1,
@@ -206,7 +208,7 @@ STAGES: tuple[StageDefinition, ...] = (
         (StageResultCode.PLANNER_READY, StageResultCode.PLANNER_SKIPPED_FAST),
         (StageResultCode.PLANNER_SKIPPED_FAST,),
         False,
-        StageMaturity.PHASE3_IMPLEMENTED,
+        StageMaturity.IMPLEMENTED,
     ),
     StageDefinition(
         2,
@@ -216,7 +218,7 @@ STAGES: tuple[StageDefinition, ...] = (
         (StageResultCode.IMPLEMENTATION_CONTRACT_READY,),
         (),
         False,
-        StageMaturity.PHASE3_IMPLEMENTED,
+        StageMaturity.IMPLEMENTED,
     ),
     StageDefinition(
         3,
@@ -463,7 +465,7 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
             "control_plane": CONTROL_PLANE_VERSION,
             "execution_broker": EXECUTION_BROKER_VERSION,
         },
-        "phase3_contracts": {
+        "contract_versions": {
             "task_contract": TASK_CONTRACT_VERSION,
             "planner": PLANNER_PROTOCOL_VERSION,
             "implementation_contract": IMPLEMENTATION_CONTRACT_VERSION,
@@ -593,7 +595,7 @@ def render_workflow_markdown(*, harness_version: str) -> str:
 | ---: | --- | --- | --- | :---: | --- | --- |
 {chr(10).join(rows)}
 
-`COMPATIBILITY_IMPLEMENTED` означает: существующий executor 0.7.1 отображён на новый Run State, но полный новый контракт этапа будет внедряться последующими фазами. `PLANNED` означает: этап присутствует в канонической state machine, но его executor ещё не реализован. В Phase 3 Runtime всё ещё честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED` для local-only плана; обязательный runtime proof блокируется capability gate до Implementer; это compatibility record, а не доказательство, что runtime конкретной будущей задачи не нужен.
+`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на новый Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 4 Runtime честно записывается как `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED` только для local-only плана; обязательный runtime proof блокируется capability gate до Implementer.
 
 ## Разрешённые петли
 
@@ -638,7 +640,7 @@ attempt_id
 | --- | --- | --- | :---: | --- |
 {chr(10).join(invalidation_rows)}
 
-## Что именно реализует Phase 3
+## Что именно реализует Phase 4
 
 ```text
 machine-readable workflow и versioned Run State
@@ -647,9 +649,16 @@ machine-readable workflow и versioned Run State
 + PLANNER planner.v4
 + IMPLEMENTATION CONTRACT implementation-contract.v3
 + typed VERIFICATION PLAN verification-plan.v1
-+ owner-boundary и capability gates до Implementer
-+ generated WORKFLOW.md / workflow.v2.json
++ IMPLEMENTER implementer.v2
++ Controller-private typed check registry
++ revision-bound self-verification receipts
++ inactivity watchdog с active-tool awareness
++ independent Controller check classification
++ candidate freeze до/после deterministic suite
++ changed-test coverage guard
++ progress/no-progress repair guard
++ generated WORKFLOW.md / workflow.v3.json
 ```
 
-Phase 3 **не заявляет, что уже реализованы** open-world IPC, inactivity watchdog, restricted Controller check runner, Runtime executor, двухфазный Evaluator или финальная delivery transaction. Эти возможности остаются последующими фазами.
+Phase 4 **не заявляет полностью готовыми** автоматическую перекомпиляцию active Contract/Verification Plan из discoveries, worktree-local `.venv` bootstrap/rebuild, universal OS-enforced Controller subprocess sandbox, Runtime executor, двухфазный Evaluator, clean-worktree semantic replan или финальную delivery transaction. Execution Broker сохраняет фактический статус `ENFORCED` / `ADVISORY` / `UNAVAILABLE` вместо ложного заявления об изоляции.
 """

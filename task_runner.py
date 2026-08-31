@@ -34,6 +34,14 @@ from slivin_harness.implementer import (
     validate_implementation_report,
 )
 from slivin_harness.planner import run_planner, validate_plan_artifact as validate_planner_artifact
+from slivin_harness.phase4 import (
+    CheckClassification,
+    CheckRegistry,
+    Phase4ContractError,
+    ensure_changed_tests_are_covered,
+    fingerprint_workspace_candidate,
+    git_changed_paths,
+)
 from slivin_harness.protocol import (
     ArtifactContractError,
     EVALUATOR_PROTOCOL_VERSION,
@@ -104,11 +112,12 @@ IMPLEMENTER_INSTRUCTIONS = """
 - добавь contract-oriented regression tests, а не проверку конкретной формы patch;
 - обязательно запусти перед завершением Harness-owned SELF_VERIFY_COMMAND: он использует тот же trusted toolchain и те же repair checks, что затем независимо повторит Controller;
 - typed Verification Plan задаёт обязательный уровень доказательства; не подменяй runtime proof локальным тестом;
-- если при исследовании найдены дополнительные существующие test files для materially affected consumers, укажи их в additional_check_paths; Controller безопасно перезапустит поддерживаемые test paths;
+- если при исследовании найдены дополнительные существующие test files, зарегистрируй их как typed `registered_checks`/`additional_check_paths`; произвольные Controller shell-команды запрещены;
+- если найден material consumer/risk вне active Contract, верни его в `discovered_obligations`; не ослабляй и не редактируй Contract самостоятельно;
 - temp/cache размещай в .harness_tmp;
 - если две разные попытки записи завершаются Permission denied/Access denied, не повторяй их: зафиксируй инфраструктурную блокировку;
 - не ослабляй тесты ради PASS;
-- финальный ответ — structured Implementation Report. COMPLETE допустим только после self-verification PASS и проверки всего Implementation Contract.
+- финальный ответ — structured Implementation Report. COMPLETE допустим только после self-verification PASS и проверки всего Implementation Contract. REPLAN_REQUIRED/BLOCKED/NEEDS_USER_DECISION требуют одну конкретную reason + evidence, а не искусственный ledger по каждому item.
 """.strip()
 
 TOP_LEVEL_FIELDS = {
@@ -138,14 +147,34 @@ BENCHMARK_FIELDS = {"calibration_certificate", "confirm_current_baseline_broken"
 class CheckResult:
     name: str
     command: list[str]
-    returncode: int
+    returncode: int | None
     output: str
     timed_out: bool = False
+    infra_error: bool = False
     duration_seconds: float = 0.0
+    candidate_before: str | None = None
+    candidate_after: str | None = None
+    execution_enforcement: str = "ADVISORY"
+
+    @property
+    def classification(self) -> CheckClassification:
+        if (
+            self.candidate_before is not None
+            and self.candidate_after is not None
+            and self.candidate_before != self.candidate_after
+        ):
+            return CheckClassification.MUTATED_CANDIDATE
+        if self.infra_error:
+            return CheckClassification.INFRA_ERROR
+        if self.timed_out:
+            return CheckClassification.TIMEOUT
+        if self.returncode == 0:
+            return CheckClassification.PASS
+        return CheckClassification.FAIL
 
     @property
     def passed(self) -> bool:
-        return self.returncode == 0 and not self.timed_out
+        return self.classification is CheckClassification.PASS
 
 
 class RunRecorder:
@@ -525,6 +554,27 @@ def candidate_content_fingerprint(workspace: Path) -> str:
     return build_candidate_identity(workspace).candidate_id
 
 
+def controller_check_fingerprint(workspace: Path) -> str:
+    """Freeze a candidate for Controller checks, including non-Git test fixtures.
+
+    Real task workspaces are Git worktrees and use candidate.v1. Some isolated
+    unit tests exercise the check runner with a plain temporary directory; those
+    fixtures still need mutation detection, but they do not have a Git baseline.
+    """
+    probe = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=workspace,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if probe.returncode == 0 and probe.stdout.strip().lower() == "true":
+        return candidate_content_fingerprint(workspace)
+    return fingerprint_workspace_candidate(workspace)
+
+
 def _display_command(command: list[str]) -> str:
     if os.name == "nt":
         return subprocess.list2cmdline(command)
@@ -636,6 +686,7 @@ def verify_self_verification_stamp(
     stamp_path: Path,
     control_plane: ControllerPlane | None = None,
     run_state: RunState | None = None,
+    check_registry_digest: str | None = None,
 ) -> bool:
     """Validate the agent-writable claim and promote it to a private receipt.
 
@@ -657,7 +708,10 @@ def verify_self_verification_stamp(
     ):
         return False
     if control_plane is not None and run_state is not None:
-        raw_binding = run_state.verification_binding(candidate_id=candidate_id)
+        raw_binding = run_state.verification_binding(
+            candidate_id=candidate_id,
+            check_registry_digest=check_registry_digest,
+        )
         binding = SelfVerifyBinding(**raw_binding)
         control_plane.issue_self_verify_receipt(binding=binding, claim=stamp)
         if not control_plane.verify_self_verify_receipt(binding=binding):
@@ -768,6 +822,12 @@ def run_check(
         if execution_broker is not None
         else {**os.environ, **extra_env}
     )
+    execution_enforcement = (
+        execution_broker.policy_for(execution_role).filesystem_enforcement
+        if execution_broker is not None
+        else "ADVISORY"
+    )
+    candidate_before = controller_check_fingerprint(workspace)
     started = time.monotonic()
     try:
         result = subprocess.run(
@@ -785,8 +845,11 @@ def run_check(
             name=spec["name"],
             command=command,
             returncode=result.returncode,
-            output=result.stdout,
+            output=result.stdout or "",
             duration_seconds=time.monotonic() - started,
+            candidate_before=candidate_before,
+            candidate_after=controller_check_fingerprint(workspace),
+            execution_enforcement=execution_enforcement,
         )
     except subprocess.TimeoutExpired as exc:
         output = exc.stdout or ""
@@ -795,11 +858,27 @@ def run_check(
         return CheckResult(
             name=spec["name"],
             command=command,
-            returncode=124,
+            returncode=None,
             output=str(output),
             timed_out=True,
             duration_seconds=time.monotonic() - started,
+            candidate_before=candidate_before,
+            candidate_after=controller_check_fingerprint(workspace),
+            execution_enforcement=execution_enforcement,
         )
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        return CheckResult(
+            name=spec["name"],
+            command=command,
+            returncode=None,
+            output=f"{type(exc).__name__}: {exc}",
+            infra_error=True,
+            duration_seconds=time.monotonic() - started,
+            candidate_before=candidate_before,
+            candidate_after=controller_check_fingerprint(workspace),
+            execution_enforcement=execution_enforcement,
+        )
+
 
 
 def run_checks(
@@ -824,7 +903,7 @@ def run_checks(
             execution_role=execution_role,
         )
         results.append(result)
-        state = "PASS" if result.passed else "FAIL"
+        state = result.classification.value
         print(f"[{index}/{len(specs)}] {spec['name']}: {state} ({result.duration_seconds:.2f}s)")
         if result.output.strip():
             print(result.output.rstrip())
@@ -859,12 +938,18 @@ def pipeline_profile_for_manifest(manifest: dict) -> PipelineProfile:
 def check_records(results: list[CheckResult]) -> list[dict]:
     return [
         {
+            "protocol_version": "controller-checks.v1",
             "name": item.name,
             "command": item.command,
             "returncode": item.returncode,
             "timed_out": item.timed_out,
+            "infra_error": item.infra_error,
+            "classification": item.classification.value,
             "duration_seconds": item.duration_seconds,
             "output": item.output,
+            "candidate_before": item.candidate_before,
+            "candidate_after": item.candidate_after,
+            "execution_enforcement": item.execution_enforcement,
         }
         for item in results
     ]
@@ -1037,7 +1122,10 @@ runtime/external proof локальным тестом. Затем запуст�
 до SELF_VERIFY_PASS и дай конкретное evidence по каждому active Contract item.
 
 Дополнительные test paths для materially affected consumers можно передать только через
-additional_check_paths; Controller сам выберет trusted runner.
+typed registered_checks/additional_check_paths; Controller сам выберет trusted runner.
+Новые material consumers/risks передавай через discovered_obligations. Для
+REPLAN_REQUIRED/BLOCKED/NEEDS_USER_DECISION дай reason и evidence; полный Contract ledger
+нужен только для COMPLETE.
 """.strip()
 
 def _repair_contract_block(
@@ -1058,7 +1146,7 @@ def build_implementation_continuation_prompt(
     *, implementation_contract: dict, self_verify_command: list[str]
 ) -> str:
     return f"""
-Предыдущий Implementer turn был прерван Harness timeout. Уже внесённые изменения в workspace
+Предыдущий Implementer turn был прерван inactivity watchdog. Уже внесённые изменения в workspace
 сохранены, thread и исходный task остаются теми же. НЕ начинай исследование заново и не
 откатывай подтверждённую работу.
 
@@ -1329,6 +1417,7 @@ def run_implementer_report(
     plan: dict | None,
     control_plane: ControllerPlane | None = None,
     run_state: RunState | None = None,
+    check_registry_digest: str | None = None,
 ) -> dict:
     current_prompt = prompt
     current_label = label
@@ -1368,6 +1457,7 @@ def run_implementer_report(
             stamp_path=stamp_path,
             control_plane=control_plane,
             run_state=run_state,
+            check_registry_digest=check_registry_digest,
         ),
         documentation_paths=[],
     )
@@ -1385,6 +1475,65 @@ def merge_dynamic_specs(existing: list[dict], discovered: list[dict]) -> list[di
             keys.add(key)
             result.append(spec)
     return result
+
+
+def _phase4_loop_stalled(
+    history: list[tuple[str, str]],
+    *,
+    candidate_id: str,
+    failure_signature: str,
+) -> bool:
+    """Detect a repeated no-progress repair/replan state.
+
+    A loop is stalled only when the same candidate/plan identity produces the
+    same normalized failure twice in succession. A changed candidate or changed
+    failure set is progress and resets the comparison naturally.
+    """
+
+    normalized = hashlib.sha256(failure_signature.encode("utf-8")).hexdigest()
+    key = (str(candidate_id), normalized)
+    stalled = bool(history and history[-1] == key)
+    history.append(key)
+    if len(history) > 32:
+        del history[:-32]
+    return stalled
+
+
+def _phase4_route_implementer_terminal(
+    *,
+    run_state: RunState,
+    report: dict,
+    artifacts: tuple[str, ...],
+    reason_suffix: str = "",
+) -> None:
+    """Record a non-COMPLETE Implementer result without misclassifying it."""
+
+    status = str(report.get("status", ""))
+    suffix = f"_{reason_suffix}" if reason_suffix else ""
+    if status == ImplementerStatus.REPLAN_REQUIRED.value:
+        run_state.route_stage(
+            StageId.IMPLEMENTER,
+            outcome=WorkflowOutcome.REPLAN,
+            result_code=StageResultCode.REPLAN_REQUIRED,
+            reason_code=f"IMPLEMENTER_REPLAN_REQUIRED{suffix}",
+            artifacts=artifacts,
+        )
+    elif status == ImplementerStatus.NEEDS_USER_DECISION.value:
+        run_state.route_stage(
+            StageId.IMPLEMENTER,
+            outcome=WorkflowOutcome.NEEDS_USER_DECISION,
+            result_code=StageResultCode.NEEDS_USER_DECISION,
+            reason_code=f"IMPLEMENTER_NEEDS_USER_DECISION{suffix}",
+            artifacts=artifacts,
+        )
+    else:
+        run_state.route_stage(
+            StageId.IMPLEMENTER,
+            outcome=WorkflowOutcome.BLOCKED,
+            result_code=StageResultCode.BLOCKED,
+            reason_code=f"IMPLEMENTER_BLOCKED{suffix}",
+            artifacts=artifacts,
+        )
 
 
 def _thread_recorder(recorder: RunRecorder, role: str):
@@ -1525,8 +1674,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         repair_specs, heldout_specs = split_checks(manifest["checks"])
         risk = manifest.get("risk", "medium")
-        max_fix = manifest.get("max_fix_cycles", 2)
-        max_replan = manifest.get("max_replan_cycles", 1)
         timeout = manifest.get("turn_timeout_seconds", 900)
         allowed_paths = list(manifest.get("allowed_paths", []))
 
@@ -1788,14 +1935,35 @@ def main(argv: list[str] | None = None) -> int:
             dynamic_specs: list[dict] = []
             dynamic_notes: list[str] = []
             implementation_report_index = 0
+            # Authoritative typed registry lives in the Controller-private plane,
+            # never in the agent-writable workspace.
+            check_registry = CheckRegistry(
+                recorder.private_root / "check_registry.json",
+                workspace=workspace,
+            )
 
             def active_repair_specs() -> list[dict]:
                 return list(repair_specs) + list(dynamic_specs)
 
-            def register_report_checks(report: dict) -> None:
+            def register_report_checks(report: dict) -> bool:
                 nonlocal dynamic_specs
+                digest_before = check_registry.digest()
+                for value in report.get("additional_check_paths", []):
+                    check_registry.register_path(str(value))
+                for item in report.get("registered_checks", []):
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("kind") == "path":
+                        check_registry.register_path(str(item.get("value", "")))
+                    elif item.get("kind") == "check_id":
+                        check_registry.register_id(str(item.get("value", "")))
+                registered_paths = [
+                    item.value
+                    for item in check_registry.references()
+                    if item.kind == "path"
+                ]
                 discovered, notes = build_dynamic_check_specs(
-                    list(report["additional_check_paths"]),
+                    registered_paths,
                     workspace=workspace,
                     toolchain=toolchain,
                     base_specs=repair_specs,
@@ -1811,6 +1979,7 @@ def main(argv: list[str] | None = None) -> int:
                         "DYNAMIC_CHECKS_ADDED:",
                         ", ".join(spec["name"] for spec in dynamic_specs[before:]),
                     )
+                return check_registry.digest() != digest_before
 
             run_state.begin_stage(StageId.IMPLEMENTER)
             implementer_thread = codex.start_thread(
@@ -1819,6 +1988,64 @@ def main(argv: list[str] | None = None) -> int:
                 developer_instructions=IMPLEMENTER_INSTRUCTIONS,
                 on_started=_thread_recorder(recorder, "implementer"),
             )
+
+
+            def stabilize_implementer_report(report: dict, *, label: str) -> tuple[dict, str]:
+                """Ensure newly registered typed checks are included before COMPLETE."""
+                nonlocal implementation_report_index
+                artifact = f"implementation_report_{implementation_report_index:02d}.json"
+                while report.get("status") == ImplementerStatus.COMPLETE.value:
+                    discoveries = report.get("discovered_obligations", [])
+                    if discoveries:
+                        recorder.write_private_json(
+                            f"discovered_obligations_{implementation_report_index:02d}.json",
+                            {
+                                "schema_version": "discovered-obligations.v1",
+                                "items": discoveries,
+                                "status": "REQUIRES_CONTRACT_EXPANSION",
+                            },
+                        )
+                        raise Phase4ContractError(
+                            "CONTRACT_EXPANSION_REQUIRED_PHASE4: discovered obligations "
+                            "must be compiled into the active Contract before COMPLETE"
+                        )
+                    if not register_report_checks(report):
+                        return report, artifact
+
+                    run_state.invalidate(
+                        InvalidationTrigger.CHECK_REGISTERED,
+                        detail="Implementer registered a new typed Controller check",
+                    )
+                    run_state.begin_stage(StageId.IMPLEMENTER)
+                    current_specs = active_repair_specs()
+                    _, next_stamp, next_command = prepare_self_verify_runner(
+                        workspace=workspace,
+                        specs=current_specs,
+                        toolchain=toolchain,
+                    )
+                    implementation_report_index += 1
+                    report = run_implementer_report(
+                        codex,
+                        thread_id=implementer_thread,
+                        prompt=build_implementation_continuation_prompt(
+                            implementation_contract=implementation_contract,
+                            self_verify_command=next_command,
+                        ),
+                        timeout=timeout,
+                        label=f"{label} REGISTERED CHECKS",
+                        implementation_contract=implementation_contract,
+                        self_verify_command=next_command,
+                        workspace=workspace,
+                        stamp_path=next_stamp,
+                        plan=plan,
+                        control_plane=recorder.control_plane,
+                        run_state=run_state,
+                        check_registry_digest=check_registry.digest(),
+                    )
+                    artifact = f"implementation_report_{implementation_report_index:02d}.json"
+                    recorder.write_json(artifact, report)
+                    observe_candidate("IMPLEMENTER_REGISTERED_CHECKS")
+                return report, artifact
             _, stamp_path, self_verify_command = prepare_self_verify_runner(
                 workspace=workspace,
                 specs=active_repair_specs(),
@@ -1847,33 +2074,25 @@ def main(argv: list[str] | None = None) -> int:
                 plan=plan,
                 control_plane=recorder.control_plane,
                 run_state=run_state,
+                check_registry_digest=check_registry.digest(),
             )
-            recorder.write_json(
-                f"implementation_report_{implementation_report_index:02d}.json", report
-            )
-            candidate_identity = observe_candidate("IMPLEMENTER_REPORT")
+            report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
+            recorder.write_json(report_artifact, report)
+            observe_candidate("IMPLEMENTER_REPORT")
+            report, report_artifact = stabilize_implementer_report(report, label="IMPLEMENT")
             if report["status"] != ImplementerStatus.COMPLETE.value:
-                run_state.route_stage(
-                    StageId.IMPLEMENTER,
-                    outcome=WorkflowOutcome.BLOCKED,
-                    result_code=StageResultCode.BLOCKED,
-                    reason_code="IMPLEMENTER_BLOCKED",
-                    artifacts=(
-                        f"implementation_report_{implementation_report_index:02d}.json",
-                        "candidate_identity_current.json",
-                    ),
+                _phase4_route_implementer_terminal(
+                    run_state=run_state,
+                    report=report,
+                    artifacts=(report_artifact, "candidate_identity_current.json"),
                 )
-                print("HARNESS_TASK_STOPPED: IMPLEMENTER_BLOCKED")
+                print("HARNESS_TASK_STOPPED:", report["status"])
                 return 2
             run_state.pass_stage(
                 StageId.IMPLEMENTER,
                 StageResultCode.IMPLEMENTATION_COMPLETE,
-                artifacts=(
-                    f"implementation_report_{implementation_report_index:02d}.json",
-                    "candidate_identity_current.json",
-                ),
+                artifacts=(report_artifact, "candidate_identity_current.json"),
             )
-            register_report_checks(report)
 
             initial_changed_paths = collect_changed_paths(workspace)
             require_candidate_change_for_confirmed_benchmark(
@@ -1883,6 +2102,8 @@ def main(argv: list[str] | None = None) -> int:
 
             fix_cycles = 0
             replan_cycles = 0
+            repair_progress_history: list[tuple[str, str]] = []
+            replan_progress_history: list[tuple[str, str]] = []
             evaluation_index = 0
             check_index = 0
             first_evaluation_pass: bool | None = None
@@ -1890,6 +2111,11 @@ def main(argv: list[str] | None = None) -> int:
                 changed_paths = collect_changed_paths(workspace)
                 enforce_allowed_paths(changed_paths, allowed_paths)
                 current_specs = active_repair_specs()
+                ensure_changed_tests_are_covered(
+                    changed_paths=git_changed_paths(workspace),
+                    registered_references=check_registry.references(),
+                    project_check_text=json.dumps(current_specs, ensure_ascii=False),
+                )
                 check_index += 1
                 run_state.begin_stage(StageId.DETERMINISTIC_CHECKS)
                 checks_candidate_before = observe_candidate("CONTROLLER_CHECKS_BEFORE")
@@ -1903,7 +2129,7 @@ def main(argv: list[str] | None = None) -> int:
                     execution_role=ExecutionRole.CONTROLLER_CHECK,
                 )
                 checks_artifact = f"checks_{check_index:02d}.json"
-                recorder.write_json(checks_artifact, check_records(repair_results))
+                recorder.write_authoritative_json(checks_artifact, check_records(repair_results))
                 checks_candidate_after = observe_candidate("CONTROLLER_CHECKS_AFTER")
                 if checks_candidate_after.candidate_id != checks_candidate_before.candidate_id:
                     run_state.route_stage(
@@ -1915,6 +2141,22 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     raise RuntimeError("Controller checks changed the candidate")
 
+                infrastructure_failures = [
+                    result
+                    for result in repair_results
+                    if result.classification is CheckClassification.INFRA_ERROR
+                ]
+                if infrastructure_failures:
+                    run_state.route_stage(
+                        StageId.DETERMINISTIC_CHECKS,
+                        outcome=WorkflowOutcome.BLOCKED,
+                        result_code=StageResultCode.BLOCKED,
+                        reason_code="CHECK_INFRA_ERROR",
+                        artifacts=(checks_artifact, "candidate_identity_current.json"),
+                    )
+                    print("HARNESS_TASK_STOPPED: CHECK_INFRA_ERROR")
+                    return 2
+
                 if any(not result.passed for result in repair_results):
                     run_state.route_stage(
                         StageId.DETERMINISTIC_CHECKS,
@@ -1923,8 +2165,29 @@ def main(argv: list[str] | None = None) -> int:
                         reason_code="DETERMINISTIC_CHECK_FAILED",
                         artifacts=(checks_artifact, "candidate_identity_current.json"),
                     )
-                    if fix_cycles >= max_fix:
-                        raise RuntimeError("Deterministic checks still fail after max_fix_cycles")
+                    failed_signature = json.dumps(
+                        [
+                            {
+                                "name": result.name,
+                                "returncode": result.returncode,
+                                "timed_out": result.timed_out,
+                                "output": result.output[-4000:],
+                            }
+                            for result in repair_results
+                            if not result.passed
+                        ],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    if _phase4_loop_stalled(
+                        repair_progress_history,
+                        candidate_id=checks_candidate_after.candidate_id,
+                        failure_signature=failed_signature,
+                    ):
+                        raise RuntimeError(
+                            "REPAIR_STALLED: deterministic checks repeated with the "
+                            "same candidate and failure set"
+                        )
                     fix_cycles += 1
                     _, stamp_path, self_verify_command = prepare_self_verify_runner(
                         workspace=workspace,
@@ -1950,26 +2213,28 @@ def main(argv: list[str] | None = None) -> int:
                         plan=plan,
                         control_plane=recorder.control_plane,
                         run_state=run_state,
+                        check_registry_digest=check_registry.digest(),
                     )
                     report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
                     recorder.write_json(report_artifact, report)
                     observe_candidate("IMPLEMENTER_REPAIR_CHECKS")
+                    report, report_artifact = stabilize_implementer_report(
+                        report, label=f"REPAIR CHECKS #{fix_cycles}"
+                    )
                     if report["status"] != ImplementerStatus.COMPLETE.value:
-                        run_state.route_stage(
-                            StageId.IMPLEMENTER,
-                            outcome=WorkflowOutcome.BLOCKED,
-                            result_code=StageResultCode.BLOCKED,
-                            reason_code="IMPLEMENTER_BLOCKED",
+                        _phase4_route_implementer_terminal(
+                            run_state=run_state,
+                            report=report,
                             artifacts=(report_artifact, "candidate_identity_current.json"),
+                            reason_suffix="AFTER_CHECK_REPAIR",
                         )
-                        print("HARNESS_TASK_STOPPED: IMPLEMENTER_BLOCKED")
+                        print("HARNESS_TASK_STOPPED:", report["status"])
                         return 2
                     run_state.pass_stage(
                         StageId.IMPLEMENTER,
                         StageResultCode.IMPLEMENTATION_COMPLETE,
                         artifacts=(report_artifact, "candidate_identity_current.json"),
                     )
-                    register_report_checks(report)
                     continue
 
                 run_state.pass_stage(
@@ -2057,23 +2322,20 @@ def main(argv: list[str] | None = None) -> int:
                         reason_code="EVALUATOR_FINDINGS",
                         artifacts=(evaluation_artifact, "candidate_identity_current.json"),
                     )
-                    if fix_cycles >= max_fix:
-                        if benchmark_evidence and heldout_specs:
-                            diagnostic_results = run_checks(
-                                heldout_specs,
-                                workspace=workspace,
-                                toolchain=toolchain,
-                                runtime_root=recorder.root / "heldout_diagnostic_after_max_fix",
-                                label="HELD-OUT DIAGNOSTIC (NO FEEDBACK)",
-                                execution_broker=execution_broker,
-                                execution_role=ExecutionRole.HELDOUT,
-                            )
-                            recorder.write_json(
-                                "heldout_diagnostic_after_max_fix.json",
-                                check_records(diagnostic_results),
-                            )
-                            print("HELDOUT_DIAGNOSTIC_ONLY: result is not returned to Implementer")
-                        raise RuntimeError("Evaluator still finds defects after max_fix_cycles")
+                    finding_signature = json.dumps(
+                        evaluation.get("findings", []),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    if _phase4_loop_stalled(
+                        repair_progress_history,
+                        candidate_id=evaluation_candidate_after.candidate_id,
+                        failure_signature=finding_signature,
+                    ):
+                        raise RuntimeError(
+                            "REPAIR_STALLED: Evaluator repeated the same findings on "
+                            "the same candidate"
+                        )
                     fix_cycles += 1
                     current_specs = active_repair_specs()
                     _, stamp_path, self_verify_command = prepare_self_verify_runner(
@@ -2100,26 +2362,28 @@ def main(argv: list[str] | None = None) -> int:
                         plan=plan,
                         control_plane=recorder.control_plane,
                         run_state=run_state,
+                        check_registry_digest=check_registry.digest(),
                     )
                     report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
                     recorder.write_json(report_artifact, report)
                     observe_candidate("IMPLEMENTER_REPAIR_EVALUATION")
+                    report, report_artifact = stabilize_implementer_report(
+                        report, label=f"REPAIR EVALUATION #{fix_cycles}"
+                    )
                     if report["status"] != ImplementerStatus.COMPLETE.value:
-                        run_state.route_stage(
-                            StageId.IMPLEMENTER,
-                            outcome=WorkflowOutcome.BLOCKED,
-                            result_code=StageResultCode.BLOCKED,
-                            reason_code="IMPLEMENTER_BLOCKED",
+                        _phase4_route_implementer_terminal(
+                            run_state=run_state,
+                            report=report,
                             artifacts=(report_artifact, "candidate_identity_current.json"),
+                            reason_suffix="AFTER_EVALUATOR_REPAIR",
                         )
-                        print("HARNESS_TASK_STOPPED: IMPLEMENTER_BLOCKED")
+                        print("HARNESS_TASK_STOPPED:", report["status"])
                         return 2
                     run_state.pass_stage(
                         StageId.IMPLEMENTER,
                         StageResultCode.IMPLEMENTATION_COMPLETE,
                         artifacts=(report_artifact, "candidate_identity_current.json"),
                     )
-                    register_report_checks(report)
                     continue
                 if evaluation["status"] == EvaluatorStatus.REPLAN_REQUIRED.value:
                     run_state.route_stage(
@@ -2129,8 +2393,14 @@ def main(argv: list[str] | None = None) -> int:
                         reason_code="EVALUATOR_REPLAN_REQUIRED",
                         artifacts=(evaluation_artifact, "candidate_identity_current.json"),
                     )
-                    if replan_cycles >= max_replan:
-                        raise RuntimeError("Evaluator requested replan after max_replan_cycles")
+                    if _phase4_loop_stalled(
+                        replan_progress_history,
+                        candidate_id=plan_fingerprint(plan) if plan is not None else "NO_PLAN",
+                        failure_signature=evaluation["replan_reason"],
+                    ):
+                        raise RuntimeError(
+                            "REPLAN_STALLED: the same plan was rejected for the same reason"
+                        )
                     replan_cycles += 1
                     run_state.invalidate(
                         InvalidationTrigger.REPLAN_REQUIRED,
@@ -2268,26 +2538,28 @@ def main(argv: list[str] | None = None) -> int:
                         plan=plan,
                         control_plane=recorder.control_plane,
                         run_state=run_state,
+                        check_registry_digest=check_registry.digest(),
                     )
                     report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
                     recorder.write_json(report_artifact, report)
                     observe_candidate("IMPLEMENTER_REPLAN")
+                    report, report_artifact = stabilize_implementer_report(
+                        report, label=f"IMPLEMENT REPLAN #{replan_cycles}"
+                    )
                     if report["status"] != ImplementerStatus.COMPLETE.value:
-                        run_state.route_stage(
-                            StageId.IMPLEMENTER,
-                            outcome=WorkflowOutcome.BLOCKED,
-                            result_code=StageResultCode.BLOCKED,
-                            reason_code="IMPLEMENTER_BLOCKED_AFTER_REPLAN",
+                        _phase4_route_implementer_terminal(
+                            run_state=run_state,
+                            report=report,
                             artifacts=(report_artifact, "candidate_identity_current.json"),
+                            reason_suffix="AFTER_REPLAN",
                         )
-                        print("HARNESS_TASK_STOPPED: IMPLEMENTER_BLOCKED")
+                        print("HARNESS_TASK_STOPPED:", report["status"])
                         return 2
                     run_state.pass_stage(
                         StageId.IMPLEMENTER,
                         StageResultCode.IMPLEMENTATION_COMPLETE,
                         artifacts=(report_artifact, "candidate_identity_current.json"),
                     )
-                    register_report_checks(report)
                     continue
 
                 if evaluation["status"] == EvaluatorStatus.BLOCKED.value:

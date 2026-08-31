@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a5 — Phase 3
+# Модель качества Slivin Harness 0.8.0a6 — Phase 4
 
 ## Основная формула
 
@@ -11,7 +11,7 @@ explicit user intent
 → independent verification
 ```
 
-Phase 3 реализует первые четыре звена как реальные structured artifacts.
+Phase 3 реализовала первые четыре звена как structured artifacts. Phase 4 добавляет writable Implementer v2, revision-bound self-verification и независимые deterministic Controller checks.
 
 ## Что теперь нельзя потерять между этапами
 
@@ -72,9 +72,9 @@ Implementer сделал candidate
 → обязательный runtime proof тихо пропущен
 ```
 
-## Что Phase 3 доказывает
+## Что Phase 4 доказывает
 
-Phase 3 механически доказывает:
+Phase 4 механически доказывает:
 
 ```text
 raw request сохранён;
@@ -88,7 +88,7 @@ capability summary не подменён;
 owner conflict и missing capability останавливают writable pipeline.
 ```
 
-## Что Phase 3 ещё не доказывает
+## Что Phase 4 ещё не доказывает
 
 Пока не реализованы:
 
@@ -101,12 +101,12 @@ clean-worktree semantic replan;
 новая result-delivery transaction.
 ```
 
-Поэтому `0.8.0a5` — промежуточная alpha-фаза, а не завершённый Quality Core.
+Поэтому `0.8.0a6` — промежуточная alpha-фаза, а не завершённый Quality Core.
 
 ## Compatibility layers
 
 ```text
-implementer.v1
+implementer.v2
 evaluator.v4
 manifest version = 2
 ```
@@ -122,7 +122,7 @@ manifest version = 2
 5. Runtime включается по required proof, а не по общей метке риска.
 6. Missing executor блокирует задачу честно.
 
-## Критерий Phase 3
+## Критерий Phase 4
 
 ```text
 task-contract.v1 valid
@@ -133,3 +133,9 @@ owner/capability gate выполнен
 pipeline integration tests PASS
 docs-sync PASS
 ```
+
+## Phase 4 evidence boundaries
+
+Machine phase id: `phase4-implementer-controller-verification`. Self-verification is development feedback, not final authority. A receipt is valid only for the same candidate, Task/Plan/Contract/Verification revisions, runtime environment, attempt, and check-registry digest. Controller checks are rerun independently and classify behavior failures separately from timeout, infrastructure failure, and candidate mutation. Changed tests must be covered by a project suite or typed task-check registration. Small fixed repair-cycle counts are not correctness gates; progress/no-progress is observed instead.
+
+Phase 4 alpha boundary: automatic Contract/Verification Plan recompilation from discoveries, worktree-local environment rebuild, and universal OS-enforced Controller subprocess isolation are not yet claimed as complete.

@@ -1,4 +1,4 @@
-# Windows setup для Slivin Harness 0.8.0a5
+# Windows setup для Slivin Harness 0.8.0a6
 
 ## Поддерживаемая среда
 
@@ -15,7 +15,7 @@ project-specific toolchain из harness.local.toml
 ## Проверка release
 
 ```bash
-cd ~/Tools/slivin-harness-080a5-phase3
+cd ~/Tools/slivin-harness-080a6-phase4
 ./py -c "import slivin_harness; print(slivin_harness.__version__)"
 ./py tools/self_check.py
 ```
@@ -23,8 +23,8 @@ cd ~/Tools/slivin-harness-080a5-phase3
 Ожидаемо:
 
 ```text
-0.8.0a5
-DOCS_SYNC_PASS harness=0.8.0a5 ...
+0.8.0a6
+DOCS_SYNC_PASS harness=0.8.0a6 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -47,9 +47,9 @@ private-root aliases
 sibling with similar prefix
 ```
 
-## Phase 3 artifacts
+## Phase 4 artifacts
 
-Новые authoritative artifacts:
+Authoritative artifacts включают:
 
 ```text
 task_contract_01.json
@@ -57,13 +57,16 @@ plan_01.json
 implementation_contract_01.json
 verification_plan_01.json
 capability_gate_01.json
+check_registry.json
+self_verify_receipt.json
+controller_checks_*.json
 ```
 
 Они хранятся в private Controller plane, а не внутри agent-writable worktree.
 
 ## App Server sandbox boundary
 
-Phase 3 сохраняет честный enforcement status из Phase 2. Там, где native Windows restricted runner ещё не реализован, policy остаётся `ADVISORY`, а не ложно объявляется `ENFORCED`.
+Phase 4 сохраняет честный enforcement status из Phase 2. Там, где native Windows restricted runner ещё не реализован, policy остаётся `ADVISORY`, а не ложно объявляется `ENFORCED`.
 
 ## Runtime capabilities
 
@@ -71,7 +74,7 @@ Phase 3 сохраняет честный enforcement status из Phase 2. Та�
 
 ## Project Python
 
-Phase 3 ещё не автоматизирует утверждённый per-worktree `.venv` bootstrap. Используется существующий resolver toolchain. До внедрения runtime bootstrap продолжайте указывать рабочий project Python в локальном project profile.
+Phase 4 ещё не автоматизирует утверждённый per-worktree `.venv` bootstrap. Используется существующий resolver toolchain. До внедрения runtime bootstrap продолжайте указывать рабочий project Python в локальном project profile.
 
 ## Локальная конфигурация
 
