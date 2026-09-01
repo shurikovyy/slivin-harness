@@ -1,5 +1,17 @@
 # История и дальнейший маршрут
 
+## Phase 7 — 0.8.0a10
+
+Phase 7 завершила Step 0–7 quality-core. Final Gate теперь механически связывает Step 3–6 с одним candidate и текущим revision vector, проверяет `candidate.patch` реконструкцией с recorded baseline, создаёт immutable `final-acceptance.v2` и отделяет качество candidate от доставки через `delivery-record.v2`.
+
+`apply_to_source` использует короткий delivery lock, повторные source HEAD/clean/preimage guards, `git apply --check`, exact diff/postimage comparison и safe rollback без безусловного `reset --hard`. Dirty или параллельно изменённый source получает `RESULT_DELIVERY_BLOCKED`; accepted patch и managed worktree сохраняются.
+
+Historical benchmark больше не использует linked worktree с общей object database. Controller материализует standalone one-commit repository только из baseline tree blobs, удаляет refs и не раскрывает previous attempts/hidden grader. Held-out различает semantic fail, infra error, timeout и candidate mutation; hidden failure завершает trial без repair feedback.
+
+Semantic replan также усилен: rejected patch сохраняется как audit artifact, candidate очищается до baseline, task-specific registry/runtime attempt сбрасываются, а новый plan и implementation выполняют fresh Planner и fresh Implementer threads.
+
+После Windows self-check этой версии следующим checkpoint становится реальный `_90` trial; отдельной Phase 8 quality-core не требуется.
+
 ## Phase 6 — 0.8.0a9
 
 Phase 6 made typed runtime proof executable instead of merely fail-closed. Controller now routes `verification-plan.v1` requirements to configured `LIVE_LOCAL`, `TEST_EXTERNAL` and `PROD_OBSERVE` scenarios, binds runtime evidence to the candidate/plan, enforces startup-health-action-cleanup lifecycle and rejects candidate, source-checkout or runtime-only-file mutation. Infrastructure failures remain distinct from semantic behavior failures.

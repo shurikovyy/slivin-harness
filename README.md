@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a9 — Phase 6
+# Slivin Harness 0.8.0a10 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Версия **0.8.0a9** реализует Phase 6 поверх принятого фундамента Phase 1–5:
+Версия **0.8.0a10** завершает Phase 7 поверх принятого фундамента Phase 1–6:
 
 ```text
 RAW USER REQUEST
@@ -30,9 +30,13 @@ CONTROLLER DETERMINISTIC CHECKS
 RUNTIME / EXTERNAL VERIFICATION (условно)
         ↓
 TWO-PHASE BLIND EVALUATOR evaluator.v5
+        ↓
+FINAL GATE phase7-final-gate.v1
+        ↓
+patch reconstruction + transactional result delivery
 ```
 
-Machine-readable workflow: **workflow.v5**. Реализуемая фаза: **phase6-runtime-two-phase-evaluator**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller plane: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Runtime evidence: **runtime-evidence.v1**. Blind audit: **blind-audit.v1**.
+Machine-readable workflow: **workflow.v6**. Реализуемая фаза: **phase7-final-gate-delivery-benchmark**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller plane: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Runtime evidence: **runtime-evidence.v1**. Blind audit: **blind-audit.v1**. Final Gate: **phase7-final-gate.v1**.
 
 ## Фундамент Phase 3
 
@@ -180,12 +184,36 @@ Typed Verification Plan теперь исполняется для `LIVE_LOCAL`,
 
 Подробности: [Phase 6 runtime/evaluator](docs/PHASE6_RUNTIME_EVALUATOR.md).
 
+## Что добавляет Phase 7
+
+### One-candidate Final Gate
+
+Controller принимает результат только если Step 3–6 относятся к одному `candidate_id` и к текущим ревизиям Task/Plan/Contract/Verification/Runtime. После `EVALUATION_PASS` любое изменение candidate инвалидирует приёмку.
+
+### Patch reconstruction
+
+`candidate.patch` применяется в отдельной чистой verification-копии recorded baseline. Полученный `candidate_id` обязан побайтово совпасть с уже проверенным candidate. Только после этого создаётся immutable `final-acceptance.v2`.
+
+### Безопасная доставка
+
+`keep_worktree` сохраняет доказанный result без изменения source. `apply_to_source` выполняется под коротким delivery lock: повторно проверяются source HEAD/clean state и preimages, затем `git apply --check`, apply, exact diff/postimage comparison. При конфликте source не перезаписывается, а accepted patch сохраняется.
+
+### Изолированный historical benchmark
+
+Benchmark запускается в standalone one-commit repository без shared Git metadata, посторонних refs и объектов с reference solution. Held-out исполняется только после normal pipeline PASS, классифицирует semantic/infra/timeout/mutation отдельно и никогда не возвращает hidden feedback агентам.
+
+### Чистый semantic replan
+
+Если Evaluator отверг саму техническую модель, Controller сохраняет rejected patch как artifact, очищает candidate до baseline, сбрасывает task-specific registry и runtime, а затем запускает fresh Planner и fresh Implementer thread.
+
+Подробности: [Phase 7 Final Gate](docs/PHASE7_FINAL_GATE.md).
+
 ## Каноническая схема
 
 Полный Step 0–7 workflow генерируется из `slivin_harness/workflow.py`:
 
 - [Понятная схема workflow](docs/WORKFLOW.md)
-- [Machine-readable workflow.v5](docs/workflow.v5.json)
+- [Machine-readable workflow.v6](docs/workflow.v6.json)
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Модель качества](docs/QUALITY_MODEL.md)
 - [Практическое руководство](docs/PRACTICAL_GUIDE.md)
@@ -200,7 +228,7 @@ Typed Verification Plan теперь исполняется для `LIVE_LOCAL`,
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a9 ...
+DOCS_SYNC_PASS harness=0.8.0a10 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -212,17 +240,19 @@ HARNESS_SELF_CHECK_PASS
 
 Manifest пока остаётся `version = 2` для совместимости.
 
-## Границы Phase 6 alpha
+## Границы Phase 7 alpha
 
-`0.8.0a9` намеренно **не заявляет готовыми**:
+`0.8.0a10` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
-universal OS-enforced sandbox для Controller subprocess;
+universal OS-enforced sandbox для каждого Controller subprocess;
 готовые универсальные browser/1С/PostgreSQL/Airflow wrappers;
-typed independent runtime tools непосредственно для blind Phase A;
-clean-worktree semantic replan;
-финальную delivery transaction.
+автоматическую публикацию commit/push/PR/merge;
+production write verification;
+универсальную надёжность по одному benchmark trial.
 ```
+
+Следующий checkpoint после Windows self-check — реальный historical `_90` trial. Это проверка всего quality-core, а не новая архитектурная фаза.
 
 Runtime scenarios — Controller-owned project configuration, а не произвольные команды агента. `PROD_OBSERVE` принимается только при явно заявленной технической read-only границе; Execution Broker по-прежнему честно фиксирует `ENFORCED`, `ADVISORY` или `UNAVAILABLE`.
 

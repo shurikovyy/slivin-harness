@@ -1,7 +1,7 @@
 {
-  "schema_version": "workflow.v5",
-  "harness_version": "0.8.0a9",
-  "phase": "phase6-runtime-two-phase-evaluator",
+  "schema_version": "workflow.v6",
+  "harness_version": "0.8.0a10",
+  "phase": "phase7-final-gate-delivery-benchmark",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",
     "execution_broker": "execution-broker.v1"
@@ -22,7 +22,13 @@
     "phase5": "phase5-contract-runtime.v1",
     "contract_expansion": "contract-expansion.v1",
     "project_runtime": "project-runtime.v1",
-    "phase6": "phase6-runtime-evaluator.v1"
+    "phase6": "phase6-runtime-evaluator.v1",
+    "phase7": "phase7-final-gate.v1",
+    "patch_proof": "patch-proof.v1",
+    "final_acceptance": "final-acceptance.v2",
+    "delivery_record": "delivery-record.v2",
+    "heldout_evidence": "heldout-evidence.v2",
+    "benchmark_isolation": "benchmark-isolation.v1"
   },
   "stages": [
     {
@@ -74,7 +80,7 @@
       ],
       "skip_codes": [],
       "optional": false,
-      "maturity": "COMPATIBILITY_IMPLEMENTED"
+      "maturity": "IMPLEMENTED"
     },
     {
       "number": 4,
@@ -86,7 +92,7 @@
       ],
       "skip_codes": [],
       "optional": false,
-      "maturity": "COMPATIBILITY_IMPLEMENTED"
+      "maturity": "IMPLEMENTED"
     },
     {
       "number": 5,
@@ -129,7 +135,7 @@
       ],
       "skip_codes": [],
       "optional": false,
-      "maturity": "COMPATIBILITY_IMPLEMENTED"
+      "maturity": "IMPLEMENTED"
     }
   ],
   "success_next": {
@@ -175,6 +181,7 @@
   },
   "routing_outcomes": [
     "PASS",
+    "FAIL",
     "REPAIR",
     "REPLAN",
     "BLOCKED",
@@ -207,6 +214,10 @@
     "REPLAN_REQUIRED",
     "FINAL_ACCEPTANCE_PASS",
     "RESULT_DELIVERY_PASS",
+    "RESULT_DELIVERY_BLOCKED",
+    "RESULT_DELIVERY_FAIL",
+    "BENCHMARK_INVALID",
+    "HARNESS_BENCHMARK_FAIL",
     "HARNESS_TASK_PASS",
     "HARNESS_BENCHMARK_PASS",
     "BLOCKED",

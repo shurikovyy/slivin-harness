@@ -304,6 +304,29 @@ class RunStateTests(unittest.TestCase):
             StageResultCode.HARNESS_TASK_PASS.value,
         )
 
+    def test_benchmark_semantic_fail_is_a_valid_terminal_failure(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="slivin-run-state-benchmark-fail-"))
+        state = RunState.create(
+            path=root / "run_state.json",
+            task_id="BENCH",
+            harness_version="test",
+            workflow_version="workflow.v6",
+            mode=WorkflowMode.HISTORICAL_BENCHMARK,
+            pipeline_profile=PipelineProfile.FULL,
+        )
+        state.begin_stage(StageId.INTAKE_PREFLIGHT)
+        state.route_stage(
+            StageId.INTAKE_PREFLIGHT,
+            outcome=WorkflowOutcome.FAIL,
+            result_code=StageResultCode.HARNESS_BENCHMARK_FAIL,
+            reason_code="HELDOUT_SEMANTIC_FAIL",
+        )
+        self.assertEqual(
+            state.data["terminal"]["result_code"],
+            StageResultCode.HARNESS_BENCHMARK_FAIL.value,
+        )
+        self.assertEqual(state.data["terminal"]["outcome"], WorkflowOutcome.FAIL.value)
+
     def test_error_after_routed_terminal_preserves_specific_reason(self) -> None:
         state = self.make_state()
         state.begin_stage(StageId.INTAKE_PREFLIGHT)

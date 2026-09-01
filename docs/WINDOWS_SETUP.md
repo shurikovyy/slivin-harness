@@ -1,4 +1,4 @@
-# Windows setup для Slivin Harness 0.8.0a9
+# Windows setup для Slivin Harness 0.8.0a10
 
 ## Целевая среда
 
@@ -15,7 +15,7 @@ owner-provided runtime wrappers when runtime proof is required
 ## Проверка release
 
 ```bash
-cd ~/Tools/slivin-harness-080a9-phase6
+cd ~/Tools/slivin-harness-080a10-phase7
 ./py -c "import slivin_harness; print(slivin_harness.__version__)"
 ./py tools/self_check.py
 ```
@@ -23,8 +23,8 @@ cd ~/Tools/slivin-harness-080a9-phase6
 Ожидаемо:
 
 ```text
-0.8.0a9
-DOCS_SYNC_PASS harness=0.8.0a9 ...
+0.8.0a10
+DOCS_SYNC_PASS harness=0.8.0a10 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -123,6 +123,20 @@ Evaluator uses a fresh read-only App Server thread. Phase A is persisted before 
 phase boundaries re-check candidate identity. Evaluator scratch is writable; candidate files
 must remain unchanged.
 
+## Final Gate и delivery
+
+После Evaluator PASS Controller строит patch proof и `final-acceptance.v2`. Для `apply_to_source` используется короткий cross-platform delivery lock в Git common-dir. Controller повторно проверяет source HEAD, clean state и preimages до apply, а затем exact patch/postimages.
+
+Если source изменён пользователем или IDE, Harness не перезаписывает его:
+
+```text
+RESULT_DELIVERY_BLOCKED
+accepted candidate.patch retained
+managed worktree retained
+```
+
+Historical benchmark не использует linked worktree: создаётся standalone one-commit repository без shared Git objects/refs. На native Windows baseline с symlink или submodule должен быть заранее материализован как обычный fixture.
+
 ## Private artifacts and current sandbox boundary
 
 Authoritative evidence remains in:
@@ -139,3 +153,7 @@ isolation. Runtime wrappers must therefore use scoped credentials and test/read-
 
 `harness.local.toml` is not shipped. Copy only this file between installations. Do not copy
 `runs`, `.git`, `.venv`, `.harness_tmp` or Controller-private artifacts.
+
+## Следующий checkpoint
+
+После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a10` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.

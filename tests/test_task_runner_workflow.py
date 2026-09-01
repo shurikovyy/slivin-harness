@@ -33,7 +33,7 @@ def git(repo: Path, *args: str) -> str:
 
 class _FakeCodexAppServer:
     def __init__(self, *_args, **_kwargs) -> None:
-        pass
+        self._thread_index = 0
 
     def __enter__(self) -> "_FakeCodexAppServer":
         return self
@@ -42,7 +42,8 @@ class _FakeCodexAppServer:
         return None
 
     def start_thread(self, **_kwargs) -> str:
-        return "implementer-thread"
+        self._thread_index += 1
+        return f"thread-{self._thread_index}"
 
 
 class TaskRunnerWorkflowIntegrationTests(unittest.TestCase):
@@ -64,13 +65,23 @@ class TaskRunnerWorkflowIntegrationTests(unittest.TestCase):
         *,
         benchmark: bool,
         risk: str = "low",
+        with_replan: bool = False,
+        benchmark_fail: bool = False,
     ) -> Path:
-        heldout = """
+        heldout_command = (
+            "import sys; print('ORACLE_REACHED'); sys.exit(1)"
+            if benchmark_fail
+            else "print('ORACLE_REACHED')"
+        )
+        heldout = f"""
+
+[benchmark]
+baseline_failure_marker = "ORACLE_REACHED"
 
 [[checks]]
 name = "Hidden pass"
 feedback = "heldout"
-command = ["{python}", "-c", "print('ORACLE_REACHED')"]
+command = ["{{python}}", "-c", "{heldout_command}"]
 timeout_seconds = 30
 """ if benchmark else ""
         path = root / "task.toml"
@@ -78,10 +89,12 @@ timeout_seconds = 30
             f'''version = 2
 
 task_id = "WORKFLOW_INTEGRATION_{'BENCHMARK' if benchmark else 'PRODUCTION'}"
-workspace = "{repo.as_posix()}"
+project = "demo"
+workspace_mode = "git_worktree"
+result_mode = "keep_worktree"
 risk = "{risk}"
 max_fix_cycles = 0
-max_replan_cycles = 0
+max_replan_cycles = {1 if with_replan else 0}
 turn_timeout_seconds = 60
 require_clean_git = true
 
@@ -107,10 +120,19 @@ timeout_seconds = 30
         risk: str = "low",
         with_discovery: bool = False,
         with_runtime_discovery: bool = False,
+        with_replan: bool = False,
+        benchmark_fail: bool = False,
     ) -> tuple[int, Path, str]:
         root = Path(tempfile.mkdtemp(prefix="slivin-main-workflow-"))
         repo = self.make_repo(root)
-        manifest = self.write_manifest(root, repo, benchmark=benchmark, risk=risk)
+        manifest = self.write_manifest(
+            root,
+            repo,
+            benchmark=benchmark,
+            risk=risk,
+            with_replan=with_replan,
+            benchmark_fail=benchmark_fail,
+        )
         run_root = root / "run"
 
         class _Recorder(task_runner.RunRecorder):
@@ -124,7 +146,11 @@ timeout_seconds = 30
         def fake_planner(*_args, **_kwargs):
             return valid_plan()
 
+        evaluator_calls = 0
+
         def fake_evaluator(*_args, **kwargs):
+            nonlocal evaluator_calls
+            evaluator_calls += 1
             audit = valid_blind_audit()
             blind_callback = kwargs.get("on_blind_audit")
             if blind_callback:
@@ -133,14 +159,36 @@ timeout_seconds = 30
             if callback:
                 callback("PHASE_A")
                 callback("PHASE_B")
+            if with_replan and evaluator_calls == 1:
+                return audit, {
+                    "protocol_version": EVALUATOR_PROTOCOL_VERSION,
+                    "status": "REPLAN_REQUIRED",
+                    "summary": "The technical model must be rebuilt from baseline.",
+                    "blind_finding_dispositions": [],
+                    "findings": [],
+                    "reason": "The first technical model is intentionally rejected by the integration fixture.",
+                }
             return audit, valid_pass(blind_audit=audit)
 
         implementer_calls = 0
+        implementer_threads: list[str] = []
 
         def fake_implementer_report(*_args, **kwargs):
             nonlocal implementer_calls
             implementer_calls += 1
             workspace = Path(kwargs["workspace"])
+            implementer_threads.append(str(kwargs["thread_id"]))
+            if with_replan and implementer_calls == 2:
+                self.assertEqual(
+                    (workspace / "target.txt").read_text(encoding="utf-8"),
+                    "before\n",
+                    "Fresh semantic replan must hide the rejected candidate diff",
+                )
+                self.assertNotEqual(
+                    implementer_threads[0],
+                    implementer_threads[1],
+                    "Semantic replan must start a fresh Implementer thread",
+                )
             (workspace / "target.txt").write_text("after\n", encoding="utf-8")
             command = list(kwargs["self_verify_command"])
             subprocess.run(command, cwd=workspace, check=True)
@@ -206,8 +254,19 @@ timeout_seconds = 30
             return report
 
         output = io.StringIO()
+        local_config = {
+            "projects": {
+                "demo": {
+                    "repo": str(repo),
+                    "base_ref": "HEAD",
+                    "result_mode": "keep_worktree",
+                }
+            },
+            "workspace": {"root": str(root / "workspaces")},
+        }
         with (
             mock.patch.object(task_runner, "RunRecorder", _Recorder),
+            mock.patch.object(task_runner, "load_local_config", return_value=(local_config, None)),
             mock.patch.object(task_runner, "CodexAppServer", _FakeCodexAppServer),
             mock.patch.object(task_runner, "resolve_codex_cmd", return_value=Path(sys.executable)),
             mock.patch.object(task_runner, "run_task_contract_normalizer", side_effect=fake_task_contract),
@@ -242,8 +301,13 @@ timeout_seconds = 30
         )
         self.assertIn("HARNESS_TASK_PASS", output)
         self.assertTrue((run_root / "candidate.patch").is_file())
+        self.assertTrue((run_root / "patch_proof.json").is_file())
+        self.assertTrue((run_root / "quality_gate_reconciliation.json").is_file())
         self.assertTrue((run_root / "final_acceptance.json").is_file())
         self.assertTrue((run_root / "delivery_record.json").is_file())
+        acceptance = json.loads((run_root / "final_acceptance.json").read_text(encoding="utf-8"))
+        self.assertEqual(acceptance["schema_version"], "final-acceptance.v2")
+        self.assertEqual(acceptance["patch_proof"]["status"], "PATCH_RECONSTRUCTION_PASS")
         self.assertTrue((run_root / "controller_private" / "run_state.json").is_file())
         self.assertTrue(
             (run_root / "controller_private" / "self_verify_receipt_current.json").is_file()
@@ -293,6 +357,29 @@ timeout_seconds = 30
         self.assertIn("HELDOUT_PASS", output)
         self.assertIn("HARNESS_BENCHMARK_PASS", output)
         self.assertTrue((run_root / "heldout_results.json").is_file())
+        self.assertTrue((run_root / "heldout_evidence.json").is_file())
+        self.assertTrue((run_root / "benchmark_isolation.json").is_file())
+        heldout = json.loads((run_root / "heldout_evidence.json").read_text(encoding="utf-8"))
+        self.assertEqual(heldout["status"], "HELDOUT_PASS")
+        isolation = json.loads((run_root / "benchmark_isolation.json").read_text(encoding="utf-8"))
+        self.assertFalse(isolation["shared_git_metadata"])
+
+    def test_benchmark_semantic_fail_stops_without_final_acceptance(self) -> None:
+        result, run_root, output = self.run_case(
+            benchmark=True,
+            benchmark_fail=True,
+        )
+        self.assertEqual(result, 1, output)
+        state = json.loads((run_root / "run_state.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            state["terminal"]["result_code"],
+            StageResultCode.HARNESS_BENCHMARK_FAIL.value,
+        )
+        evidence = json.loads((run_root / "heldout_evidence.json").read_text(encoding="utf-8"))
+        self.assertEqual(evidence["status"], "HELDOUT_SEMANTIC_FAIL")
+        self.assertFalse(evidence["feedback_exposed_to_agents"])
+        self.assertFalse((run_root / "final_acceptance.json").exists())
+        self.assertIn("HARNESS_BENCHMARK_FAIL", output)
 
     def test_discovery_recompiles_active_contract_and_verification_plan(self) -> None:
         result, run_root, output = self.run_case(
@@ -344,6 +431,21 @@ timeout_seconds = 30
             "REQUIRED_CAPABILITY_MISSING",
         )
         self.assertIn("HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING", output)
+
+    def test_semantic_replan_resets_candidate_and_uses_fresh_implementer(self) -> None:
+        result, run_root, output = self.run_case(
+            benchmark=False,
+            risk="medium",
+            with_replan=True,
+        )
+        self.assertEqual(result, 0, output)
+        self.assertTrue((run_root / "replan_01_rejected_candidate.patch").is_file())
+        reset = json.loads((run_root / "replan_01_reset.json").read_text(encoding="utf-8"))
+        self.assertEqual(reset["status"], "SEMANTIC_REPLAN_RESET_PASS")
+        state = json.loads((run_root / "run_state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["attempt_id"], 2)
+        self.assertEqual(state["terminal"]["result_code"], StageResultCode.HARNESS_TASK_PASS.value)
+        self.assertIn("=== REPLAN #1 ===", output)
 
     def test_project_profile_builds_and_uses_worktree_local_python_runtime(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="slivin-project-runtime-workflow-"))

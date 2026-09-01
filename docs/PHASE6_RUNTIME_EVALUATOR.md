@@ -1,5 +1,7 @@
 # Phase 6 — Runtime Verification и двухфазный Blind Evaluator
 
+> Historical Phase 6 document. Phase 7 (`0.8.0a10`) completed clean semantic replan, one-candidate Final Gate, transactional delivery and benchmark isolation. See [Phase 7 Final Gate](PHASE7_FINAL_GATE.md).
+
 Phase 6 закрывает два оставшихся quality-gap после локальных Controller checks:
 
 ```text
@@ -275,16 +277,6 @@ Infrastructure failure никогда не считается semantic evidence.
 пытается принять частично прочитанный/неограниченный artifact. Runtime repair меняет candidate,
 поэтому после него заново выполняются self-verify, весь Step 4 и весь Step 5.
 
-## Текущая alpha-граница
+## Historical Phase 6 boundary
 
-`0.8.0a9` реализует generic Controller runtime executor и двухфазный evaluator protocol,
-но не поставляет универсальные готовые wrappers для браузера, PostgreSQL, 1С, Airflow или
-marketplace API. Их команды/capabilities настраивает owner; secret values не должны
-попадать в scenario result/logs. Также пока не завершены:
-
-```text
-universal OS-enforced sandbox для Controller subprocesses;
-независимый typed runtime-tool интерфейс непосредственно для Evaluator Phase A;
-clean-worktree semantic replan;
-финальная delivery transaction.
-```
+`0.8.0a9` implemented the generic runtime executor and two-phase evaluator but did not ship universal browser/PostgreSQL/1C/Airflow wrappers. Phase 7 later completed semantic replan and final delivery. Universal OS-enforced subprocess isolation and ready-made project wrappers remain explicit platform/project capabilities; owner wrappers must not emit secrets in scenario results/logs.

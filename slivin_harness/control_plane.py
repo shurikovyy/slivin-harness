@@ -194,6 +194,18 @@ class ControllerPlane:
     def write_public_json(self, name: str, value: object) -> Path:
         return self.write_json(name, value, visibility=ArtifactVisibility.PUBLIC)
 
+    def write_json_once(
+        self,
+        name: str,
+        value: object,
+        *,
+        visibility: ArtifactVisibility,
+    ) -> Path:
+        path = self.path_for(name, visibility)
+        if path.exists():
+            raise ControlPlaneError(f"Immutable artifact already exists: {name}")
+        return self.write_json(name, value, visibility=visibility)
+
     def _receipt_key(self) -> bytes:
         return self._secret_path.read_bytes()
 

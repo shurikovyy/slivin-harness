@@ -99,6 +99,23 @@ class ControlPlaneTests(unittest.TestCase):
         self.assertTrue(is_within(root / "scratch", scratch))
         self.assertFalse(is_within(plane.private_root, scratch))
 
+    def test_write_json_once_rejects_overwrite(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="slivin-immutable-artifact-"))
+        plane = ControllerPlane(root)
+        path = plane.write_json_once(
+            "final/final_acceptance.json",
+            {"candidate_id": "candidate-1"},
+            visibility=ArtifactVisibility.PRIVATE,
+        )
+        original = path.read_bytes()
+        with self.assertRaisesRegex(ControlPlaneError, "already exists"):
+            plane.write_json_once(
+                "final/final_acceptance.json",
+                {"candidate_id": "candidate-2"},
+                visibility=ArtifactVisibility.PRIVATE,
+            )
+        self.assertEqual(path.read_bytes(), original)
+
 
 if __name__ == "__main__":
     unittest.main()

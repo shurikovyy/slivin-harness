@@ -1,6 +1,6 @@
 # Phase 5 — Contract expansion and reproducible project runtime
 
-> Historical Phase 5 document. Phase 6 (`0.8.0a9`) now implements the generic runtime executor and two-phase Evaluator described as pending below; see [Phase 6 runtime/evaluator](PHASE6_RUNTIME_EVALUATOR.md).
+> Historical Phase 5 document. Phase 6 (`0.8.0a9`) implemented runtime/evaluator, and Phase 7 (`0.8.0a10`) completed semantic replan, Final Gate and benchmark isolation. See [Phase 6 runtime/evaluator](PHASE6_RUNTIME_EVALUATOR.md) and [Phase 7 Final Gate](PHASE7_FINAL_GATE.md).
 
 Phase 5 closes two gaps left intentionally open after Phase 4:
 
@@ -204,17 +204,6 @@ check_registry_digest
 Therefore neither unchanged candidate bytes nor a stale stamp can carry evidence across
 a Contract, check-registry, or runtime change.
 
-## Current alpha boundary
+## Historical Phase 5 boundary
 
-`0.8.0a8` does not yet claim:
-
-```text
-universal OS-enforced sandbox for Controller subprocesses;
-LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE scenario executors;
-two-phase Blind Evaluator;
-fresh clean worktree for semantic replan;
-final delivery critical section.
-```
-
-Phase 5 prepares reliable inputs for those stages. Execution Broker still records the
-actual `ENFORCED`, `ADVISORY`, or `UNAVAILABLE` level instead of overstating isolation.
+At `0.8.0a8`, runtime/evaluator/replan/final delivery were still pending. Phase 6 and Phase 7 subsequently implemented those layers. The remaining cross-platform boundary is the universal OS-enforced Controller subprocess sandbox; Execution Broker still reports the actual `ENFORCED`, `ADVISORY`, or `UNAVAILABLE` level.

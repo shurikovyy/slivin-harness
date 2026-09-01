@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.0a10 — Phase 7: Final Gate, safe delivery and benchmark isolation
+
+- Implemented `phase7-final-gate.v1`: Step 3–6 evidence must belong to one current candidate/revision vector before acceptance.
+- Added `patch-proof.v1`: accepted patch is applied to a fresh baseline repository and must reconstruct the exact `candidate.v1`.
+- Patch proof also supports an identity/no-op production candidate without treating Git's rejection of an empty patch stream as an infrastructure failure.
+- Added immutable `final-acceptance.v2` and `delivery-record.v2`; quality acceptance is no longer conflated with source delivery.
+- `final-acceptance.v2` now validates the quality-reconciliation candidate, patch digest, reconstructed candidate and benchmark held-out binding before it can be created.
+- `apply_to_source` now uses a short cross-platform delivery lock, repeated source guards, exact patch/postimage comparison and conflict-safe rollback.
+- Added `RESULT_DELIVERY_BLOCKED` / `RESULT_DELIVERY_FAIL`; a correct candidate is retained when the user source changed concurrently.
+- Historical benchmarks now use `benchmark-isolation.v1`: a standalone one-commit repository containing only the selected baseline tree, with no shared refs or unrelated Git objects.
+- Added `heldout-evidence.v2` with separate semantic/infra/timeout/mutation outcomes; hidden failures never enter the repair loop.
+- Semantic `REPLAN_REQUIRED` now preserves the rejected patch, resets candidate state to baseline, clears task-specific checks, rebuilds the project runtime and starts fresh Planner/Implementer threads.
+- Bumped canonical workflow to `workflow.v6`; added `docs/PHASE7_FINAL_GATE.md` and updated active documentation.
+
 ## 0.8.0a9 — Phase 6: executable runtime proof and two-phase Blind Evaluator
 
 - Added Controller-owned runtime scenarios for `LIVE_LOCAL`, `TEST_EXTERNAL` and technically read-only `PROD_OBSERVE`, including startup/health polling, structured request/result, fresh readback, cleanup and candidate/source/runtime-file immutability guards.

@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a9 — Phase 6
+# Модель качества Slivin Harness 0.8.0a10 — Phase 7
 
 ## Основная формула
 
@@ -12,30 +12,34 @@ explicit user intent
 → independent deterministic verification
 → required observable runtime proof
 → blind semantic challenge
+→ one-candidate Final Gate
+→ reconstructed patch
+→ safe result delivery
 ```
 
-Ни один слой не заменяет следующий.
+Ни один слой не заменяет следующий:
 
 ```text
 SELF VERIFY
 ≠ Controller deterministic PASS
-≠ Runtime PASS
+≠ Runtime PASS/SKIPPED
 ≠ Evaluator PASS
+≠ Final Gate PASS
 ```
 
 ## Что доказывает каждый слой
 
 ### User Task Contract
 
-Фиксирует то, что пользователь сказал явно. Planner не может заменить acceptance или ослабить preservation. Task Contract не доказывает technical root cause.
+`task-contract.v1` сохраняет явно сказанные intent, acceptance, preservation, forbidden и owner boundaries с verbatim source text. Он не доказывает technical root cause.
 
 ### Planner
 
-Доказывает current behavior, intended contract и technical model. Для bug нужен root cause; для feature — current extension point/design constraints. Planner не доказывает, что future candidate корректен.
+`planner.v4` характеризует current behavior, existing contract, root cause/extension point, consumers, state model, risks и evidence plan. Planner не доказывает корректность future candidate.
 
 ### Implementation Contract
 
-Сохраняет минимальный набор требований, которые Implementer не имеет права забыть:
+`implementation-contract.v3` хранит минимальный обязательный Definition of Done:
 
 ```text
 ACCEPTANCE
@@ -46,184 +50,203 @@ RISKS
 DOCS optional
 ```
 
-Каждый item имеет собственный typed `required_proof`. Contract open-world: material discovery расширяет Definition of Done.
+Каждый item имеет typed required proof в `verification-plan.v1`. Contract open-world: новый material consumer/risk добавляется, а старые obligations не ослабляются.
 
-### Implementer SELF VERIFY
+### Implementer self verification
 
-Помогает агенту исправляться до сдачи. Receipt связан с candidate, Contract/Verification revisions, runtime environment и check registry. Это assertion builder-а, а не финальный authority.
+`implementer.v3` использует trusted check registry и worktree-local project runtime, чтобы исправляться до сдачи. Controller-private receipt связан с candidate, revisions, runtime environment, attempt и registry digest.
+
+Self-verify остаётся assertion builder-а, а не финальным authority.
 
 ### Controller deterministic checks
 
-Независимо запускают локальные machine assertions на frozen candidate. Controller различает product failure, timeout, infrastructure error и mutation. Green suite доказывает только запущенные assertions.
+Step 4 независимо запускает local machine assertions на frozen candidate. Infrastructure errors, timeout, assertion failure и mutation не смешиваются.
 
 ### Runtime Verification
 
-Запускается только для proof profiles, которые local checks честно не покрывают. Он проверяет observable outcome current candidate и сохраняет `runtime-evidence.v1`.
+Step 5 выполняет только proof profiles, которые local checks не покрывают:
 
 ```text
 LIVE_LOCAL
-→ current worktree application/local integration
-
 TEST_EXTERNAL
-→ configured test boundary + fresh readback + cleanup/disposable
-
 PROD_OBSERVE
-→ technically scoped read-only observation
 ```
 
-Отсутствие runtime requirement фиксируется как explicit `RUNTIME_VERIFICATION_SKIPPED`, а не как потерянный этап.
+`TEST_EXTERNAL` требует fresh readback и cleanup/disposable boundary. `PROD_OBSERVE` требует technically scoped read-only access. Local-only task получает explicit `RUNTIME_VERIFICATION_SKIPPED`.
 
 ### Blind Evaluator
 
-Phase A независимо ищет пропуски без Planner/Contract/check framing. Phase B проверяет active Contract и качество Controller evidence. Green test не является authority: Evaluator обязан искать false-green fixtures/assertions и missed consumers.
+`evaluator.v5` сначала независимо исследует candidate без Contract/check framing и фиксирует `blind-audit.v1`. Затем проверяет active Contract, `contract-closure.v1`, deterministic и runtime evidence. Green test не является authority: Evaluator ищет false-green fixtures, missed consumers и reachable boundary gaps.
 
 ### Final Gate
 
-Следующая фаза должна доказать, что все accepted artifacts относятся к одному final candidate и безопасно доставить ровно этот result.
-
-## Runtime proof invariants
-
-### Capability routing
-
-Requirement считается покрытым только одним scenario нужного profile, который содержит весь capability set. Нельзя сложить `LOCAL_APP` одного scenario и `BROWSER_DOM` другого.
-
-### Structured result
-
-Scenario wrapper должен:
+`phase7-final-gate.v1` доказывает:
 
 ```text
-прочитать runtime-request.v1
-выполнить observable scenario
-записать runtime-result.v1
-завершиться exit code 0
+Step 3–6 относятся к одному candidate
+использованы текущие Contract/Verification/Runtime revisions
+candidate не изменился после Evaluation
+candidate.patch воспроизводит тот же candidate с baseline
+final acceptance создан после patch proof
+result delivery не смешала accepted patch с user changes
 ```
 
-Non-zero/timeout/missing result — infrastructure error. Semantic failure кодируется в structured status.
+## Evidence identity
 
-### Candidate/source immutability
-
-Runtime не может менять candidate, source checkout или runtime-only local files. Mutation всегда инвалидирует downstream evidence.
-
-### TEST_EXTERNAL
-
-HTTP 200 недостаточен. PASS требует:
+Каждый authoritative artifact связан с:
 
 ```text
-known initial state
-→ action/write
-→ fresh authoritative readback
-→ cleanup/readback либо disposable environment
+candidate_id
+task_contract_rev
+plan_rev
+implementation_contract_rev
+verification_plan_rev
+runtime_environment_rev
+attempt_id
 ```
 
-### PROD_OBSERVE
+Изменение любой load-bearing оси делает соответствующее downstream evidence stale.
 
-Read-only должен быть технически ограничен owner capability. Prompt «не пиши production» не является границей.
+## Candidate identity
 
-## Evaluator invariants
-
-### Blindness
-
-Phase A не видит:
+`candidate.v1` учитывает:
 
 ```text
-Planner
-Implementation Contract
-Implementer Report
-Controller checks
-runtime evidence
-previous findings
-hidden grader
+baseline SHA
+workspace HEAD
+changed/new/deleted paths
+Git-visible mode
+file bytes / symlink target
 ```
 
-### Immutable blind audit
-
-`blind-audit.v1` сохраняется Controller до раскрытия Phase B. Каждый finding обязан быть retained либо dismissed with evidence; он не может просто исчезнуть после показа зелёных тестов.
-
-### Findings
-
-Blocking severity только:
+Не учитывает Harness/runtime artifacts:
 
 ```text
-HIGH
-MEDIUM
+.venv/
+.harness_tmp/
 ```
 
-Категории:
+## Contract closure
+
+`contract-closure.v1` нормализует Controller-accepted status каждого item:
 
 ```text
-DEFECT
-CONSUMER
-RISK
-EVIDENCE
-DOCS
+VERIFIED
+NOT_AFFECTED — только consumer с evidence
 ```
 
-Finding требует concrete reachability/failure mode/evidence/action. Naming/style preference не блокирует acceptance.
+Implementer prose не передаётся Evaluator как authority.
 
-## Contract Closure Record
-
-Evaluator получает не свободный self-report Implementer, а Controller-normalized `contract-closure.v1`:
+## Repair vs semantic replan
 
 ```text
-item_id
-VERIFIED / допустимый NOT_AFFECTED
-accepted evidence
-candidate + Contract + Verification identities
-```
-
-Это не доказывает semantic достаточность evidence; именно Phase B её проверяет.
-
-## Repair vs replan
-
-```text
-technical model корректна, candidate ошибочен
+technical model корректна,
+candidate ошибочен
 → same Implementer repair
-
-technical model неверна
-→ REPLAN_REQUIRED
 ```
 
-Новый consumer/risk обычно repair через Contract expansion, а не полный replan.
+```text
+technical model отвергнута
+→ rejected patch сохраняется
+→ candidate очищается до baseline
+→ task checks/runtime attempt сбрасываются
+→ fresh Planner
+→ new Contract/Verification Plan
+→ fresh Implementer
+```
+
+Это препятствует anchoring на признанно неверной реализации.
+
+## Final Gate invariants
+
+### Quality reconciliation
+
+Step 3–6 должны быть PASSED/SKIPPED допустимым способом и иметь один `candidate_id` и текущие revisions.
+
+### Patch proof
+
+```text
+baseline + candidate.patch
+→ reconstructed candidate.v1
+→ exact equality with accepted candidate.v1
+```
+
+Artifact: `patch-proof.v1`.
+
+### Immutable acceptance
+
+`final-acceptance.v2` создаётся один раз после patch proof. Он содержит artifact bindings и patch SHA-256, но не дублирует reasoning/logs.
+
+### Delivery
+
+`delivery-record.v2` отделяет качество candidate от доставки.
+
+```text
+RESULT_DELIVERY_PASS
+RESULT_DELIVERY_BLOCKED
+RESULT_DELIVERY_FAIL
+```
+
+Dirty/changed source приводит к BLOCKED, а не к перезаписи пользовательских файлов. Частичный apply допускает только safe rollback по preimage/postimage invariants.
+
+## Historical benchmark quality
+
+`benchmark-isolation.v1` требует standalone repository без shared refs/object database. Historical trial всегда использует `keep_worktree`.
+
+Hidden grader запускается только после normal pipeline PASS и создаёт `heldout-evidence.v2`:
+
+```text
+HELDOUT_PASS
+HELDOUT_SEMANTIC_FAIL
+HELDOUT_INFRA_ERROR
+HELDOUT_TIMEOUT
+HELDOUT_MUTATED_CANDIDATE
+```
+
+Semantic failure требует oracle marker. Held-out feedback не возвращается Planner/Implementer/Evaluator текущего trial.
 
 ## Anti-monster rules
 
-1. Отдельное поле существует только при downstream consequence.
-2. Runtime запускается только по typed proof requirement.
-3. Три runtime profile достаточно; новые не добавляются без evidence.
-4. Один fresh Evaluator, а не два reviewer-а: две фазы одного thread.
-5. Planner/Implementer prose скрыт от Evaluator.
-6. Contract size 14 — soft review threshold, material item не отбрасывается.
+1. Отдельный field/item существует только при downstream consequence.
+2. Controller компилирует Contract/Verification Plan детерминированно; новый LLM Contract Reviewer отсутствует.
+3. Runtime запускается только по typed proof requirement.
+4. Один Evaluator thread выполняет две фазы, а не два reviewer-а.
+5. Planner и Implementer prose скрыты от Evaluator.
+6. Contract size 14 — soft review threshold; material obligation не отбрасывается.
 7. Duplicate discoveries idempotent.
 8. Нет universal E2E для каждого task.
-9. Infrastructure failure не превращается в product evidence.
+9. Infrastructure failure не становится product evidence.
 10. Advisory isolation не называется enforced.
+11. Final Gate не делает нового semantic review.
+12. Held-out — exam, а не repair tool.
 
-## Что Phase 6 доказывает
-
-```text
-active Contract/Verification Plan валидны;
-все Contract items имеют Controller-normalized closure;
-local-only proof явно пропускает Runtime;
-required runtime proof исполняется покрывающим scenario;
-runtime evidence связано с frozen candidate;
-TEST_EXTERNAL PASS имеет fresh readback и cleanup/disposable boundary;
-PROD_OBSERVE требует read-only assertion;
-runtime не изменил candidate/source/local config;
-Phase A выполнена без Planner/Contract/check framing;
-Phase B disposition-ит каждое blind finding;
-Evaluator PASS не содержит material findings.
-```
-
-## Что Phase 6 ещё не доказывает
+## Что Phase 7 доказывает
 
 ```text
-универсальную OS sandbox-изоляцию любых Controller subprocess;
-безопасность owner wrapper, если он фактически использует чрезмерные credentials;
-готовность browser/1С/DB/Airflow capability без project configuration;
-полную независимость semantic replan worktree;
-атомарную final delivery transaction;
-универсальную надёжность Harness по одному benchmark trial.
+active Task/Plan/Contract/Verification revisions согласованы;
+Contract items имеют Controller-normalized closure;
+self-verify/Controller/runtime/evaluator evidence связано с candidate;
+semantic replan не показывает fresh agents rejected diff;
+required runtime proof выполнен или явно не требуется;
+Evaluator blind phase предшествует Contract/check framing;
+Final Gate принимает только один неизменённый candidate;
+patch реконструирует именно этот candidate;
+source delivery не смешивает accepted result с parallel user changes;
+historical benchmark не раскрывает другие refs/objects/held-out feedback.
 ```
+
+## Что Phase 7 не доказывает
+
+```text
+универсальную OS sandbox-изоляцию любого subprocess;
+безопасность owner wrapper с чрезмерными credentials;
+наличие готового browser/1С/DB/Airflow wrapper без project config;
+отсутствие любого неизвестного defect во всём repository;
+универсальную надёжность Harness по одному historical trial;
+успешный CI/deployment/production rollout;
+```
+
+Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a10` первый такой checkpoint — historical `_90`.
 
 ## Версии
 
@@ -243,5 +266,17 @@ runtime-evidence.v1
 contract-closure.v1
 blind-audit.v1
 evaluator.v5
-workflow.v5
+workflow.v6
+run-state.v1
+candidate.v1
+controller-plane.v1
+execution-broker.v1
+phase5-contract-runtime.v1
+phase6-runtime-evaluator.v1
+phase7-final-gate.v1
+patch-proof.v1
+final-acceptance.v2
+delivery-record.v2
+heldout-evidence.v2
+benchmark-isolation.v1
 ```

@@ -516,6 +516,7 @@ class RunState:
             artifacts=list(artifacts),
         )
         if outcome in {
+            WorkflowOutcome.FAIL,
             WorkflowOutcome.BLOCKED,
             WorkflowOutcome.NEEDS_USER_DECISION,
             WorkflowOutcome.INVALID,

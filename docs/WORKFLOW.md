@@ -2,9 +2,9 @@
 
 > Этот файл генерируется из `slivin_harness/workflow.py`. Не редактируйте таблицы вручную; запустите `./py tools/render_workflow_docs.py`.
 
-- Harness: **0.8.0a9**
-- Workflow schema: **workflow.v5**
-- Реализуемая фаза: **phase6-runtime-two-phase-evaluator**
+- Harness: **0.8.0a10**
+- Workflow schema: **workflow.v6**
+- Реализуемая фаза: **phase7-final-gate-delivery-benchmark**
 
 ## Понятная схема
 
@@ -34,13 +34,13 @@
 | 0 | `intake_preflight` | Intake / Preflight | Фиксирует задачу, baseline, workspace и доступные инструменты. | нет | PREFLIGHT_READY | IMPLEMENTED |
 | 1 | `planner` | Planner | Read-only исследование и техническая модель задачи. | нет | PLANNER_READY / PLANNER_SKIPPED_FAST | IMPLEMENTED |
 | 2 | `implementation_contract` | Implementation Contract | Controller превращает load-bearing выводы в обязательный минимум результата. | нет | IMPLEMENTATION_CONTRACT_READY | IMPLEMENTED |
-| 3 | `implementer` | Implementer | Создаёт candidate, tests/docs и собственное evidence. | нет | IMPLEMENTATION_COMPLETE | COMPATIBILITY_IMPLEMENTED |
-| 4 | `deterministic_checks` | Controller deterministic checks | Независимо запускает локальные машинные проверки candidate. | нет | DETERMINISTIC_VERIFICATION_PASS | COMPATIBILITY_IMPLEMENTED |
+| 3 | `implementer` | Implementer | Создаёт candidate, tests/docs и собственное evidence. | нет | IMPLEMENTATION_COMPLETE | IMPLEMENTED |
+| 4 | `deterministic_checks` | Controller deterministic checks | Независимо запускает локальные машинные проверки candidate. | нет | DETERMINISTIC_VERIFICATION_PASS | IMPLEMENTED |
 | 5 | `runtime_verification` | Runtime / external verification | Условно проверяет observable runtime outcome, если local checks недостаточны. | да | RUNTIME_VERIFICATION_PASS / RUNTIME_VERIFICATION_SKIPPED | IMPLEMENTED |
 | 6 | `evaluator` | Blind Evaluator | Независимо пытается опровергнуть полноту и корректность candidate. | нет | EVALUATION_PASS / EVALUATION_SKIPPED_FAST | IMPLEMENTED |
-| 7 | `final_gate` | Final Gate / result handoff | Сверяет identity доказательств и безопасно выдаёт принятый result. | нет | HARNESS_TASK_PASS / HARNESS_BENCHMARK_PASS | COMPATIBILITY_IMPLEMENTED |
+| 7 | `final_gate` | Final Gate / result handoff | Сверяет identity доказательств и безопасно выдаёт принятый result. | нет | HARNESS_TASK_PASS / HARNESS_BENCHMARK_PASS | IMPLEMENTED |
 
-`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 6 Runtime исполняет только Controller-configured typed scenarios, а local-only Verification Plan получает явный `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED`. Blind Evaluator работает в две фазы: независимый audit фиксируется до раскрытия Contract/evidence.
+`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 7 весь Step 0–7 quality-core исполняется: Runtime запускает только Controller-configured typed scenarios, local-only Verification Plan получает явный `RUNTIME_VERIFICATION_SKIPPED`, Blind Evaluator фиксирует независимый audit до раскрытия Contract/evidence, а Final Gate связывает все доказательства с одним candidate и безопасно выдаёт принятый patch.
 
 ## Разрешённые петли
 
@@ -95,7 +95,7 @@ attempt_id
 | `HIDDEN_GRADER_CHANGED` | `final_gate` | `final_gate` | нет | Изменение hidden grader требует новой calibration перед benchmark final gate. |
 | `CANDIDATE_CHANGED_AFTER_EVALUATION` | `implementer` | `implementer` | нет | Candidate mutation после evaluation инвалидирует implementation evidence и все gates. |
 
-## Что именно реализует Phase 6
+## Что именно реализует Phase 7
 
 ```text
 machine-readable workflow и versioned Run State
@@ -115,7 +115,14 @@ machine-readable workflow и versioned Run State
 + two-phase BLIND EVALUATOR evaluator.v5
 + immutable blind-audit.v1 before Contract/check framing
 + Controller evidence audit without Planner/Implementer prose
-+ generated WORKFLOW.md / workflow.v5.json
++ Final Gate quality reconciliation bound to one candidate/revision vector
++ patch reconstruction from the recorded baseline
++ immutable final-acceptance.v2 and delivery-record.v2
++ transactional apply_to_source with source guards and safe rollback
++ standalone sanitized historical benchmark repository
++ classified hidden held-out exam without repair feedback
++ clean semantic replan reset with fresh Planner and Implementer threads
++ generated WORKFLOW.md / workflow.v6.json
 ```
 
-Phase 6 **не заявляет полностью готовыми** universal OS-enforced Controller subprocess sandbox, встроенную browser automation, универсальные typed wrappers для 1С/БД/Airflow, clean-worktree semantic replan или финальную delivery transaction. Runtime commands являются owner-configured Controller capabilities; `PROD_OBSERVE` требует явно заявленной технической read-only границы, но Harness не выдаёт advisory isolation за OS-enforced sandbox.
+Phase 7 завершает quality-core. Universal OS-enforced Controller subprocess sandbox, встроенная browser automation и универсальные typed wrappers для 1С/БД/Airflow остаются отдельными platform/project capabilities; Harness не выдаёт advisory isolation за OS-enforced sandbox. После Windows self-check этой версии следующий обязательный checkpoint — реальный historical `_90` trial, а не новая архитектурная фаза.

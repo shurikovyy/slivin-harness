@@ -32,6 +32,14 @@ from slivin_harness.phase6 import (
     RUNTIME_RESULT_VERSION,
     RUNTIME_SCENARIO_VERSION,
 )
+from slivin_harness.phase7 import (
+    BENCHMARK_ISOLATION_VERSION,
+    DELIVERY_RECORD_VERSION,
+    FINAL_ACCEPTANCE_VERSION,
+    HELDOUT_EVIDENCE_VERSION,
+    PATCH_PROOF_VERSION,
+    PHASE7_VERSION,
+)
 from slivin_harness.run_state import CANDIDATE_IDENTITY_VERSION, RUN_STATE_VERSION
 from slivin_harness.task_contract import TASK_CONTRACT_VERSION
 from slivin_harness.verification import VERIFICATION_PLAN_VERSION
@@ -59,6 +67,7 @@ EXPECTED_MAIN_DOCS = {
     "PHASE4_EXECUTION.md",
     "PHASE5_CONTRACT_RUNTIME.md",
     "PHASE6_RUNTIME_EVALUATOR.md",
+    "PHASE7_FINAL_GATE.md",
     "PRACTICAL_GUIDE.md",
     "QUALITY_MODEL.md",
     "README.md",
@@ -108,13 +117,13 @@ def _check_one_h1(path: Path) -> None:
 
 
 def main() -> int:
-    _assert(__version__ == "0.8.0a9", f"Unexpected Harness version: {__version__}")
+    _assert(__version__ == "0.8.0a10", f"Unexpected Harness version: {__version__}")
     _assert(MANIFEST_VERSION == 2, f"Unexpected manifest version: {MANIFEST_VERSION}")
     _assert(PLANNER_PROTOCOL_VERSION == "planner.v4", PLANNER_PROTOCOL_VERSION)
     _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v3", IMPLEMENTATION_CONTRACT_VERSION)
     _assert(EVALUATOR_PROTOCOL_VERSION == "evaluator.v5", EVALUATOR_PROTOCOL_VERSION)
     _assert(IMPLEMENTER_PROTOCOL_VERSION == "implementer.v3", IMPLEMENTER_PROTOCOL_VERSION)
-    _assert(WORKFLOW_VERSION == "workflow.v5", WORKFLOW_VERSION)
+    _assert(WORKFLOW_VERSION == "workflow.v6", WORKFLOW_VERSION)
     _assert(RUN_STATE_VERSION == "run-state.v1", RUN_STATE_VERSION)
     _assert(CANDIDATE_IDENTITY_VERSION == "candidate.v1", CANDIDATE_IDENTITY_VERSION)
     _assert(CONTROL_PLANE_VERSION == "controller-plane.v1", CONTROL_PLANE_VERSION)
@@ -131,6 +140,12 @@ def main() -> int:
     _assert(RUNTIME_EVIDENCE_VERSION == "runtime-evidence.v1", RUNTIME_EVIDENCE_VERSION)
     _assert(CONTRACT_CLOSURE_VERSION == "contract-closure.v1", CONTRACT_CLOSURE_VERSION)
     _assert(BLIND_AUDIT_VERSION == "blind-audit.v1", BLIND_AUDIT_VERSION)
+    _assert(PHASE7_VERSION == "phase7-final-gate.v1", PHASE7_VERSION)
+    _assert(PATCH_PROOF_VERSION == "patch-proof.v1", PATCH_PROOF_VERSION)
+    _assert(FINAL_ACCEPTANCE_VERSION == "final-acceptance.v2", FINAL_ACCEPTANCE_VERSION)
+    _assert(DELIVERY_RECORD_VERSION == "delivery-record.v2", DELIVERY_RECORD_VERSION)
+    _assert(HELDOUT_EVIDENCE_VERSION == "heldout-evidence.v2", HELDOUT_EVIDENCE_VERSION)
+    _assert(BENCHMARK_ISOLATION_VERSION == "benchmark-isolation.v1", BENCHMARK_ISOLATION_VERSION)
     validate_workflow_definition()
 
     docs_dir = ROOT / "docs"
@@ -145,8 +160,8 @@ def main() -> int:
         indent=2,
     ) + "\n"
     _assert(
-        (docs_dir / "workflow.v5.json").read_text(encoding="utf-8") == generated_json,
-        "docs/workflow.v5.json is stale; run ./py tools/render_workflow_docs.py",
+        (docs_dir / "workflow.v6.json").read_text(encoding="utf-8") == generated_json,
+        "docs/workflow.v6.json is stale; run ./py tools/render_workflow_docs.py",
     )
 
     actual_docs = {path.name for path in docs_dir.glob("*.md")}
@@ -166,7 +181,7 @@ def main() -> int:
         for path in [ROOT / "README.md", docs_dir / "ARCHITECTURE.md", docs_dir / "QUALITY_MODEL.md"]
     )
     for marker in (
-        "0.8.0a9",
+        "0.8.0a10",
         "version = 2",
         "task-contract.v1",
         "planner.v4",
@@ -189,6 +204,12 @@ def main() -> int:
         RUNTIME_EVIDENCE_VERSION,
         CONTRACT_CLOSURE_VERSION,
         BLIND_AUDIT_VERSION,
+        PHASE7_VERSION,
+        PATCH_PROOF_VERSION,
+        FINAL_ACCEPTANCE_VERSION,
+        DELIVERY_RECORD_VERSION,
+        HELDOUT_EVIDENCE_VERSION,
+        BENCHMARK_ISOLATION_VERSION,
         WORKFLOW_PHASE,
     ):
         _assert(marker in all_active_text, f"Active docs do not mention {marker}")
@@ -270,6 +291,10 @@ def main() -> int:
         f" runtime_request={RUNTIME_REQUEST_VERSION} runtime_result={RUNTIME_RESULT_VERSION}"
         f" runtime_evidence={RUNTIME_EVIDENCE_VERSION} contract_closure={CONTRACT_CLOSURE_VERSION}"
         f" blind_audit={BLIND_AUDIT_VERSION}"
+        f" phase7={PHASE7_VERSION} patch_proof={PATCH_PROOF_VERSION}"
+        f" final_acceptance={FINAL_ACCEPTANCE_VERSION} delivery={DELIVERY_RECORD_VERSION}"
+        f" heldout_evidence={HELDOUT_EVIDENCE_VERSION}"
+        f" benchmark_isolation={BENCHMARK_ISOLATION_VERSION}"
     )
     return 0
 

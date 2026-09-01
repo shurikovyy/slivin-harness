@@ -4,8 +4,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Iterable, TypeVar
 
-WORKFLOW_VERSION = "workflow.v5"
-WORKFLOW_PHASE = "phase6-runtime-two-phase-evaluator"
+WORKFLOW_VERSION = "workflow.v6"
+WORKFLOW_PHASE = "phase7-final-gate-delivery-benchmark"
 
 
 class _TextEnum(str, Enum):
@@ -32,6 +32,7 @@ class PipelineProfile(_TextEnum):
 
 class WorkflowOutcome(_TextEnum):
     PASS = "PASS"
+    FAIL = "FAIL"
     REPAIR = "REPAIR"
     REPLAN = "REPLAN"
     BLOCKED = "BLOCKED"
@@ -83,6 +84,10 @@ class StageResultCode(_TextEnum):
     REPLAN_REQUIRED = "REPLAN_REQUIRED"
     FINAL_ACCEPTANCE_PASS = "FINAL_ACCEPTANCE_PASS"
     RESULT_DELIVERY_PASS = "RESULT_DELIVERY_PASS"
+    RESULT_DELIVERY_BLOCKED = "RESULT_DELIVERY_BLOCKED"
+    RESULT_DELIVERY_FAIL = "RESULT_DELIVERY_FAIL"
+    BENCHMARK_INVALID = "BENCHMARK_INVALID"
+    HARNESS_BENCHMARK_FAIL = "HARNESS_BENCHMARK_FAIL"
     HARNESS_TASK_PASS = "HARNESS_TASK_PASS"
     HARNESS_BENCHMARK_PASS = "HARNESS_BENCHMARK_PASS"
     BLOCKED = "BLOCKED"
@@ -230,7 +235,7 @@ STAGES: tuple[StageDefinition, ...] = (
         (StageResultCode.IMPLEMENTATION_COMPLETE,),
         (),
         False,
-        StageMaturity.COMPATIBILITY_IMPLEMENTED,
+        StageMaturity.IMPLEMENTED,
     ),
     StageDefinition(
         4,
@@ -240,7 +245,7 @@ STAGES: tuple[StageDefinition, ...] = (
         (StageResultCode.DETERMINISTIC_VERIFICATION_PASS,),
         (),
         False,
-        StageMaturity.COMPATIBILITY_IMPLEMENTED,
+        StageMaturity.IMPLEMENTED,
     ),
     StageDefinition(
         5,
@@ -273,7 +278,7 @@ STAGES: tuple[StageDefinition, ...] = (
         (StageResultCode.HARNESS_TASK_PASS, StageResultCode.HARNESS_BENCHMARK_PASS),
         (),
         False,
-        StageMaturity.COMPATIBILITY_IMPLEMENTED,
+        StageMaturity.IMPLEMENTED,
     ),
 )
 
@@ -470,6 +475,14 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
         RUNTIME_EVIDENCE_VERSION,
         RUNTIME_SCENARIO_VERSION,
     )
+    from slivin_harness.phase7 import (
+        BENCHMARK_ISOLATION_VERSION,
+        DELIVERY_RECORD_VERSION,
+        FINAL_ACCEPTANCE_VERSION,
+        HELDOUT_EVIDENCE_VERSION,
+        PATCH_PROOF_VERSION,
+        PHASE7_VERSION,
+    )
     from slivin_harness.protocol import (
         EVALUATOR_PROTOCOL_VERSION,
         PLANNER_PROTOCOL_VERSION,
@@ -502,6 +515,12 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
             "contract_expansion": CONTRACT_EXPANSION_VERSION,
             "project_runtime": PROJECT_RUNTIME_VERSION,
             "phase6": PHASE6_VERSION,
+            "phase7": PHASE7_VERSION,
+            "patch_proof": PATCH_PROOF_VERSION,
+            "final_acceptance": FINAL_ACCEPTANCE_VERSION,
+            "delivery_record": DELIVERY_RECORD_VERSION,
+            "heldout_evidence": HELDOUT_EVIDENCE_VERSION,
+            "benchmark_isolation": BENCHMARK_ISOLATION_VERSION,
         },
         "stages": [
             {
@@ -627,7 +646,7 @@ def render_workflow_markdown(*, harness_version: str) -> str:
 | ---: | --- | --- | --- | :---: | --- | --- |
 {chr(10).join(rows)}
 
-`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 6 Runtime исполняет только Controller-configured typed scenarios, а local-only Verification Plan получает явный `RUNTIME_VERIFICATION_SKIPPED` с причиной `NO_RUNTIME_PROOF_REQUIRED`. Blind Evaluator работает в две фазы: независимый audit фиксируется до раскрытия Contract/evidence.
+`IMPLEMENTED` означает: executor этапа подключён к текущему alpha-pipeline и его фактические границы описаны ниже. `COMPATIBILITY_IMPLEMENTED` означает: compatibility executor отображён на Run State, но полный утверждённый контракт этапа ещё не внедрён. `PLANNED` означает: этап присутствует в state machine, но его executor ещё не реализован. В Phase 7 весь Step 0–7 quality-core исполняется: Runtime запускает только Controller-configured typed scenarios, local-only Verification Plan получает явный `RUNTIME_VERIFICATION_SKIPPED`, Blind Evaluator фиксирует независимый audit до раскрытия Contract/evidence, а Final Gate связывает все доказательства с одним candidate и безопасно выдаёт принятый patch.
 
 ## Разрешённые петли
 
@@ -672,7 +691,7 @@ attempt_id
 | --- | --- | --- | :---: | --- |
 {chr(10).join(invalidation_rows)}
 
-## Что именно реализует Phase 6
+## Что именно реализует Phase 7
 
 ```text
 machine-readable workflow и versioned Run State
@@ -692,8 +711,15 @@ machine-readable workflow и versioned Run State
 + two-phase BLIND EVALUATOR evaluator.v5
 + immutable blind-audit.v1 before Contract/check framing
 + Controller evidence audit without Planner/Implementer prose
-+ generated WORKFLOW.md / workflow.v5.json
++ Final Gate quality reconciliation bound to one candidate/revision vector
++ patch reconstruction from the recorded baseline
++ immutable final-acceptance.v2 and delivery-record.v2
++ transactional apply_to_source with source guards and safe rollback
++ standalone sanitized historical benchmark repository
++ classified hidden held-out exam without repair feedback
++ clean semantic replan reset with fresh Planner and Implementer threads
++ generated WORKFLOW.md / workflow.v6.json
 ```
 
-Phase 6 **не заявляет полностью готовыми** universal OS-enforced Controller subprocess sandbox, встроенную browser automation, универсальные typed wrappers для 1С/БД/Airflow, clean-worktree semantic replan или финальную delivery transaction. Runtime commands являются owner-configured Controller capabilities; `PROD_OBSERVE` требует явно заявленной технической read-only границы, но Harness не выдаёт advisory isolation за OS-enforced sandbox.
+Phase 7 завершает quality-core. Universal OS-enforced Controller subprocess sandbox, встроенная browser automation и универсальные typed wrappers для 1С/БД/Airflow остаются отдельными platform/project capabilities; Harness не выдаёт advisory isolation за OS-enforced sandbox. После Windows self-check этой версии следующий обязательный checkpoint — реальный historical `_90` trial, а не новая архитектурная фаза.
 """

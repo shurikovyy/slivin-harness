@@ -41,9 +41,11 @@ class WorkspaceSession:
     project_name: str | None = None
     source_repo: Path | None = None
     source_head: str | None = None
+    source_base_sha: str | None = None
     base_sha: str | None = None
     result_mode: str = "keep_worktree"
     exposed_paths: tuple[str, ...] = ()
+    benchmark_isolated: bool = False
 
 
 def _run_git(
@@ -376,6 +378,124 @@ def _remove_worktree(source_repo: Path, workspace: Path) -> None:
         shutil.rmtree(workspace, ignore_errors=True)
 
 
+def _is_historical_manifest(manifest: dict) -> bool:
+    if manifest.get("benchmark"):
+        return True
+    checks = manifest.get("checks", [])
+    return any(
+        isinstance(item, dict) and item.get("feedback") == "heldout"
+        for item in checks
+    )
+
+
+def _tree_entries(repo: Path, treeish: str) -> tuple[tuple[str, str, str, str], ...]:
+    raw = str(
+        _run_git(
+            repo,
+            "ls-tree",
+            "-r",
+            "-z",
+            "--full-tree",
+            treeish,
+        ).stdout
+    )
+    entries: list[tuple[str, str, str, str]] = []
+    for item in raw.split("\0"):
+        if not item:
+            continue
+        header, path = item.split("\t", 1)
+        mode, object_type, object_id = header.split(" ", 2)
+        entries.append((mode, object_type, object_id, path))
+    return tuple(entries)
+
+
+def _materialize_sanitized_benchmark_repo(
+    *,
+    source_repo: Path,
+    source_base_sha: str,
+    workspace: Path,
+) -> str:
+    """Create a standalone one-commit repository containing only the baseline tree.
+
+    A linked worktree shares the source repository's object database and refs.  That
+    is convenient for production work but invalid for a hidden historical exam: an
+    agent could inspect unrelated refs or unreachable objects containing an earlier
+    solution.  The sanitized repository copies only the blobs referenced by the
+    selected baseline tree and creates a new detached single commit.
+    """
+
+    workspace.mkdir(parents=True, exist_ok=False)
+    _run_git(workspace, "init")
+    _run_git(workspace, "config", "core.autocrlf", "false")
+    _run_git(workspace, "config", "core.longpaths", "true", check=False)
+    _run_git(workspace, "config", "gc.auto", "0")
+
+    source_entries = _tree_entries(source_repo, source_base_sha)
+    for mode, object_type, object_id, rel in source_entries:
+        safe = _safe_relative_path(rel)
+        if safe.as_posix() != rel.replace("\\", "/"):
+            raise RuntimeError(f"Unsafe benchmark tree path: {rel!r}")
+        if object_type == "commit" or mode == "160000":
+            raise RuntimeError(
+                "Historical benchmark isolation does not expose submodules; "
+                f"materialize the fixture first: {rel}"
+            )
+        if object_type != "blob":
+            raise RuntimeError(f"Unsupported benchmark tree object {object_type}: {rel}")
+        if mode == "120000" and os.name == "nt":
+            raise RuntimeError(
+                "Historical benchmark baseline contains a symlink that cannot be "
+                "safely materialized on native Windows: " + rel
+            )
+        blob = _run_git(source_repo, "cat-file", "blob", object_id, input_bytes=b"").stdout
+        if not isinstance(blob, bytes):
+            raise RuntimeError("Expected binary blob output while sanitizing benchmark")
+        written = _run_git(workspace, "hash-object", "-w", "--stdin", input_bytes=blob).stdout
+        written_id = written.decode("ascii", errors="strict").strip()
+        if written_id != object_id:
+            raise RuntimeError(f"Benchmark blob identity changed while copying {rel}")
+        _run_git(
+            workspace,
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"{mode},{object_id},{rel}",
+        )
+
+    tree_sha = str(_run_git(workspace, "write-tree").stdout).strip()
+    commit_sha = str(
+        _run_git(
+            workspace,
+            "-c",
+            "user.name=Slivin Harness",
+            "-c",
+            "user.email=slivin-harness@example.invalid",
+            "commit-tree",
+            tree_sha,
+            "-m",
+            "Sanitized historical benchmark baseline",
+        ).stdout
+    ).strip()
+    _run_git(workspace, "checkout", "--detach", "-f", commit_sha)
+    _run_git(workspace, "update-ref", "-d", "refs/heads/master", check=False)
+    _run_git(workspace, "update-ref", "-d", "refs/heads/main", check=False)
+    _run_git(
+        workspace,
+        "update-ref",
+        "-d",
+        "refs/heads/slivin-benchmark-baseline",
+        check=False,
+    )
+
+    sanitized_entries = _tree_entries(workspace, commit_sha)
+    if sanitized_entries != source_entries:
+        raise RuntimeError("Sanitized benchmark repository tree differs from source baseline")
+    refs = str(_run_git(workspace, "for-each-ref", "--format=%(refname)").stdout).strip()
+    if refs:
+        raise RuntimeError("Sanitized benchmark repository unexpectedly retains refs: " + refs)
+    return commit_sha
+
+
 def prepare_workspace_session(
     *,
     manifest: dict,
@@ -439,6 +559,9 @@ def prepare_workspace_session(
     ).lower()
     if result_mode not in {"keep_worktree", "apply_to_source"}:
         raise RuntimeError(f"Unsupported result_mode: {result_mode}")
+    historical = _is_historical_manifest(manifest)
+    if historical and result_mode != "keep_worktree":
+        raise RuntimeError("Historical benchmark requires result_mode=keep_worktree")
     if result_mode == "apply_to_source" and base_sha != source_head:
         raise RuntimeError("apply_to_source requires base_ref to resolve to source HEAD")
 
@@ -454,8 +577,18 @@ def prepare_workspace_session(
 
     if os.name == "nt":
         _run_git(source_repo, "config", "core.longpaths", "true")
-    _run_git(source_repo, "config", "extensions.worktreeConfig", "true")
-    _run_git(source_repo, "worktree", "add", "--detach", str(workspace), base_sha)
+    benchmark_isolated = False
+    workspace_base_sha = base_sha
+    if historical:
+        workspace_base_sha = _materialize_sanitized_benchmark_repo(
+            source_repo=source_repo,
+            source_base_sha=base_sha,
+            workspace=workspace,
+        )
+        benchmark_isolated = True
+    else:
+        _run_git(source_repo, "config", "extensions.worktreeConfig", "true")
+        _run_git(source_repo, "worktree", "add", "--detach", str(workspace), base_sha)
     try:
         canonical_copied = _copy_exposed_paths(
             source_repo,
@@ -478,24 +611,33 @@ def prepare_workspace_session(
                 "Managed worktree is unexpectedly dirty after preparation:\n" + status_text
             )
     except Exception:
-        _remove_worktree(source_repo, workspace)
+        if benchmark_isolated:
+            shutil.rmtree(workspace, ignore_errors=True)
+        else:
+            _remove_worktree(source_repo, workspace)
         raise
 
     return WorkspaceSession(
         workspace=workspace,
-        mode="git_worktree",
+        mode="benchmark_isolated" if benchmark_isolated else "git_worktree",
         managed=True,
         project_name=str(project_name),
         source_repo=source_repo,
         source_head=source_head,
-        base_sha=base_sha,
+        source_base_sha=base_sha,
+        base_sha=workspace_base_sha,
         result_mode=result_mode,
         exposed_paths=copied,
+        benchmark_isolated=benchmark_isolated,
     )
 
 
 def remove_managed_workspace(session: WorkspaceSession) -> None:
-    if session.managed and session.source_repo is not None:
+    if not session.managed:
+        return
+    if session.benchmark_isolated:
+        shutil.rmtree(session.workspace, ignore_errors=True)
+    elif session.source_repo is not None:
         _remove_worktree(session.source_repo, session.workspace)
 
 
@@ -528,8 +670,12 @@ def _build_patch(repo: Path) -> bytes:
             _run_git(repo, "reset", "--", *untracked)
 
 
+def build_repository_patch(repo: Path) -> bytes:
+    return _build_patch(repo)
+
+
 def build_candidate_patch(session: WorkspaceSession) -> bytes:
-    return _build_patch(session.workspace)
+    return build_repository_patch(session.workspace)
 
 
 def _remove_new_untracked(repo: Path, before: set[str]) -> None:

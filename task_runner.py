@@ -66,6 +66,17 @@ from slivin_harness.phase6 import (
     validate_contract_closure_record,
     validate_runtime_scenario_commands,
 )
+from slivin_harness.phase7 import (
+    Phase7Error,
+    artifact_digest,
+    build_final_acceptance,
+    build_patch_reconstruction_proof,
+    classify_heldout_results,
+    deliver_candidate_transaction,
+    reconcile_quality_gate,
+    reset_workspace_for_semantic_replan,
+    sanitize_benchmark_toolchain,
+)
 from slivin_harness.protocol import (
     ArtifactContractError,
     EVALUATOR_PROTOCOL_VERSION,
@@ -112,7 +123,6 @@ from slivin_harness.workflow import (
 from slivin_harness.workspace import (
     WorkspaceSession,
     add_worktree_excludes,
-    apply_candidate_to_source,
     assert_safe_runtime_path,
     build_candidate_patch,
     prepare_workspace_session,
@@ -242,6 +252,19 @@ class RunRecorder:
         self.control_plane.write_private_json(name, value)
         return self.control_plane.write_public_json(name, value)
 
+    def write_once_authoritative_json(self, name: str, value: object) -> Path:
+        """Create an immutable Controller artifact and its diagnostic mirror once."""
+        self.control_plane.write_json_once(
+            name,
+            value,
+            visibility=ArtifactVisibility.PRIVATE,
+        )
+        return self.control_plane.write_json_once(
+            name,
+            value,
+            visibility=ArtifactVisibility.PUBLIC,
+        )
+
     def write_text(self, name: str, value: str) -> Path:
         return self.control_plane.write_text(
             name, value, visibility=ArtifactVisibility.PUBLIC
@@ -369,6 +392,15 @@ def validate_manifest(manifest: dict) -> None:
         timeout = spec["timeout_seconds"]
         if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 3600:
             raise RuntimeError(f"checks[{index}].timeout_seconds must be 1..3600")
+
+    has_heldout = any(spec["feedback"] == "heldout" for spec in checks)
+    if has_heldout and not benchmark.get("baseline_failure_marker"):
+        raise RuntimeError(
+            "Historical held-out checks require benchmark.baseline_failure_marker "
+            "so semantic failures can be distinguished from infrastructure errors"
+        )
+    if has_heldout and manifest.get("result_mode", "keep_worktree") != "keep_worktree":
+        raise RuntimeError("Historical benchmark requires result_mode=keep_worktree")
 
 
 def resolve_runtime_path(
@@ -750,22 +782,131 @@ def prepare_self_verify_runner(
         }
         for spec in specs
     ]
-    template = '''from __future__ import annotations
+    template = r'''from __future__ import annotations
+import hashlib
 import json
 import os
+import stat
 import subprocess
-import sys
 from pathlib import Path
 
 WORKSPACE = Path(__WORKSPACE__)
 RUNTIME = Path(__RUNTIME__)
 STAMP = Path(__STAMP__)
-HARNESS_ROOT = Path(__HARNESS_ROOT__)
 CHECKS = json.loads(__CHECKS__)
-if str(HARNESS_ROOT) not in sys.path:
-    sys.path.insert(0, str(HARNESS_ROOT))
 
-from slivin_harness.run_state import build_candidate_identity
+
+def _git(*args):
+    result = subprocess.run(
+        ["git", *args],
+        cwd=WORKSPACE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "git command failed")
+    return result.stdout
+
+
+def _excluded(path):
+    normalized = path.replace("\\", "/").strip("/")
+    return any(
+        normalized == prefix or normalized.startswith(prefix + "/")
+        for prefix in (".harness_tmp", ".venv")
+    )
+
+
+def _candidate_paths():
+    paths = {
+        item.replace("\\", "/")
+        for item in _git(
+            "diff", "--name-only", "--no-renames", "-z", "HEAD", "--"
+        ).split("\0")
+        if item
+    }
+    paths.update(
+        item.replace("\\", "/")
+        for item in _git(
+            "ls-files", "--others", "--exclude-standard", "-z"
+        ).split("\0")
+        if item
+    )
+    return sorted(item for item in paths if not _excluded(item))
+
+
+def _mode(rel, path):
+    if path.is_symlink():
+        return "120000"
+    if path.is_file():
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", rel],
+            cwd=WORKSPACE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        ).returncode == 0
+        if tracked:
+            raw = _git("diff", "--raw", "--no-renames", "HEAD", "--", rel).strip()
+            if raw.startswith(":"):
+                fields = raw.split(None, 5)
+                if len(fields) >= 2 and fields[1] != "000000":
+                    return fields[1]
+        return "100755" if bool(path.stat().st_mode & stat.S_IXUSR) else "100644"
+    if not path.exists():
+        raw = _git("ls-tree", "HEAD", "--", rel).strip()
+        return raw.split(None, 1)[0] if raw else None
+    return None
+
+
+def current_candidate_id():
+    head = _git("rev-parse", "HEAD").strip()
+    entries = []
+    for rel in _candidate_paths():
+        path = WORKSPACE / rel
+        if path.is_symlink():
+            raw = os.readlink(path).encode("utf-8", errors="surrogateescape")
+            entries.append({
+                "path": rel,
+                "state": "symlink",
+                "mode": _mode(rel, path),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "size": len(raw),
+            })
+        elif path.is_file():
+            raw = path.read_bytes()
+            entries.append({
+                "path": rel,
+                "state": "file",
+                "mode": _mode(rel, path),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "size": len(raw),
+            })
+        elif not path.exists():
+            entries.append({
+                "path": rel,
+                "state": "deleted",
+                "mode": _mode(rel, path),
+            })
+        else:
+            entries.append({"path": rel, "state": "non_file", "mode": None})
+    payload = {
+        "schema_version": "candidate.v1",
+        "baseline_sha": head,
+        "workspace_head": head,
+        "entries": entries,
+    }
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 STAMP.unlink(missing_ok=True)
@@ -804,7 +945,7 @@ for index, check in enumerate(CHECKS, start=1):
     all_passed = all_passed and passed
 
 if all_passed:
-    candidate_id = build_candidate_identity(WORKSPACE).candidate_id
+    candidate_id = current_candidate_id()
     STAMP.write_text(json.dumps({
         "passed": True,
         "candidate_id": candidate_id,
@@ -820,7 +961,6 @@ raise SystemExit(1)
         template.replace("__WORKSPACE__", repr(str(workspace.resolve())))
         .replace("__RUNTIME__", repr(str((runtime_dir / "self_verify").resolve())))
         .replace("__STAMP__", repr(str(stamp_path.resolve())))
-        .replace("__HARNESS_ROOT__", repr(str(HARNESS_ROOT.resolve())))
         .replace("__CHECKS__", repr(json.dumps(checks, ensure_ascii=False)))
     )
     script_path.write_text(script, encoding="utf-8")
@@ -1697,25 +1837,6 @@ def package_candidate(
     return patch, metadata
 
 
-def deliver_candidate(
-    *,
-    session: WorkspaceSession,
-    patch: bytes,
-) -> dict[str, str]:
-    """Deliver a packaged candidate using the owner-selected result mode."""
-    apply_candidate_to_source(session, patch=patch)
-    if session.result_mode == "keep_worktree":
-        print("RESULT_WORKTREE_RETAINED:", session.workspace)
-        destination = str(session.workspace)
-    else:
-        destination = str(session.source_repo or "")
-    return {
-        "status": StageResultCode.RESULT_DELIVERY_PASS.value,
-        "result_mode": session.result_mode,
-        "destination": destination,
-    }
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run a task through Slivin Harness")
     parser.add_argument("manifest", type=Path)
@@ -1865,6 +1986,22 @@ def main(argv: list[str] | None = None) -> int:
         )
         if runtime_state is not None:
             toolchain["project_python"] = runtime_state.project_python
+        benchmark_toolchain_removed: dict[str, str] = {}
+        if workflow_mode == WorkflowMode.HISTORICAL_BENCHMARK:
+            toolchain, benchmark_toolchain_removed = sanitize_benchmark_toolchain(
+                toolchain=toolchain,
+                source_repo=session.source_repo,
+                workspace=workspace,
+            )
+            recorder.write_authoritative_json(
+                "benchmark_toolchain_sanitization.json",
+                {
+                    "schema_version": "benchmark-toolchain-sanitization.v1",
+                    "removed": benchmark_toolchain_removed,
+                    "retained_keys": sorted(toolchain),
+                    "source_paths_exposed_to_agents": False,
+                },
+            )
         validate_toolchain(toolchain)
         runtime_scenarios = runtime_scenarios_from_config(
             local_config, project_name=session.project_name
@@ -1947,6 +2084,40 @@ def main(argv: list[str] | None = None) -> int:
             source_repo=str(session.source_repo) if session.source_repo else None,
             workspace=str(workspace),
         )
+        benchmark_isolation_artifact: str | None = None
+        if workflow_mode == WorkflowMode.HISTORICAL_BENCHMARK:
+            if not session.benchmark_isolated:
+                raise RuntimeError(
+                    "Historical benchmark did not receive a sanitized standalone repository"
+                )
+            refs = str(
+                subprocess.run(
+                    ["git", "for-each-ref", "--format=%(refname)"],
+                    cwd=workspace,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=True,
+                ).stdout
+            ).splitlines()
+            benchmark_isolation_artifact = "benchmark_isolation.json"
+            recorder.write_authoritative_json(
+                benchmark_isolation_artifact,
+                {
+                    "schema_version": "benchmark-isolation.v1",
+                    "source_base_sha": session.source_base_sha,
+                    "sanitized_workspace_sha": session.base_sha,
+                    "standalone_git_directory": (workspace / ".git").is_dir(),
+                    "shared_git_metadata": False,
+                    "visible_refs": refs,
+                    "previous_attempt_artifacts_exposed": False,
+                    "hidden_grader_exposed_to_agents": False,
+                    "result_mode": session.result_mode,
+                    "status": "BENCHMARK_ISOLATION_PASS",
+                },
+            )
         runtime_tmp = execution_broker.scratch_root(ExecutionRole.APP_SERVER)
         codex_cmd = resolve_codex_cmd(local_config)
         app_server_policy = execution_broker.policy_for(ExecutionRole.APP_SERVER)
@@ -1988,17 +2159,22 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print("HARNESS_TASK_STOPPED: NEEDS_USER_DECISION")
                 return 2
+            intake_artifacts = [
+                "manifest_snapshot.json",
+                "workflow_snapshot.json",
+                "preflight.json",
+                "repo_context.json",
+                "execution_policies.json",
+                "task_contract_01.json",
+            ]
+            if benchmark_isolation_artifact:
+                intake_artifacts.extend(
+                    [benchmark_isolation_artifact, "benchmark_toolchain_sanitization.json"]
+                )
             run_state.pass_stage(
                 StageId.INTAKE_PREFLIGHT,
                 StageResultCode.PREFLIGHT_READY,
-                artifacts=(
-                    "manifest_snapshot.json",
-                    "workflow_snapshot.json",
-                    "preflight.json",
-                    "repo_context.json",
-                    "execution_policies.json",
-                    "task_contract_01.json",
-                ),
+                artifacts=tuple(intake_artifacts),
             )
 
             plan: dict | None = None
@@ -3177,6 +3353,87 @@ def main(argv: list[str] | None = None) -> int:
                         detail=evaluation["reason"],
                     )
                     print(f"=== REPLAN #{replan_cycles} ===")
+
+                    # Preserve the rejected implementation for audit, then remove
+                    # it from the repository view seen by the fresh Planner. A
+                    # semantic replan acknowledges that the previous technical
+                    # model was wrong; keeping its diff visible would anchor the
+                    # replacement agents to the rejected solution.
+                    rejected_candidate = observe_candidate(
+                        f"REPLAN_{replan_cycles}_REJECTED_CANDIDATE"
+                    )
+                    rejected_patch_artifact = (
+                        f"replan_{replan_cycles:02d}_rejected_candidate.patch"
+                    )
+                    recorder.write_bytes(
+                        rejected_patch_artifact,
+                        build_candidate_patch(session),
+                    )
+                    replan_reset = reset_workspace_for_semantic_replan(
+                        workspace=workspace,
+                        baseline_sha=session.base_sha or preflight["head_sha"],
+                    )
+                    replan_reset_artifact = f"replan_{replan_cycles:02d}_reset.json"
+                    recorder.write_authoritative_json(
+                        replan_reset_artifact, replan_reset
+                    )
+                    clean_candidate = observe_candidate(
+                        f"REPLAN_{replan_cycles}_CLEAN_BASELINE"
+                    )
+                    if clean_candidate.changed_paths:
+                        raise RuntimeError(
+                            "Semantic replan did not start from a clean candidate"
+                        )
+
+                    # Task-specific checks and evidence belonged to the rejected
+                    # attempt. Project gates remain in repair_specs and are
+                    # recompiled into the new Verification Plan.
+                    check_registry.reset()
+                    dynamic_specs = []
+                    dynamic_notes = []
+                    active_contract_closure = None
+                    active_contract_closure_artifact = None
+                    active_runtime_evidence = {
+                        "protocol_version": "runtime-evidence.v1",
+                        "status": StageResultCode.RUNTIME_VERIFICATION_SKIPPED.value,
+                        "candidate_id": None,
+                        "verification_plan_fingerprint": None,
+                        "scenarios": [],
+                        "reason_code": "INVALIDATED_BY_SEMANTIC_REPLAN",
+                    }
+                    active_runtime_artifact = None
+
+                    # Clear role scratch so the new agents see repository facts,
+                    # not temporary probes from the rejected attempt.
+                    for role in (
+                        ExecutionRole.PLANNER,
+                        ExecutionRole.IMPLEMENTER,
+                        ExecutionRole.EVALUATOR,
+                    ):
+                        scratch = execution_broker.scratch_root(role)
+                        shutil.rmtree(scratch, ignore_errors=True)
+                        scratch.mkdir(parents=True, exist_ok=True)
+
+                    # Restore the authoritative project environment to the clean
+                    # baseline as well. Replan is intentionally expensive and
+                    # rare; reproducibility is more important than reusing a venv
+                    # potentially mutated under the rejected implementation.
+                    if runtime_manager is not None:
+                        runtime_state = runtime_manager.build(clean=True)
+                        project_runtime_index += 1
+                        runtime_artifact = (
+                            f"project_runtime_replan_{replan_cycles:02d}.json"
+                        )
+                        recorder.write_authoritative_json(
+                            runtime_artifact, runtime_state.to_dict()
+                        )
+                        run_state.bump_revision(
+                            RevisionKind.RUNTIME_ENVIRONMENT,
+                            artifact=runtime_artifact,
+                        )
+                        toolchain["project_python"] = runtime_state.project_python
+                        validate_toolchain(toolchain)
+
                     run_state.begin_stage(StageId.PLANNER)
                     plan = run_planner(
                         codex,
@@ -3223,14 +3480,22 @@ def main(argv: list[str] | None = None) -> int:
                     run_state.pass_stage(
                         StageId.PLANNER,
                         StageResultCode.PLANNER_READY,
-                        artifacts=(replan_artifact,),
+                        artifacts=(
+                            replan_artifact,
+                            replan_reset_artifact,
+                            rejected_patch_artifact,
+                        ),
                     )
                     run_state.begin_stage(StageId.IMPLEMENTATION_CONTRACT)
                     implementation_contract = build_implementation_contract(
                         plan, task_contract=task_contract
                     )
                     validate_implementation_contract(implementation_contract)
-                    contract_artifact = f"implementation_contract_replan_{replan_cycles:02d}.json"
+                    implementation_contract_index += 1
+                    contract_artifact = (
+                        f"implementation_contract_{implementation_contract_index:02d}_"
+                        f"replan_{replan_cycles:02d}.json"
+                    )
                     recorder.write_authoritative_json(
                         contract_artifact, implementation_contract
                     )
@@ -3244,7 +3509,11 @@ def main(argv: list[str] | None = None) -> int:
                         task_checks=active_task_check_keys(),
                     )
                     validate_verification_plan(verification_plan)
-                    verification_artifact = f"verification_plan_replan_{replan_cycles:02d}.json"
+                    verification_plan_index += 1
+                    verification_artifact = (
+                        f"verification_plan_{verification_plan_index:02d}_"
+                        f"replan_{replan_cycles:02d}.json"
+                    )
                     recorder.write_authoritative_json(
                         verification_artifact, verification_plan
                     )
@@ -3254,13 +3523,14 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     active_contract_artifact = contract_artifact
                     active_verification_artifact = verification_artifact
+                    current_capabilities = available_capabilities(
+                        toolchain=toolchain,
+                        configured=declared_capabilities,
+                        runtime=runtime_available_capabilities(runtime_scenarios),
+                    )
                     missing = required_capability_gaps(
                         verification_plan,
-                        available=available_capabilities(
-                            toolchain=toolchain,
-                            configured=declared_capabilities,
-                            runtime=runtime_available_capabilities(runtime_scenarios),
-                        ),
+                        available=current_capabilities,
                     )
                     runtime_gaps = runtime_requirement_gaps(
                         verification_plan, runtime_scenarios
@@ -3276,13 +3546,36 @@ def main(argv: list[str] | None = None) -> int:
                         workspace=workspace,
                         toolchain=toolchain,
                     )
+                    capability_gate_index += 1
+                    capability_artifact = (
+                        f"capability_gate_{capability_gate_index:02d}_"
+                        f"replan_{replan_cycles:02d}.json"
+                    )
+                    capability_record = {
+                        "schema_version": "capability-gate.v1",
+                        "declared": declared_capabilities,
+                        "available": sorted(current_capabilities),
+                        "required": list(verification_plan["required_capabilities"]),
+                        "missing": missing,
+                        "runtime_requirement_gaps": runtime_gaps,
+                        "runtime_environment_gaps": runtime_env_gaps,
+                        "runtime_command_gaps": runtime_cmd_gaps,
+                    }
+                    recorder.write_authoritative_json(
+                        capability_artifact, capability_record
+                    )
+                    active_capability_artifact = capability_artifact
                     if not plan["owner_boundary_assessment"]["compatible"]:
                         run_state.route_stage(
                             StageId.IMPLEMENTATION_CONTRACT,
                             outcome=WorkflowOutcome.BLOCKED,
                             result_code=StageResultCode.BLOCKED,
                             reason_code="OWNER_BOUNDARY_CONFLICT_AFTER_REPLAN",
-                            artifacts=(contract_artifact, verification_artifact),
+                            artifacts=(
+                                contract_artifact,
+                                verification_artifact,
+                                capability_artifact,
+                            ),
                         )
                         print("HARNESS_TASK_STOPPED: OWNER_BOUNDARY_CONFLICT")
                         return 2
@@ -3292,7 +3585,11 @@ def main(argv: list[str] | None = None) -> int:
                             outcome=WorkflowOutcome.BLOCKED,
                             result_code=StageResultCode.BLOCKED,
                             reason_code="REQUIRED_CAPABILITY_MISSING_AFTER_REPLAN",
-                            artifacts=(contract_artifact, verification_artifact),
+                            artifacts=(
+                                contract_artifact,
+                                verification_artifact,
+                                capability_artifact,
+                            ),
                         )
                         print(
                             "HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING",
@@ -3304,7 +3601,14 @@ def main(argv: list[str] | None = None) -> int:
                     run_state.pass_stage(
                         StageId.IMPLEMENTATION_CONTRACT,
                         StageResultCode.IMPLEMENTATION_CONTRACT_READY,
-                        artifacts=(contract_artifact, verification_artifact),
+                        artifacts=(
+                            contract_artifact,
+                            verification_artifact,
+                            capability_artifact,
+                        ),
+                    )
+                    active_runtime_evidence["verification_plan_fingerprint"] = (
+                        verification_plan["fingerprint"]
                     )
                     current_specs = active_repair_specs()
                     _, stamp_path, self_verify_command = prepare_self_verify_runner(
@@ -3313,6 +3617,14 @@ def main(argv: list[str] | None = None) -> int:
                         toolchain=toolchain,
                     )
                     implementation_report_index += 1
+                    implementer_thread = codex.start_thread(
+                        cwd=workspace,
+                        sandbox="workspace-write",
+                        developer_instructions=IMPLEMENTER_INSTRUCTIONS,
+                        on_started=_thread_recorder(
+                            recorder, f"implementer_replan_{replan_cycles}"
+                        ),
+                    )
                     run_state.begin_stage(StageId.IMPLEMENTER)
                     report = run_implementer_report(
                         codex,
@@ -3401,8 +3713,31 @@ def main(argv: list[str] | None = None) -> int:
         changed_paths = list(final_candidate_before.changed_paths)
         enforce_allowed_paths(changed_paths, allowed_paths)
 
+        quality_reconciliation = reconcile_quality_gate(
+            run_state_data=run_state.data,
+            final_candidate=final_candidate_before,
+            mode=workflow_mode,
+        )
+        quality_reconciliation_artifact = "quality_gate_reconciliation.json"
+        recorder.write_authoritative_json(
+            quality_reconciliation_artifact,
+            quality_reconciliation,
+        )
+
         heldout_artifacts: list[str] = []
-        if heldout_specs:
+        heldout_evidence: dict | None = None
+        if workflow_mode == WorkflowMode.HISTORICAL_BENCHMARK:
+            if not heldout_specs:
+                run_state.route_stage(
+                    StageId.FINAL_GATE,
+                    outcome=WorkflowOutcome.INVALID,
+                    result_code=StageResultCode.BENCHMARK_INVALID,
+                    reason_code="HELDOUT_CHECKS_MISSING",
+                    artifacts=(quality_reconciliation_artifact,),
+                )
+                print(StageResultCode.BENCHMARK_INVALID.value)
+                return 2
+            oracle_marker = str(benchmark.get("baseline_failure_marker") or "")
             heldout_results = run_checks(
                 heldout_specs,
                 workspace=workspace,
@@ -3412,16 +3747,54 @@ def main(argv: list[str] | None = None) -> int:
                 execution_broker=execution_broker,
                 execution_role=ExecutionRole.HELDOUT,
             )
-            heldout_artifact = "heldout_results.json"
-            recorder.write_json(heldout_artifact, check_records(heldout_results))
-            heldout_artifacts.append(heldout_artifact)
+            heldout_results_artifact = "heldout_results.json"
+            recorder.write_authoritative_json(
+                heldout_results_artifact,
+                check_records(heldout_results),
+            )
             final_candidate_after_heldout = observe_candidate("FINAL_GATE_AFTER_HELDOUT")
-            if final_candidate_after_heldout.candidate_id != final_candidate_before.candidate_id:
-                raise RuntimeError("Held-out grader mutated the candidate")
-            if any(not item.passed for item in heldout_results):
-                raise RuntimeError(
-                    "Held-out grader failed. Trial stops; assertion is not returned to Implementer."
+            heldout_evidence = classify_heldout_results(
+                results=heldout_results,
+                oracle_marker=oracle_marker,
+                candidate_before=final_candidate_before.candidate_id,
+                candidate_after=final_candidate_after_heldout.candidate_id,
+            )
+            heldout_evidence_artifact = "heldout_evidence.json"
+            recorder.write_authoritative_json(
+                heldout_evidence_artifact,
+                heldout_evidence,
+            )
+            heldout_artifacts.extend(
+                [heldout_results_artifact, heldout_evidence_artifact]
+            )
+            heldout_status = heldout_evidence["status"]
+            if heldout_status != "HELDOUT_PASS":
+                if heldout_status == "HELDOUT_SEMANTIC_FAIL":
+                    outcome = WorkflowOutcome.FAIL
+                    result_code = StageResultCode.HARNESS_BENCHMARK_FAIL
+                    exit_code = 1
+                else:
+                    outcome = WorkflowOutcome.INVALID
+                    result_code = StageResultCode.BENCHMARK_INVALID
+                    exit_code = 2
+                reason_code = str(
+                    heldout_evidence.get("reason_code") or heldout_status
                 )
+                run_state.route_stage(
+                    StageId.FINAL_GATE,
+                    outcome=outcome,
+                    result_code=result_code,
+                    reason_code=reason_code,
+                    artifacts=(
+                        quality_reconciliation_artifact,
+                        *heldout_artifacts,
+                        "candidate_identity_current.json",
+                    ),
+                )
+                print(result_code.value)
+                print("HELDOUT_STATUS:", heldout_status)
+                print(f"TOTAL_ELAPSED: {time.monotonic() - started:.2f}s")
+                return exit_code
             print("HELDOUT_PASS")
 
         final_candidate = observe_candidate("FINAL_GATE_PACKAGE")
@@ -3431,40 +3804,112 @@ def main(argv: list[str] | None = None) -> int:
         packaged_candidate = observe_candidate("FINAL_GATE_AFTER_PACKAGE")
         if packaged_candidate.candidate_id != final_candidate.candidate_id:
             raise RuntimeError("Candidate packaging mutated the candidate")
+
+        patch_proof = build_patch_reconstruction_proof(
+            repository=(
+                session.workspace
+                if session.benchmark_isolated or session.source_repo is None
+                else session.source_repo
+            ),
+            baseline_sha=final_candidate.baseline_sha,
+            patch=patch,
+            expected_candidate=final_candidate,
+            private_root=recorder.private_root,
+        )
+        patch_proof_artifact = "patch_proof.json"
+        recorder.write_authoritative_json(patch_proof_artifact, patch_proof)
+
+        evidence_names: list[str] = []
+        for binding in quality_reconciliation["stage_bindings"]:
+            evidence_names.extend(binding.get("artifacts", []))
+        evidence_names.extend(
+            [quality_reconciliation_artifact, patch_proof_artifact, *heldout_artifacts]
+        )
+        artifact_bindings = [
+            artifact_digest(recorder.root, recorder.private_root, name)
+            for name in dict.fromkeys(evidence_names)
+            if name != "candidate.patch"
+        ]
+
         success_code = (
             StageResultCode.HARNESS_BENCHMARK_PASS
             if workflow_mode == WorkflowMode.HISTORICAL_BENCHMARK
             else StageResultCode.HARNESS_TASK_PASS
         )
-        final_acceptance = {
-            "schema_version": "final-acceptance.v1",
-            "task_id": manifest["task_id"],
-            "workflow_version": WORKFLOW_VERSION,
-            "harness_version": __version__,
-            "mode": workflow_mode.value,
-            "pipeline_profile": pipeline_profile.value,
-            "baseline_sha": final_candidate.baseline_sha,
-            "workspace_head": final_candidate.workspace_head,
-            "candidate_id": final_candidate.candidate_id,
-            "changed_paths": list(final_candidate.changed_paths),
-            "revision_snapshot": dict(run_state.data["revisions"]),
-            "patch": patch_metadata,
-            "quality_gate_status": StageResultCode.FINAL_ACCEPTANCE_PASS.value,
-            "expected_terminal_result": success_code.value,
-        }
-        recorder.write_json("final_acceptance.json", final_acceptance)
-        delivery_record = deliver_candidate(session=session, patch=patch)
+        final_acceptance = build_final_acceptance(
+            task_id=manifest["task_id"],
+            harness_version=__version__,
+            workflow_version=WORKFLOW_VERSION,
+            mode=workflow_mode,
+            pipeline_profile=pipeline_profile.value,
+            result_mode=session.result_mode,
+            source_baseline_sha=(
+                session.source_base_sha or session.source_head or final_candidate.baseline_sha
+            ),
+            final_candidate=final_candidate,
+            quality_reconciliation=quality_reconciliation,
+            patch_metadata=patch_metadata,
+            patch_proof=patch_proof,
+            artifact_bindings=artifact_bindings,
+            heldout_evidence=heldout_evidence,
+        )
+        final_acceptance_artifact = "final_acceptance.json"
+        recorder.write_once_authoritative_json(
+            final_acceptance_artifact,
+            final_acceptance,
+        )
+        print(StageResultCode.FINAL_ACCEPTANCE_PASS.value)
+
+        delivery_result = deliver_candidate_transaction(
+            session=session,
+            patch=patch,
+            final_candidate=final_candidate,
+        )
+        delivery_record = delivery_result.to_dict()
+        delivery_record_artifact = "delivery_record.json"
+        recorder.write_once_authoritative_json(
+            delivery_record_artifact,
+            delivery_record,
+        )
         delivered_candidate = observe_candidate("FINAL_GATE_AFTER_DELIVERY")
         if delivered_candidate.candidate_id != final_candidate.candidate_id:
             raise RuntimeError("Result delivery mutated the managed candidate")
-        recorder.write_json("delivery_record.json", delivery_record)
+
         final_artifacts = [
             "candidate_identity_current.json",
             "candidate.patch",
-            "final_acceptance.json",
-            "delivery_record.json",
+            quality_reconciliation_artifact,
+            patch_proof_artifact,
+            final_acceptance_artifact,
+            delivery_record_artifact,
             *heldout_artifacts,
         ]
+        if delivery_result.status != StageResultCode.RESULT_DELIVERY_PASS.value:
+            if delivery_result.status == StageResultCode.RESULT_DELIVERY_BLOCKED.value:
+                outcome = WorkflowOutcome.BLOCKED
+                result_code = StageResultCode.RESULT_DELIVERY_BLOCKED
+            else:
+                outcome = WorkflowOutcome.INVALID
+                result_code = StageResultCode.RESULT_DELIVERY_FAIL
+            reason_code = delivery_result.reason_code or delivery_result.status
+            run_state.route_stage(
+                StageId.FINAL_GATE,
+                outcome=outcome,
+                result_code=result_code,
+                reason_code=reason_code,
+                artifacts=final_artifacts,
+            )
+            print(delivery_result.status)
+            print("ACCEPTED_PATCH_RETAINED:", patch_metadata["path"])
+            print("RESULT_WORKTREE_RETAINED:", session.workspace)
+            print(f"TOTAL_ELAPSED: {time.monotonic() - started:.2f}s")
+            return 2
+
+        if session.result_mode == "keep_worktree":
+            print("RESULT_WORKTREE_RETAINED:", session.workspace)
+        else:
+            print("RESULT_APPLIED_TO_SOURCE:", delivery_result.destination)
+        print(StageResultCode.RESULT_DELIVERY_PASS.value)
         run_state.pass_stage(
             StageId.FINAL_GATE,
             success_code,

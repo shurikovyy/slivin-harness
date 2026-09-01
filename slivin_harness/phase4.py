@@ -222,6 +222,19 @@ class CheckRegistry:
         payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
+    def reset(self) -> None:
+        """Start a new attempt with an empty typed task-check registry.
+
+        A semantic replan invalidates task-specific checks discovered under the
+        rejected technical model. Project gates are supplied separately by the
+        Controller and therefore are not lost.
+        """
+        current = self.load()
+        revision = int(current.get("revision", 0)) + 1
+        data = self._empty()
+        data["revision"] = revision
+        self.save(data)
+
 
 @dataclasses.dataclass
 class ActivityWatchdog:

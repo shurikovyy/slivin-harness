@@ -51,6 +51,24 @@ class ManifestValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "requires baseline_failure_marker"):
             validate_manifest(manifest)
 
+    def test_heldout_requires_oracle_marker_and_keep_worktree(self) -> None:
+        manifest = valid_manifest()
+        manifest["checks"].append(
+            {
+                "name": "hidden",
+                "feedback": "heldout",
+                "command": ["python", "-c", "print('ORACLE_REACHED')"],
+                "timeout_seconds": 30,
+            }
+        )
+        with self.assertRaisesRegex(RuntimeError, "baseline_failure_marker"):
+            validate_manifest(manifest)
+
+        manifest["benchmark"] = {"baseline_failure_marker": "ORACLE_REACHED"}
+        manifest["result_mode"] = "apply_to_source"
+        with self.assertRaisesRegex(RuntimeError, "result_mode=keep_worktree"):
+            validate_manifest(manifest)
+
     def test_old_manifest_version_is_rejected(self) -> None:
         manifest = valid_manifest()
         manifest["version"] = 1

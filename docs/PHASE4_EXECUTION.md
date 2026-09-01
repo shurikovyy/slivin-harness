@@ -1,5 +1,7 @@
 # Phase 4 — Implementer and deterministic Controller verification
 
+> Historical Phase 4 document. Phase 5 implemented active Contract/Verification Plan recompilation and project runtime; Phase 6 implemented runtime/evaluator; Phase 7 completed semantic replan and Final Gate. See [Phase 7 Final Gate](PHASE7_FINAL_GATE.md).
+
 Phase 4 connects the approved Step 3 and Step 4 contracts to the executable Harness.
 It does not add another model role. It strengthens the writable implementation loop and
 moves authoritative verification state into the Controller private plane.
@@ -19,7 +21,7 @@ IMPLEMENTER v2 (historical Phase 4 protocol; current release uses implementer.v3
 new consumer / risk?
         ├─ yes → Controller validates and records the discovery privately
         │         → the discovery cannot be lost from the run artifacts
-        │         → automatic active Contract/Verification Plan recompilation is pending
+        │         → Phase 5+ recompiles active Contract/Verification Plan transactionally
         └─ no
         ↓
 register typed checks before COMPLETE

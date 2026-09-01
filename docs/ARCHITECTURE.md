@@ -1,220 +1,43 @@
-# Архитектура Slivin Harness 0.8.0a9 — Phase 6
+# Архитектура Slivin Harness 0.8.0a10 — Phase 7
 
-## Назначение Phase 6
+## Назначение
 
-Machine phase id: `phase6-runtime-two-phase-evaluator`.
+`0.8.0a10` завершает согласованный Step 0–7 quality-core. Phase 7 не добавляет нового reviewer-а: она делает финальную приёмку, patch proof, безопасную доставку и historical benchmark isolation детерминированной ответственностью Controller.
 
-Phase 1 ввела каноническую Step 0–7 state machine. Phase 2 вынесла authoritative Controller state из agent-writable worktree и добавила Execution Broker. Phase 3 подключила User Task Contract, Planner v4, Implementation Contract v3 и typed Verification Plan. Phase 4 замкнула writable Implementer и deterministic checks. Phase 5 добавила open-world Contract expansion, `.worktreeinclude` и воспроизводимую worktree-local `.venv`. Phase 6 исполняет required runtime proof и делает semantic review действительно независимым.
+Machine phase id:
 
 ```text
-workflow.v5
-run-state.v1
-candidate.v1
-controller-plane.v1
-execution-broker.v1
-        ↓
-task-contract.v1
-planner.v4
-implementation-contract.v3
-verification-plan.v1
-implementer.v3
-        ↓
-contract-closure.v1
-runtime-evidence.v1
-blind-audit.v1
-evaluator.v5
+phase7-final-gate-delivery-benchmark
 ```
 
-## Реальный pipeline Phase 6
+## Канонический pipeline
 
 ```text
-MANIFEST version = 2
+Step 0 — Intake / Preflight / User Task Contract
         ↓
-Step 0 — preflight / Task Contract / worktree / optional project runtime
+Step 1 — fresh read-only Planner
         ↓
-Step 1 — fresh read-only Planner v4
+Step 2 — Implementation Contract + Verification Plan
         ↓
-Step 2 — Implementation Contract v3 + Verification Plan v1
-        ↓
-Step 3 — Implementer v3 + transactional discoveries + SELF VERIFY
+Step 3 — Implementer + self verification
         ↓
 Step 4 — independent deterministic Controller checks
         ↓
-Step 5 — runtime scenarios либо explicit SKIPPED
+Step 5 — Runtime / External Verification, conditional
         ↓
-Step 6A — blind-audit.v1 без Contract/check framing
+Step 6 — fresh two-phase Blind Evaluator
         ↓
-Step 6B — evaluator.v5 Contract/evidence audit
-        ↓
-Step 7 — compatibility Final Gate / result handoff
+Step 7 — Final Gate / result handoff / hidden benchmark exam
 ```
 
-## Ownership
+Полная генерируемая схема находится в [WORKFLOW.md](WORKFLOW.md), machine-readable snapshot — в [workflow.v6.json](workflow.v6.json).
 
-### User Task Contract
-
-Controller хранит raw request и `task-contract.v1`. Intake Normalizer извлекает только explicit intent/acceptance/preservation/forbidden/boundaries с точным `source_text`; repository reasoning туда не попадает.
-
-### Planner
-
-Fresh Planner владеет технической гипотезой, но не Definition of Done. Он формирует characterization, bug root cause либо feature extension point, material assumptions, technical acceptance, derived preservation, consumers, conditional State Model, risks и typed Evidence Plan.
-
-### Implementation Contract и Verification Plan
-
-Controller детерминированно компилирует:
+## Версионные слои
 
 ```text
-Task Contract + Planner load-bearing output
-        ↓
-implementation-contract.v3
-        ↓
-verification-plan.v1
-```
-
-Explicit user requirements нельзя ослабить. Каждый item имеет typed proof profiles. `LIVE_LOCAL`, `TEST_EXTERNAL` и `PROD_OBSERVE` являются разными routes и не схлопываются в «более высокий риск».
-
-### Implementer
-
-Implementer работает только в managed worktree, создаёт smallest complete candidate, tests/docs, регистрирует typed checks и structured discoveries. Existing Contract immutable; Controller может только добавить `CONSUMER-DISCOVERED-N` или `RISK-DISCOVERED-N` и пересобрать Verification Plan.
-
-### Controller deterministic verification
-
-Self-verify является development feedback. Controller отдельно замораживает candidate и запускает trusted checks. Check может быть `CHECK_PASS`, `CHECK_FAIL`, `CHECK_TIMEOUT`, `CHECK_INFRA_ERROR` или `CHECK_MUTATED_CANDIDATE`. Agent-written test path допускается только через trusted runner; arbitrary authoritative shell-команда от агента запрещена.
-
-### Runtime Verification
-
-Runtime scenarios настраивает owner в `harness.local.toml`. Они являются Controller-owned capabilities, а не model-generated commands.
-
-```text
-Verification Plan obligation
-        ↓
-profile + required capability set
-        ↓
-один покрывающий RuntimeScenarioConfig
-        ↓
-runtime-request.v1
-        ↓
-owner wrapper
-        ↓
-runtime-result.v1
-        ↓
-runtime-evidence.v1
-```
-
-Capability union разных scenarios не считается единым proof. Command executable разрешается до Implementer; unknown/missing capability блокирует Step 2.
-
-### Contract Closure Record
-
-Перед deterministic/runtime/evaluator этапами Controller нормализует accepted implementation evidence:
-
-```text
-contract-closure.v1
-candidate_id
-Implementation Contract fingerprint
-Verification Plan fingerprint
-item → VERIFIED / NOT_AFFECTED + evidence
-```
-
-Evaluator не получает Implementer Report и его самооценку.
-
-### Blind Evaluator
-
-Один fresh read-only thread работает в две фазы.
-
-Phase A видит только raw task, Task Contract, sanitized preflight, candidate/repository и changed paths. Она не видит Planner, Contract, Implementer Report, checks, runtime evidence, previous findings или hidden oracle. `blind-audit.v1` сохраняется Controller до Phase B.
-
-Phase B видит Controller-normalized Contract, Verification Plan, Closure Record, deterministic и runtime evidence. Каждый blind finding получает `RETAINED` либо `DISMISSED_WITH_EVIDENCE`. Planner reasoning и Implementer prose остаются скрыты.
-
-## Runtime profiles
-
-### LIVE_LOCAL
-
-Запускает current worktree candidate. Optional startup command получает task-local port; Controller polling health до bounded deadline, запускает scenario, сохраняет server logs и останавливает process. Startup output направляется в scratch-файлы, чтобы server не заблокировался заполненным pipe.
-
-### TEST_EXTERNAL
-
-Предназначен только для configured test boundary. PASS требует known initial state и fresh readback. Non-disposable scenario обязан иметь cleanup command; он выполняется даже после timeout/failure, поскольку external mutation могла примениться частично.
-
-### PROD_OBSERVE
-
-Только read-only observation. Scenario обязан иметь `read_only_enforced = true` и не может содержать startup/cleanup mutation lifecycle. Это owner assertion о реальной технической boundary — read-only role/token/wrapper. Harness не считает произвольный command с production superuser безопасным.
-
-## Runtime immutability
-
-До и после Runtime проверяются:
-
-```text
-candidate_id
-workspace HEAD
-source HEAD
-source working-tree status
-runtime-only exposed files (.env и т.п.)
-```
-
-`.harness_tmp/runtime` исключён из candidate. Runtime, изменивший code/source/local config, получает `RUNTIME_MUTATED_CANDIDATE`; `.env` восстанавливается из unchanged source и весь downstream evidence повторяется.
-
-## Runtime result contract
-
-Wrapper обязан вернуть structured result и exit code `0`, если protocol корректно исполнен. Non-zero/timeout/missing JSON — infrastructure error, а не semantic failure. `TEST_EXTERNAL` PASS требует fresh readback; cleanup command success Controller добавляет как cleanup evidence. `PROD_OBSERVE` PASS требует read-only confirmation.
-
-## Private Controller plane
-
-Authoritative artifacts находятся в:
-
-```text
-RUN_DIR/controller_private/
-```
-
-Включая:
-
-```text
-run_state.json
-Task/Plan/Contract/Verification revisions
-check_registry.json
-self_verify_receipts
-contract_closure_*.json
-private runtime evidence
-blind_audit_*.json
-evaluation_*.json
-```
-
-`.harness_tmp` остаётся scratch и не является authority.
-
-## Evidence identity
-
-Self-verify receipt связывает:
-
-```text
-candidate_id
-task_contract_rev
-plan_rev
-implementation_contract_rev
-verification_plan_rev
-runtime_environment_rev
-attempt_id
-check_registry_digest
-```
-
-Runtime evidence дополнительно связано с Verification Plan fingerprint. Blind/Evaluator artifacts относятся к frozen candidate и инвалидируются после любого candidate change.
-
-## Execution boundary
-
-Execution Broker задаёт role-specific cwd, scratch, environment, network declaration и filesystem policy. Он честно различает:
-
-```text
-ENFORCED
-ADVISORY
-UNAVAILABLE
-```
-
-Phase 6 не заявляет универсальный OS-enforced sandbox для Controller subprocess на всех платформах. Owner-configured runtime wrappers должны использовать scoped credentials и не печатать secrets в structured result/logs.
-
-## Версии
-
-```text
-Harness                     0.8.0a9
+Harness                     0.8.0a10
 Manifest                    version = 2
-Workflow                    workflow.v5
+Workflow                    workflow.v6
 Run State                   run-state.v1
 Candidate                   candidate.v1
 Controller plane            controller-plane.v1
@@ -235,15 +58,293 @@ Runtime evidence            runtime-evidence.v1
 Contract closure            contract-closure.v1
 Blind audit                 blind-audit.v1
 Evaluator                   evaluator.v5
+Phase 7 controller          phase7-final-gate.v1
+Patch proof                 patch-proof.v1
+Final acceptance            final-acceptance.v2
+Delivery record             delivery-record.v2
+Held-out evidence           heldout-evidence.v2
+Benchmark isolation         benchmark-isolation.v1
 ```
 
-## Что остаётся следующей фазе
+## 1. Control plane и data plane
+
+### Agent workspace
 
 ```text
-universal restricted OS runner для agent-written Controller tests;
-готовые typed browser/DB/1С/Airflow wrappers;
-independent runtime tools непосредственно в blind Phase A;
-clean worktree при semantic replan;
-immutable final acceptance + delivery critical section;
-benchmark isolation/hardening на нескольких clean trials.
+<WORKSPACE>/
 ```
+
+Содержит candidate и agent scratch. Implementer имеет право менять project-файлы только здесь.
+
+### Private Controller plane
+
+```text
+<RUN_DIR>/controller_private/
+```
+
+Содержит authoritative state:
+
+```text
+run_state.json
+Task/Plan/Contract/Verification revisions
+check registry
+self-verify receipts
+runtime evidence
+contract closure
+blind audit / evaluator verdict
+quality reconciliation
+patch proof
+final acceptance
+held-out evidence
+```
+
+Файл внутри agent-writable `.harness_tmp` не является authoritative evidence.
+
+## 2. Identity и revisions
+
+Каждый accepted artifact связан с revision vector:
+
+```text
+task_contract_rev
+plan_rev
+implementation_contract_rev
+verification_plan_rev
+candidate_rev
+runtime_environment_rev
+attempt_id
+```
+
+`candidate.v1` включает:
+
+```text
+recorded baseline SHA
+workspace HEAD
+changed/new/deleted paths
+Git-visible mode
+SHA-256 фактических bytes или symlink target
+```
+
+`.venv` и `.harness_tmp` не входят в candidate.
+
+Изменение candidate, Contract, Verification Plan или runtime environment инвалидирует downstream evidence согласно `workflow.v6`.
+
+## 3. Step 0 — Intake / Preflight
+
+Controller:
+
+```text
+сохраняет raw request
+создаёт task-contract.v1
+фиксирует source baseline
+создаёт managed worktree
+копирует разрешённые .worktreeinclude files
+создаёт worktree-local project runtime
+проверяет toolchain/capabilities
+```
+
+Historical benchmark вместо linked worktree получает standalone sanitized repository; подробнее ниже.
+
+## 4. Step 1 — Planner
+
+`planner.v4` исследует current behavior, intended contract, root cause или extension point, consumers, state model, risks и typed evidence plan.
+
+Planner read-only относительно candidate и не получает previous solution/reference/held-out.
+
+## 5. Step 2 — Contract compiler
+
+Controller детерминированно строит:
+
+```text
+implementation-contract.v3
+verification-plan.v1
+```
+
+Contract хранит load-bearing Definition of Done, а Verification Plan связывает каждый requirement с proof profile:
+
+```text
+LOCAL_DETERMINISTIC
+LIVE_LOCAL
+TEST_EXTERNAL
+PROD_OBSERVE
+```
+
+Owner-boundary и capability gates выполняются до writable Implementer.
+
+## 6. Step 3 — Implementer
+
+`implementer.v3` получает Task Contract, compact Planner context, active Contract и trusted capabilities.
+
+Он:
+
+```text
+делает smallest complete fix
+создаёт/обновляет tests/docs
+регистрирует typed checks
+сообщает material consumers/risks
+закрывает Contract
+запускает self verification
+```
+
+Open-world discovery расширяет Contract/Verification Plan транзакционно; старые items не удаляются.
+
+Task-local `.venv` пересобирается при dependency/package drift. Runtime-only `.env` восстанавливается, если агент его изменил.
+
+## 7. Step 4 — deterministic checks
+
+Controller независимо запускает project gates и typed task checks на frozen candidate.
+
+Результаты различаются:
+
+```text
+CHECK_PASS
+CHECK_FAIL
+CHECK_TIMEOUT
+CHECK_INFRA_ERROR
+CHECK_MUTATED_CANDIDATE
+```
+
+Green self-verify Implementer не заменяет Controller evidence.
+
+## 8. Step 5 — Runtime Verification
+
+Runtime запускается только если Verification Plan требует observable evidence, которое нельзя доказать local checks.
+
+```text
+LIVE_LOCAL
+TEST_EXTERNAL
+PROD_OBSERVE
+```
+
+`TEST_EXTERNAL` write требует fresh readback и cleanup/disposable boundary. `PROD_OBSERVE` допускается только с technically enforced read-only wrapper/credential. Runtime не может менять candidate или source.
+
+## 9. Step 6 — Blind Evaluator
+
+`evaluator.v5` работает в две фазы одного fresh thread.
+
+### Phase A
+
+Не видит Planner, Contract, Implementer Report, green checks, runtime evidence и previous findings. Самостоятельно исследует repository/candidate и сохраняет immutable `blind-audit.v1`.
+
+### Phase B
+
+Получает active Contract, Verification Plan, `contract-closure.v1`, deterministic и runtime evidence. Каждый blind finding должен быть retained или dismissed with evidence.
+
+## 10. Repair и semantic replan
+
+### Обычный repair
+
+```text
+technical model корректна
+candidate локально ошибочен
+        ↓
+same Implementer thread
+```
+
+### Semantic replan
+
+```text
+Evaluator отверг technical model
+        ↓
+rejected patch сохраняется вне workspace
+        ↓
+candidate сбрасывается до recorded baseline
+        ↓
+task-specific registry очищается
+project runtime пересобирается
+        ↓
+fresh Planner
+        ↓
+new Contract / Verification Plan
+        ↓
+fresh Implementer thread
+```
+
+Новый Planner не видит rejected diff; это устраняет anchoring на признанно неверной реализации.
+
+## 11. Step 7 — Final Gate
+
+Final Gate выполняет четыре независимых действия.
+
+### Quality reconciliation
+
+Проверяет, что Step 3–6 относятся к одному final candidate и текущему revision vector.
+
+### Patch reconstruction
+
+`candidate.patch` применяется к чистой verification-копии recorded baseline. Reconstructed `candidate.v1` должен точно совпасть с accepted candidate. Artifact: `patch-proof.v1`.
+
+### Immutable acceptance
+
+После patch proof создаётся `final-acceptance.v2`. Он связывает candidate, revisions, stage artifacts и patch SHA-256 и не перезаписывается.
+
+### Delivery
+
+`delivery-record.v2` фиксирует `keep_worktree` или транзакционный `apply_to_source`.
+
+`apply_to_source` использует:
+
+```text
+delivery lock
+source HEAD/clean recheck
+preimage comparison
+git apply --check
+apply
+exact patch/postimage comparison
+safe rollback при failure
+```
+
+Delivery conflict не делает accepted candidate плохим: source остаётся нетронутым, patch/worktree сохраняются.
+
+Подробности: [Phase 7 Final Gate](PHASE7_FINAL_GATE.md).
+
+## 12. Historical benchmark isolation
+
+Linked Git worktree делит refs/object database с source repository. Hidden exam поэтому использует standalone sanitized repository:
+
+```text
+только baseline tree blobs
+один detached synthetic commit
+нет shared .git metadata
+нет refs с reference solution
+нет unrelated objects
+нет previous attempt artifacts
+```
+
+Held-out запускается только после normal Step 0–6 PASS, требует oracle marker и различает:
+
+```text
+HELDOUT_PASS
+HELDOUT_SEMANTIC_FAIL
+HELDOUT_INFRA_ERROR
+HELDOUT_TIMEOUT
+HELDOUT_MUTATED_CANDIDATE
+```
+
+Hidden failure никогда не возвращается агентам текущего trial.
+
+## 13. Security boundary
+
+Execution Broker задаёт role-specific cwd, scratch, environment и policy и честно сообщает:
+
+```text
+ENFORCED
+ADVISORY
+UNAVAILABLE
+```
+
+`0.8.0a10` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+
+## 14. Что считается завершённым
+
+После Phase 7 весь утверждённый Step 0–7 quality-core подключён к runtime.
+
+Остаются не новые архитектурные фазы, а project/platform capabilities и измерение качества:
+
+```text
+готовые browser/DB/1С/Airflow wrappers
+универсальный restricted OS runner
+Publication Layer commit/push/PR/merge — optional future
+несколько clean historical trials
+```
+
+Первый обязательный интеграционный checkpoint после Windows self-check — `_90`.

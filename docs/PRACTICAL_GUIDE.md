@@ -1,9 +1,9 @@
-# Практическая работа с Slivin Harness 0.8.0a9
+# Практическая работа с Slivin Harness 0.8.0a10
 
 ## Установка и self-check
 
 ```bash
-cd ~/Tools/slivin-harness-080a9-phase6
+cd ~/Tools/slivin-harness-080a10-phase7
 ./py -c "import slivin_harness; print(slivin_harness.__version__)"
 ./py tools/self_check.py
 ```
@@ -11,8 +11,8 @@ cd ~/Tools/slivin-harness-080a9-phase6
 Ожидаемый финал:
 
 ```text
-0.8.0a9
-DOCS_SYNC_PASS harness=0.8.0a9 ...
+0.8.0a10
+DOCS_SYNC_PASS harness=0.8.0a10 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -30,7 +30,7 @@ HARNESS_SELF_CHECK_PASS
 5. Runtime Verification when the active proof requires it
 6A. fresh blind evaluator discovery
 6B. Contract/evidence audit in the same fresh evaluator thread
-7. Final Gate / held-out compatibility layer
+7. Final Gate / patch proof / safe result handoff
 ```
 
 Runtime is not a ritual step. A local-only Verification Plan records:
@@ -194,7 +194,7 @@ Controller-owned evidence is stored in:
 RUN_DIR/controller_private/
 ```
 
-Typical Phase 6 artifacts:
+Typical Phase 7 artifacts:
 
 ```text
 task_contract_*.json
@@ -208,6 +208,12 @@ blind_audit_*.json
 evaluation_*.json
 check_registry.json
 self_verify_receipt_current.json
+quality_gate_reconciliation.json
+patch_proof.json
+final_acceptance.json
+delivery_record.json
+heldout_evidence.json        # benchmark only
+benchmark_isolation.json     # benchmark only
 ```
 
 Public artifacts are sanitized mirrors. Agent scratch under `.harness_tmp` is never
@@ -234,10 +240,15 @@ new CONSUMER/RISK finding
 ```text
 wrong technical model
 → REPLAN_REQUIRED
+→ rejected patch saved outside workspace
+→ candidate reset to recorded baseline
+→ task-specific checks/runtime attempt reset
+→ fresh Planner
+→ new Contract/Verification Plan
+→ fresh Implementer thread
 ```
 
-Clean-worktree semantic replan remains a later hardening item; do not interpret the current
-compatibility replan path as complete anchoring isolation.
+The replacement agents do not see the rejected diff. Ordinary repair still reuses the same Implementer thread because the technical model remains valid.
 
 ## Workflow documentation
 
@@ -246,15 +257,33 @@ compatibility replan path as complete anchoring isolation.
 ./py tools/check_docs_sync.py
 ```
 
-Do not edit `WORKFLOW.md` or `workflow.v5.json` manually.
+Do not edit `WORKFLOW.md` or `workflow.v6.json` manually.
 
-## Honest Phase 6 boundaries
+## Final Gate и result handoff
+
+После `EVALUATION_PASS` Controller:
+
+```text
+reconciles one candidate/revision vector
+→ builds candidate.patch
+→ reconstructs candidate from clean baseline
+→ creates immutable final-acceptance.v2
+→ delivers via keep_worktree or transactional apply_to_source
+```
+
+`apply_to_source` не переключает ветку, не делает commit/push и не перезаписывает dirty source. При конфликте accepted patch и worktree сохраняются, а status становится `RESULT_DELIVERY_BLOCKED`.
+
+Historical benchmark всегда использует standalone sanitized repository и `keep_worktree`; hidden held-out failure не возвращается агентам. Подробнее: [Phase 7 Final Gate](PHASE7_FINAL_GATE.md).
+
+## Honest Phase 7 boundaries
 
 ```text
 no universal browser/PostgreSQL/1C/Airflow wrappers are shipped;
 no universal OS-enforced Controller subprocess sandbox on every platform;
-no typed runtime-tool interface directly exposed to Evaluator Phase A;
-no clean-worktree semantic replan yet;
-Final Gate delivery transaction remains compatibility implementation;
-owner wrappers must avoid emitting secrets in logs/results.
+no automatic commit/push/PR/merge or deployment;
+no production write verification;
+owner wrappers must avoid emitting secrets in logs/results;
+one passing historical trial is not proof of universal reliability.
 ```
+
+После Windows self-check следующая команда проверки качества — полный historical `_90` trial, а не новая фаза разработки.

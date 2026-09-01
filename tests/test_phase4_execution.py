@@ -100,6 +100,29 @@ class CheckRegistryTests(unittest.TestCase):
             self.assertTrue(is_within(private, registry.path))
             self.assertFalse(is_within(workspace, registry.path))
 
+    def test_registry_reset_starts_a_new_empty_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            private = root / "controller_private"
+            workspace.mkdir()
+            (workspace / "test_example.py").write_text("assert True\n", encoding="utf-8")
+            registry = CheckRegistry(
+                private / "check_registry.json",
+                workspace=workspace,
+                trusted_check_ids={"project:smoke"},
+            )
+            registry.register_path("test_example.py")
+            digest_before = registry.digest()
+            revision_before = registry.load()["revision"]
+
+            registry.reset()
+
+            data = registry.load()
+            self.assertEqual(data["checks"], [])
+            self.assertEqual(data["revision"], revision_before + 1)
+            self.assertNotEqual(registry.digest(), digest_before)
+
     def test_registry_rejects_escape_and_arbitrary_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
