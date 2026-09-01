@@ -1,4 +1,4 @@
-# Практическая работа с Slivin Harness 0.8.0a11
+# Практическая работа с Slivin Harness 0.8.0a12
 
 ## Установка и self-check
 
@@ -11,10 +11,23 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемый финал:
 
 ```text
-0.8.0a11
-DOCS_SYNC_PASS harness=0.8.0a11 ...
+0.8.0a12
+DOCS_SYNC_PASS harness=0.8.0a12 ...
 HARNESS_SELF_CHECK_PASS
 ```
+
+## Intake artifact repair
+
+При редком несогласованном ответе normalizer консоль показывает, например:
+
+```text
+INTAKE_ARTIFACT_REPAIR: attempt=1/2 code=TASK_CONTRACT_READY_WITH_AMBIGUITY field=ambiguities/reason
+```
+
+Это не новый Planner и не изменение пользовательского запроса. Тот же read-only Intake-thread
+получает machine validation feedback и обязан заново вернуть полный `task-contract.v1`. Если две
+repair-попытки не помогли, run останавливается как protocol failure, а не продолжает работу с
+сомнительным Task Contract.
 
 ## FULL workflow
 

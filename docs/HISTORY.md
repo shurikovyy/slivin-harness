@@ -1,5 +1,17 @@
 # История и дальнейший маршрут
 
+## Phase 7 Intake stabilization — 0.8.0a12
+
+Первый полный historical `_90` trial подтвердил, что calibration и baseline oracle работают,
+но остановился до Planner: Intake-модель вернула `READY` вместе с полем, которое строгий Controller
+считает признаком direct contradiction. Проблема была не в `_90` и не в hidden grader, а в отсутствии
+protocol-repair петли между schema-valid model output и semantic artifact validator.
+
+`0.8.0a12` уточняет правило противоречия: несовместимость существует только для одного поведения
+при одинаковых условиях. Explicit selection/filter-only и current/stale state — разные conditions.
+Если первый artifact всё же невалиден, тот же Intake-thread получает точный validation feedback и
+до двух раз пересобирает полный объект. Невалидные ответы не получают revision и не передаются Planner.
+
 ## Phase 7 Windows stabilization — 0.8.0a11
 
 Windows self-check версии `0.8.0a10` обнаружил, что Final Gate реконструировал patch в repository с принудительным `core.autocrlf=false`. На source worktree с `core.autocrlf=true` accepted `candidate.v1` содержал CRLF-байты, тогда как reconstruction создавала LF-байты и корректно отклоняла их как другой candidate.

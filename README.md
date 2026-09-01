@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a11 — Phase 7
+# Slivin Harness 0.8.0a12 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Версия **0.8.0a11** завершает Phase 7 поверх принятого фундамента Phase 1–6:
+Версия **0.8.0a12** сохраняет завершённый Phase 7 quality-core и добавляет первый post-trial stabilization fix для Intake:
 
 ```text
 RAW USER REQUEST
@@ -54,6 +54,13 @@ non-goals
 ```
 
 Каждый explicit claim обязан ссылаться на точный непрерывный `source_text` из исходного запроса. Normalizer не читает repository и не придумывает техническое решение.
+
+Условия разных scopes не являются прямым противоречием: explicit selection может разрешать action,
+а filter-only запрещать его; current state может быть valid, а stale state — invalid. Если модель
+возвращает schema-valid, но семантически невалидное сочетание полей, Controller не завершает весь
+run немедленно: тот же Intake-thread получает точный код validation failure и до двух раз возвращает
+полный исправленный artifact. RAW USER REQUEST остаётся неизменным, а authoritative становится
+только валидный финальный `task-contract.v1`.
 
 ### Planner v4
 
@@ -230,7 +237,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a11 ...
+DOCS_SYNC_PASS harness=0.8.0a12 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -244,7 +251,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a11` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a12` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

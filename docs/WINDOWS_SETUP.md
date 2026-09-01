@@ -1,4 +1,4 @@
-# Windows setup для Slivin Harness 0.8.0a11
+# Windows setup для Slivin Harness 0.8.0a12
 
 ## Целевая среда
 
@@ -23,8 +23,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемо:
 
 ```text
-0.8.0a11
-DOCS_SYNC_PASS harness=0.8.0a11 ...
+0.8.0a12
+DOCS_SYNC_PASS harness=0.8.0a12 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -151,6 +151,13 @@ Execution Broker records `ENFORCED`, `ADVISORY` or `UNAVAILABLE`. Where native W
 universal restricted Controller subprocess runner, the Harness does not claim OS-level
 isolation. Runtime wrappers must therefore use scoped credentials and test/read-only endpoints.
 
+## Intake recovery в реальном benchmark
+
+Если Intake сначала спутал требования разных scopes с противоречием, `0.8.0a12` не завершает
+benchmark сразу. Ожидаема строка `INTAKE_ARTIFACT_REPAIR`; после неё должен появиться валидный
+`USER TASK CONTRACT` и запуск продолжится в Planner. Повторяемая ошибка после двух repair-turns
+остаётся fail-closed.
+
 ## Перенос local config
 
 `harness.local.toml` is not shipped. Copy only this file between installations. Do not copy
@@ -158,4 +165,4 @@ isolation. Runtime wrappers must therefore use scoped credentials and test/read-
 
 ## Следующий checkpoint
 
-После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a11` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.
+После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a12` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.

@@ -10,6 +10,7 @@ from slivin_harness.protocol import ArtifactContractError, ensure_exact_keys, re
 from slivin_harness.workflow import TaskContractStatus, enum_values
 
 TASK_CONTRACT_VERSION = "task-contract.v1"
+TASK_CONTRACT_ARTIFACT_REPAIR_ATTEMPTS = 2
 
 _CLAIM_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -65,8 +66,15 @@ intent, acceptance, preservation, forbidden, owner boundaries и non-goals.
 
 READY требует хотя бы один explicit_intent и один explicit_acceptance. Acceptance может
 повторять intent, если короткий запрос сам однозначно описывает желаемый результат.
-NEEDS_USER_DECISION используй только при прямом внутреннем противоречии исходного запроса.
-Не объявляй неоднозначностью вопрос, который может разрешить Planner по repository.
+NEEDS_USER_DECISION используй только при прямом внутреннем противоречии исходного запроса:
+одно и то же поведение при одних и тех же условиях одновременно требуется и запрещается.
+Требования для разных условий или scopes не противоречат друг другу. Например, действие может
+быть разрешено для explicit selection и запрещено для filter-only; current token может быть
+валиден, а stale token — невалиден. Как технически различить эти состояния, определяет Planner.
+
+Для READY обязательно верни ambiguities=[] и reason="". Не записывай туда технические вопросы,
+которые может разрешить Planner по repository. Для NEEDS_USER_DECISION верни непустые ambiguities
+и reason, содержащие только прямое product-semantic противоречие.
 """.strip()
 
 _FIELDS = (
@@ -234,6 +242,34 @@ def validate_task_contract(contract: dict[str, Any]) -> None:
         )
 
 
+def _task_contract_validation_feedback(exc: Exception) -> dict[str, object | None]:
+    if isinstance(exc, ArtifactContractError):
+        return exc.feedback()
+    if isinstance(exc, json.JSONDecodeError):
+        return {
+            "protocol_error": "TASK_CONTRACT_INVALID_JSON",
+            "field": "task_contract_normalized",
+            "message": "Task Contract normalizer returned invalid JSON",
+            "expected": "One complete object matching task-contract.v1",
+            "actual": None,
+        }
+    return {
+        "protocol_error": "TASK_CONTRACT_VALIDATION_ERROR",
+        "field": "task_contract_normalized",
+        "message": str(exc),
+        "expected": "One valid task-contract.v1 artifact",
+        "actual": None,
+    }
+
+
+def _build_task_contract_from_raw_output(*, raw_request: str, raw_output: str) -> dict[str, Any]:
+    normalized = json.loads(raw_output)
+    require_type(normalized, dict, field="task_contract_normalized")
+    contract = build_task_contract(raw_request=raw_request, normalized=normalized)
+    validate_task_contract(contract)
+    return contract
+
+
 def run_task_contract_normalizer(
     codex: CodexAppServer,
     *,
@@ -242,7 +278,11 @@ def run_task_contract_normalizer(
     on_heartbeat: Callable[[dict], None] | None = None,
     on_thread_started: Callable[[dict], None] | None = None,
     timeout: float = 300,
+    max_artifact_repairs: int = TASK_CONTRACT_ARTIFACT_REPAIR_ATTEMPTS,
 ) -> dict[str, Any]:
+    if max_artifact_repairs < 0:
+        raise ValueError("max_artifact_repairs must be non-negative")
+
     thread_id = codex.start_thread(
         cwd=cwd,
         sandbox="read-only",
@@ -258,17 +298,53 @@ def run_task_contract_normalizer(
 
 Не используй repository context и не предлагай решение.
 """.strip()
-    raw = codex.run_turn(
-        thread_id=thread_id,
-        prompt=prompt,
-        output_schema=TASK_CONTRACT_NORMALIZER_SCHEMA,
-        on_heartbeat=on_heartbeat,
-        timeout=timeout,
-    )
-    try:
-        normalized = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Task Contract normalizer returned invalid JSON.\n" + raw) from exc
-    contract = build_task_contract(raw_request=raw_request, normalized=normalized)
-    validate_task_contract(contract)
-    return contract
+
+    for attempt in range(max_artifact_repairs + 1):
+        raw = codex.run_turn(
+            thread_id=thread_id,
+            prompt=prompt,
+            output_schema=TASK_CONTRACT_NORMALIZER_SCHEMA,
+            on_heartbeat=on_heartbeat,
+            timeout=timeout,
+        )
+        try:
+            return _build_task_contract_from_raw_output(
+                raw_request=raw_request,
+                raw_output=raw,
+            )
+        except (json.JSONDecodeError, ArtifactContractError) as exc:
+            if attempt >= max_artifact_repairs:
+                feedback = _task_contract_validation_feedback(exc)
+                raise RuntimeError(
+                    "Task Contract normalizer exhausted artifact-repair attempts: "
+                    + json.dumps(feedback, ensure_ascii=False, default=str)
+                ) from exc
+
+            feedback = _task_contract_validation_feedback(exc)
+            print(
+                "INTAKE_ARTIFACT_REPAIR:",
+                f"attempt={attempt + 1}/{max_artifact_repairs}",
+                f"code={feedback['protocol_error']}",
+                f"field={feedback['field']}",
+            )
+            prompt = f"""
+Controller отклонил предыдущий Task Contract artifact.
+
+VALIDATION FEEDBACK:
+{json.dumps(feedback, ensure_ascii=False, indent=2, default=str)}
+
+Верни ПОЛНЫЙ исправленный объект task-contract.v1, а не diff и не пояснение.
+
+Критические правила:
+- READY: explicit_intent и explicit_acceptance непустые; ambiguities=[]; reason="".
+- NEEDS_USER_DECISION: только прямое противоречие одного поведения при тех же условиях;
+  ambiguities и reason непустые.
+- Разные conditions/scopes не являются противоречием. Разрешённое для explicit selection и
+  запрещённое для filter-only — это два совместимых требования. Current и stale state также
+  являются разными условиями.
+- Техническую неизвестность, которую может разрешить Planner по repository, не помещай в
+  ambiguities.
+- Каждый source_text остаётся точным непрерывным фрагментом RAW USER REQUEST.
+""".strip()
+
+    raise AssertionError("unreachable")

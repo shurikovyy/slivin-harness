@@ -1,6 +1,6 @@
 # Phase 6 — Runtime Verification и двухфазный Blind Evaluator
 
-> Historical Phase 6 document. Phase 7 (`0.8.0a11`) completed clean semantic replan, one-candidate Final Gate, transactional delivery and benchmark isolation. See [Phase 7 Final Gate](PHASE7_FINAL_GATE.md).
+> Historical Phase 6 document. Phase 7 (`0.8.0a12`) completed clean semantic replan, one-candidate Final Gate, transactional delivery and benchmark isolation. See [Phase 7 Final Gate](PHASE7_FINAL_GATE.md).
 
 Phase 6 закрывает два оставшихся quality-gap после локальных Controller checks:
 

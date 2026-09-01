@@ -553,7 +553,7 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
         )
         payload = build_final_acceptance(
             task_id="T",
-            harness_version="0.8.0a11",
+            harness_version="0.8.0a12",
             workflow_version="workflow.v6",
             mode=WorkflowMode.PRODUCTION,
             pipeline_profile="FULL",
@@ -586,7 +586,7 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
         with self.assertRaisesRegex(Phase7Error, "reconstructed candidate"):
             build_final_acceptance(
                 task_id="T",
-                harness_version="0.8.0a11",
+                harness_version="0.8.0a12",
                 workflow_version="workflow.v6",
                 mode=WorkflowMode.PRODUCTION,
                 pipeline_profile="FULL",

@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a11 — Phase 7
+# Модель качества Slivin Harness 0.8.0a12 — Phase 7
 
 ## Основная формула
 
@@ -32,6 +32,11 @@ SELF VERIFY
 ### User Task Contract
 
 `task-contract.v1` сохраняет явно сказанные intent, acceptance, preservation, forbidden и owner boundaries с verbatim source text. Он не доказывает technical root cause.
+
+Разные conditions/scopes не являются direct contradiction. `READY` по-прежнему требует пустые
+`ambiguities` и `reason`; если модель нарушила это или другое semantic правило artifact, Controller
+возвращает validation feedback в тот же Intake-thread и принимает только исправленный полный объект.
+Две bounded repair-попытки относятся к protocol correction, а не к product implementation loop.
 
 ### Planner
 
@@ -248,7 +253,7 @@ historical benchmark не раскрывает другие refs/objects/held-ou
 успешный CI/deployment/production rollout;
 ```
 
-Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a11` первый такой checkpoint — historical `_90`.
+Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a12` первый такой checkpoint — historical `_90`.
 
 ## Версии
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0a12 — Phase 7 stabilization: Intake contract recovery
+
+- Fixed the first real `_90` trial stopping after the calibrated baseline gate because the Intake model returned `READY` together with non-empty `ambiguities` or `reason`.
+- Clarified that requirements for different conditions/scopes are compatible, not contradictory: explicit selection versus filter-only, and current state versus stale state.
+- Added bounded semantic artifact repair on the same read-only Intake thread. Controller sends exact structured validation feedback and accepts only a complete valid `task-contract.v1`.
+- Kept the strict READY invariant: intent/acceptance are required and direct contradictions cannot remain in a READY artifact. Two failed repair turns stop fail-closed.
+- Added regressions for conditional-scope misclassification, bounded repair exhaustion and genuine direct contradictions.
+- Kept serialized contracts unchanged (`task-contract.v1`, `workflow.v6`, `run-state.v1`): this is protocol recovery and instruction hardening, not a schema change.
+
 ## 0.8.0a11 — Phase 7: native Windows patch-reconstruction portability
 
 - Fixed the native Windows Final Gate failure where `candidate.v1` bound CRLF worktree bytes but the private reconstruction repository forcibly used `core.autocrlf=false` and produced LF bytes from the same patch.

@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a11 — Phase 7
+# Архитектура Slivin Harness 0.8.0a12 — Phase 7
 
 ## Назначение
 
-`0.8.0a11` завершает согласованный Step 0–7 quality-core. Phase 7 не добавляет нового reviewer-а: она делает финальную приёмку, patch proof, безопасную доставку и historical benchmark isolation детерминированной ответственностью Controller.
+`0.8.0a12` завершает согласованный Step 0–7 quality-core. Phase 7 не добавляет нового reviewer-а: она делает финальную приёмку, patch proof, безопасную доставку и historical benchmark isolation детерминированной ответственностью Controller.
 
 Machine phase id:
 
@@ -35,7 +35,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a11
+Harness                     0.8.0a12
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -129,6 +129,12 @@ SHA-256 фактических bytes или symlink target
 Изменение candidate, Contract, Verification Plan или runtime environment инвалидирует downstream evidence согласно `workflow.v6`.
 
 ## 3. Step 0 — Intake / Preflight
+
+`task-contract.v1` остаётся строгим: `READY` не может содержать direct contradiction. При этом
+conditional requirements для разных scopes/states не считаются противоречием. Если Intake-модель
+возвращает invalid artifact, Controller даёт точный `ArtifactContractError.feedback()` тому же
+read-only Intake-thread и разрешает максимум две protocol-repair попытки. Невалидный промежуточный
+ответ не получает revision и не становится authoritative artifact.
 
 Controller:
 
@@ -334,7 +340,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a11` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a12` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 
