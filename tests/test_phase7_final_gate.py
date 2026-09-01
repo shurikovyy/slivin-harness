@@ -165,6 +165,50 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
                 private_root=root / "private2",
             )
 
+    def test_patch_reconstruction_preserves_source_checkout_eol_policy(self) -> None:
+        """Regression for native Windows ``core.autocrlf=true`` worktrees.
+
+        The patch contains canonical LF lines, while ``candidate.v1`` binds the
+        exact CRLF bytes visible in the accepted worktree.  Reconstruction must
+        mirror the source checkout policy instead of forcing LF bytes.
+        """
+
+        root = Path(tempfile.mkdtemp(prefix="phase7-autocrlf-"))
+        repo = root / "repo"
+        repo.mkdir()
+        git(repo, "init")
+        git(repo, "config", "user.name", "Test")
+        git(repo, "config", "user.email", "test@example.invalid")
+        git(repo, "config", "core.autocrlf", "true")
+        (repo / "target.txt").write_bytes(b"before\r\n")
+        git(repo, "add", "target.txt")
+        git(repo, "commit", "-m", "baseline")
+        head = git(repo, "rev-parse", "HEAD")
+
+        (repo / "target.txt").write_bytes(b"after\r\n")
+        session = WorkspaceSession(
+            workspace=repo,
+            mode="static",
+            managed=False,
+            base_sha=head,
+        )
+        patch = build_candidate_patch(session)
+        candidate = build_candidate_identity(repo, baseline_sha=head)
+        target_entry = next(
+            item for item in candidate.entries if item["path"] == "target.txt"
+        )
+        self.assertEqual(target_entry["size"], len(b"after\r\n"))
+
+        proof = build_patch_reconstruction_proof(
+            repository=repo,
+            baseline_sha=head,
+            patch=patch,
+            expected_candidate=candidate,
+            private_root=root / "private",
+        )
+        self.assertEqual(proof["status"], "PATCH_RECONSTRUCTION_PASS")
+        self.assertEqual(proof["reconstructed_candidate_id"], candidate.candidate_id)
+
     def test_patch_reconstruction_accepts_identity_candidate(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="phase7-empty-patch-"))
         repo = make_repo(root)
@@ -509,7 +553,7 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
         )
         payload = build_final_acceptance(
             task_id="T",
-            harness_version="0.8.0a10",
+            harness_version="0.8.0a11",
             workflow_version="workflow.v6",
             mode=WorkflowMode.PRODUCTION,
             pipeline_profile="FULL",
@@ -542,7 +586,7 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
         with self.assertRaisesRegex(Phase7Error, "reconstructed candidate"):
             build_final_acceptance(
                 task_id="T",
-                harness_version="0.8.0a10",
+                harness_version="0.8.0a11",
                 workflow_version="workflow.v6",
                 mode=WorkflowMode.PRODUCTION,
                 pipeline_profile="FULL",

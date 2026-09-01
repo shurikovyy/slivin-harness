@@ -1,6 +1,6 @@
 # Phase 5 — Contract expansion and reproducible project runtime
 
-> Historical Phase 5 document. Phase 6 (`0.8.0a9`) implemented runtime/evaluator, and Phase 7 (`0.8.0a10`) completed semantic replan, Final Gate and benchmark isolation. See [Phase 6 runtime/evaluator](PHASE6_RUNTIME_EVALUATOR.md) and [Phase 7 Final Gate](PHASE7_FINAL_GATE.md).
+> Historical Phase 5 document. Phase 6 (`0.8.0a9`) implemented runtime/evaluator, and Phase 7 (`0.8.0a11`) completed semantic replan, Final Gate and benchmark isolation. See [Phase 6 runtime/evaluator](PHASE6_RUNTIME_EVALUATOR.md) and [Phase 7 Final Gate](PHASE7_FINAL_GATE.md).
 
 Phase 5 closes two gaps left intentionally open after Phase 4:
 

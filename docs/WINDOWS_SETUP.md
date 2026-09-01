@@ -1,4 +1,4 @@
-# Windows setup для Slivin Harness 0.8.0a10
+# Windows setup для Slivin Harness 0.8.0a11
 
 ## Целевая среда
 
@@ -15,7 +15,7 @@ owner-provided runtime wrappers when runtime proof is required
 ## Проверка release
 
 ```bash
-cd ~/Tools/slivin-harness-080a10-phase7
+cd ~/Tools/slivin-harness-080a11-phase7
 ./py -c "import slivin_harness; print(slivin_harness.__version__)"
 ./py tools/self_check.py
 ```
@@ -23,8 +23,8 @@ cd ~/Tools/slivin-harness-080a10-phase7
 Ожидаемо:
 
 ```text
-0.8.0a10
-DOCS_SYNC_PASS harness=0.8.0a10 ...
+0.8.0a11
+DOCS_SYNC_PASS harness=0.8.0a11 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -127,6 +127,8 @@ must remain unchanged.
 
 После Evaluator PASS Controller строит patch proof и `final-acceptance.v2`. Для `apply_to_source` используется короткий cross-platform delivery lock в Git common-dir. Controller повторно проверяет source HEAD, clean state и preimages до apply, а затем exact patch/postimages.
 
+Patch reconstruction не принуждает LF. Она читает effective `core.autocrlf`/`core.eol` и связанные безопасные checkout settings source repository до создания verification checkout. Поэтому accepted CRLF worktree и reconstructed worktree имеют одинаковые bytes; arbitrary source Git configuration при этом не копируется.
+
 Если source изменён пользователем или IDE, Harness не перезаписывает его:
 
 ```text
@@ -156,4 +158,4 @@ isolation. Runtime wrappers must therefore use scoped credentials and test/read-
 
 ## Следующий checkpoint
 
-После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a10` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.
+После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a11` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.

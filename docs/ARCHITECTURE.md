@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a10 — Phase 7
+# Архитектура Slivin Harness 0.8.0a11 — Phase 7
 
 ## Назначение
 
-`0.8.0a10` завершает согласованный Step 0–7 quality-core. Phase 7 не добавляет нового reviewer-а: она делает финальную приёмку, patch proof, безопасную доставку и historical benchmark isolation детерминированной ответственностью Controller.
+`0.8.0a11` завершает согласованный Step 0–7 quality-core. Phase 7 не добавляет нового reviewer-а: она делает финальную приёмку, patch proof, безопасную доставку и historical benchmark isolation детерминированной ответственностью Controller.
 
 Machine phase id:
 
@@ -35,7 +35,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a10
+Harness                     0.8.0a11
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -273,6 +273,8 @@ Final Gate выполняет четыре независимых действи
 
 `candidate.patch` применяется к чистой verification-копии recorded baseline. Reconstructed `candidate.v1` должен точно совпасть с accepted candidate. Artifact: `patch-proof.v1`.
 
+Так как `candidate.v1` учитывает реальные worktree bytes, Controller перед checkout зеркалирует узкий allowlist effective Git conversion settings source repository (`core.autocrlf`, `core.eol`, `core.safecrlf`, `core.filemode`, `core.symlinks`). Это сохраняет CRLF/LF semantics native Windows без копирования arbitrary Git configuration в private proof repository.
+
 ### Immutable acceptance
 
 После patch proof создаётся `final-acceptance.v2`. Он связывает candidate, revisions, stage artifacts и patch SHA-256 и не перезаписывается.
@@ -332,7 +334,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a10` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a11` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 

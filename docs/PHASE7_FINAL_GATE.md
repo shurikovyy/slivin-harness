@@ -115,6 +115,18 @@ reconstructed candidate_id
 final candidate_id
 ```
 
+`candidate.v1` связывает фактические bytes worktree. Поэтому private proof-repository до checkout baseline зеркалирует только ограниченный allowlist effective Git worktree-conversion settings исходного repository:
+
+```text
+core.autocrlf
+core.eol
+core.safecrlf
+core.filemode
+core.symlinks
+```
+
+Это необходимо на native Windows: patch хранит канонические LF-строки, но accepted worktree при `core.autocrlf=true` содержит CRLF. Принудительный `core.autocrlf=false` реконструировал бы другой byte-level candidate. Hooks, aliases, transport/credential settings и arbitrary filter configuration в proof-repository не копируются.
+
 Proof сохраняется как `patch-proof.v1`.
 
 Если production-задача корректно завершается без изменения файлов, пустой patch
@@ -272,7 +284,7 @@ Execution Broker продолжает честно различать `ENFORCED`
 
 ## 9. Следующий checkpoint
 
-После Windows `HARNESS_SELF_CHECK_PASS` версии `0.8.0a10` новых архитектурных фаз quality-core не требуется.
+После Windows `HARNESS_SELF_CHECK_PASS` версии `0.8.0a11` новых архитектурных фаз quality-core не требуется.
 
 Следующий шаг:
 

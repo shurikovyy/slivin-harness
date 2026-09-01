@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a10 — Phase 7
+# Модель качества Slivin Harness 0.8.0a11 — Phase 7
 
 ## Основная формула
 
@@ -171,6 +171,8 @@ baseline + candidate.patch
 → exact equality with accepted candidate.v1
 ```
 
+Reconstruction использует тот же effective Git worktree conversion policy, что и source candidate, для ограниченного списка content/mode settings. Поэтому exact equality остаётся строгой и одновременно переносимой между Windows checkout с CRLF и POSIX checkout с LF.
+
 Artifact: `patch-proof.v1`.
 
 ### Immutable acceptance
@@ -246,7 +248,7 @@ historical benchmark не раскрывает другие refs/objects/held-ou
 успешный CI/deployment/production rollout;
 ```
 
-Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a10` первый такой checkpoint — historical `_90`.
+Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a11` первый такой checkpoint — historical `_90`.
 
 ## Версии
 

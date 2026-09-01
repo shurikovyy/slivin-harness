@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0a11 — Phase 7: native Windows patch-reconstruction portability
+
+- Fixed the native Windows Final Gate failure where `candidate.v1` bound CRLF worktree bytes but the private reconstruction repository forcibly used `core.autocrlf=false` and produced LF bytes from the same patch.
+- Patch reconstruction now mirrors a narrow allowlist of the source repository's effective checkout-conversion settings (`core.autocrlf`, `core.eol`, `core.safecrlf`, `core.filemode`, and `core.symlinks`) before baseline checkout and patch application.
+- Arbitrary Git configuration, hooks, aliases, transport commands, credentials, and custom filters are deliberately not copied into the Controller-owned proof repository.
+- Added a platform-independent `core.autocrlf=true` regression that reproduces the Windows CRLF/LF identity mismatch and still proves binary add, deletion, and text modification.
+- Improved reconstruction mismatch diagnostics with the affected candidate paths and the mirrored checkout policy, without logging candidate contents.
+- Kept serialized contracts unchanged (`phase7-final-gate.v1`, `patch-proof.v1`, `candidate.v1`, `workflow.v6`): this is a cross-platform correctness fix, not a protocol-schema change.
+
 ## 0.8.0a10 — Phase 7: Final Gate, safe delivery and benchmark isolation
 
 - Implemented `phase7-final-gate.v1`: Step 3–6 evidence must belong to one current candidate/revision vector before acceptance.

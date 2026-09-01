@@ -1,5 +1,11 @@
 # История и дальнейший маршрут
 
+## Phase 7 Windows stabilization — 0.8.0a11
+
+Windows self-check версии `0.8.0a10` обнаружил, что Final Gate реконструировал patch в repository с принудительным `core.autocrlf=false`. На source worktree с `core.autocrlf=true` accepted `candidate.v1` содержал CRLF-байты, тогда как reconstruction создавала LF-байты и корректно отклоняла их как другой candidate.
+
+`0.8.0a11` сохраняет строгий exact-candidate proof, но перед checkout baseline зеркалирует ограниченный набор effective Git worktree-conversion settings исходного repository. Произвольные Git-команды, hooks, aliases, credentials и filter-конфигурация не переносятся. Добавлен независимый CRLF regression, воспроизводимый и на POSIX-среде.
+
 ## Phase 7 — 0.8.0a10
 
 Phase 7 завершила Step 0–7 quality-core. Final Gate теперь механически связывает Step 3–6 с одним candidate и текущим revision vector, проверяет `candidate.patch` реконструкцией с recorded baseline, создаёт immutable `final-acceptance.v2` и отделяет качество candidate от доставки через `delivery-record.v2`.

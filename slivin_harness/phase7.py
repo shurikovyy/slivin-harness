@@ -32,6 +32,23 @@ HELDOUT_EVIDENCE_VERSION = "heldout-evidence.v2"
 BENCHMARK_ISOLATION_VERSION = "benchmark-isolation.v1"
 
 
+# ``candidate.v1`` intentionally binds the exact bytes visible in the task
+# worktree.  Text bytes produced by a checkout can depend on Git's effective
+# worktree-conversion policy (most visibly ``core.autocrlf`` on native
+# Windows).  A reconstruction repository must therefore use the same policy as
+# the accepted candidate repository before it checks out the baseline and
+# applies the patch.  Forcing one universal value (the old implementation used
+# ``core.autocrlf=false``) proves a *different* worktree on machines whose
+# source repository uses CRLF checkout semantics.
+_PATCH_RECONSTRUCTION_CONFIG_KEYS = (
+    "core.autocrlf",
+    "core.eol",
+    "core.safecrlf",
+    "core.filemode",
+    "core.symlinks",
+)
+
+
 class Phase7Error(RuntimeError):
     """The final quality/delivery contract is inconsistent or unsafe."""
 
@@ -128,6 +145,43 @@ def _run_git(
             f"git {' '.join(args)} failed in {repo}:\n{str(stderr).strip()}"
         )
     return result
+
+
+def _copy_patch_reconstruction_checkout_policy(
+    *,
+    source_repo: Path,
+    proof_repo: Path,
+) -> dict[str, str]:
+    """Mirror Git settings that materially shape working-tree bytes/modes.
+
+    ``git diff`` records canonical patch content, while ``candidate.v1`` hashes
+    the bytes present in the accepted worktree.  On Windows, for example, a
+    repository with ``core.autocrlf=true`` can legitimately contain CRLF bytes
+    even though the patch stores LF lines.  Mirroring the effective source
+    policy makes checkout/apply reconstruct the same observable worktree.
+
+    Only a small allow-list of content/mode conversion settings is copied.  We
+    deliberately do not clone arbitrary repository configuration (hooks,
+    aliases, transport commands, filters, credentials, and so on) into a
+    Controller-owned proof repository.
+    """
+
+    copied: dict[str, str] = {}
+    for key in _PATCH_RECONSTRUCTION_CONFIG_KEYS:
+        result = _run_git(source_repo, "config", "--get", key, check=False)
+        if result.returncode != 0:
+            continue
+        value = str(result.stdout).strip()
+        if not value:
+            continue
+        _run_git(proof_repo, "config", "--local", key, value)
+        copied[key] = value
+
+    # Keep long-path support enabled for the private proof repository even if
+    # the source does not define it explicitly.  This setting does not alter
+    # candidate content and prevents avoidable Windows path failures.
+    _run_git(proof_repo, "config", "--local", "core.longpaths", "true", check=False)
+    return copied
 
 
 def _status_porcelain(repo: Path) -> str:
@@ -281,8 +335,10 @@ def build_patch_reconstruction_proof(
     proof_repo = temp_root / "repo"
     try:
         _run_git(temp_root, "init", str(proof_repo))
-        _run_git(proof_repo, "config", "core.autocrlf", "false")
-        _run_git(proof_repo, "config", "core.longpaths", "true", check=False)
+        checkout_policy = _copy_patch_reconstruction_checkout_policy(
+            source_repo=repository,
+            proof_repo=proof_repo,
+        )
         _run_git(
             proof_repo,
             "fetch",
@@ -315,8 +371,33 @@ def build_patch_reconstruction_proof(
             baseline_sha=baseline_sha,
         )
         if reconstructed.candidate_id != expected_candidate.candidate_id:
+            expected_entries = {
+                item.get("path"): {
+                    "state": item.get("state"),
+                    "mode": item.get("mode"),
+                    "sha256": item.get("sha256"),
+                    "size": item.get("size"),
+                }
+                for item in expected_candidate.entries
+            }
+            reconstructed_entries = {
+                item.get("path"): {
+                    "state": item.get("state"),
+                    "mode": item.get("mode"),
+                    "sha256": item.get("sha256"),
+                    "size": item.get("size"),
+                }
+                for item in reconstructed.entries
+            }
+            mismatched_paths = sorted(
+                path
+                for path in set(expected_entries) | set(reconstructed_entries)
+                if expected_entries.get(path) != reconstructed_entries.get(path)
+            )
             raise Phase7Error(
                 "Patch reconstruction produced a candidate different from the accepted candidate"
+                f"; mismatched_paths={mismatched_paths!r}; "
+                f"checkout_policy={checkout_policy!r}"
             )
         if reconstructed.changed_paths != expected_candidate.changed_paths:
             raise Phase7Error("Patch reconstruction changed-path set does not match")

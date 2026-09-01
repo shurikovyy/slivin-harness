@@ -1,9 +1,9 @@
-# Практическая работа с Slivin Harness 0.8.0a10
+# Практическая работа с Slivin Harness 0.8.0a11
 
 ## Установка и self-check
 
 ```bash
-cd ~/Tools/slivin-harness-080a10-phase7
+cd ~/Tools/slivin-harness-080a11-phase7
 ./py -c "import slivin_harness; print(slivin_harness.__version__)"
 ./py tools/self_check.py
 ```
@@ -11,8 +11,8 @@ cd ~/Tools/slivin-harness-080a10-phase7
 Ожидаемый финал:
 
 ```text
-0.8.0a10
-DOCS_SYNC_PASS harness=0.8.0a10 ...
+0.8.0a11
+DOCS_SYNC_PASS harness=0.8.0a11 ...
 HARNESS_SELF_CHECK_PASS
 ```
 

@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a10 — Phase 7
+# Slivin Harness 0.8.0a11 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Версия **0.8.0a10** завершает Phase 7 поверх принятого фундамента Phase 1–6:
+Версия **0.8.0a11** завершает Phase 7 поверх принятого фундамента Phase 1–6:
 
 ```text
 RAW USER REQUEST
@@ -194,6 +194,8 @@ Controller принимает результат только если Step 3–
 
 `candidate.patch` применяется в отдельной чистой verification-копии recorded baseline. Полученный `candidate_id` обязан побайтово совпасть с уже проверенным candidate. Только после этого создаётся immutable `final-acceptance.v2`.
 
+Private reconstruction repository зеркалирует только effective Git settings, которые определяют worktree bytes/mode (`core.autocrlf`, `core.eol`, `core.safecrlf`, `core.filemode`, `core.symlinks`). Это сохраняет строгий CRLF/LF byte-level proof на native Windows, не перенося arbitrary hooks, aliases, transports или credentials.
+
 ### Безопасная доставка
 
 `keep_worktree` сохраняет доказанный result без изменения source. `apply_to_source` выполняется под коротким delivery lock: повторно проверяются source HEAD/clean state и preimages, затем `git apply --check`, apply, exact diff/postimage comparison. При конфликте source не перезаписывается, а accepted patch сохраняется.
@@ -228,7 +230,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a10 ...
+DOCS_SYNC_PASS harness=0.8.0a11 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -242,7 +244,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a10` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a11` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;
