@@ -87,7 +87,15 @@ result_mode = "keep_worktree"
 project_python = "{project_root}/.venv/Scripts/python.exe"
 node = "C:/Users/<user>/Tools/node/node.exe"
 jest = "{project_root}/node_modules/jest/bin/jest.js"
+
+[projects.matrix_baseline.workspace]
+copy_untracked = ["node_modules"]
 ```
+
+`node_modules` должен уже существовать в source `_90`. Controller физически
+копирует этот dependency tree в standalone historical workspace и rebind-ит
+source-local `jest` только на эту копию. `npm install` и `npm ci` в worktree
+не выполняются; `.worktreeinclude` для `node_modules` не используется.
 
 Если baseline ещё не Git repository:
 

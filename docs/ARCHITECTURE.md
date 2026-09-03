@@ -124,7 +124,9 @@ Git-visible mode
 SHA-256 фактических bytes или symlink target
 ```
 
-`.venv` и `.harness_tmp` не входят в candidate.
+`.venv`, `.harness_tmp` и Controller-excluded runtime projections не входят в
+candidate. Они не попадают в `candidate.patch`, delivery или Phase 7 patch
+reconstruction.
 
 Изменение candidate, Contract, Verification Plan или runtime environment инвалидирует downstream evidence согласно `workflow.v6`.
 
@@ -143,7 +145,7 @@ Controller:
 создаёт task-contract.v1
 фиксирует source baseline
 создаёт managed worktree
-копирует разрешённые .worktreeinclude files
+копирует разрешённые .worktreeinclude files и local runtime projections
 создаёт worktree-local project runtime
 проверяет toolchain/capabilities
 ```
@@ -329,6 +331,35 @@ HELDOUT_MUTATED_CANDIDATE
 ```
 
 Hidden failure никогда не возвращается агентам текущего trial.
+
+### Source-owned runtime projection
+
+Локальный project profile может явно объявить directory в
+`[projects.<name>.workspace] copy_untracked`, например `node_modules`.
+Controller валидирует repo-relative путь, проверяет source tree на
+symlink/junction/reparse objects и создаёт независимую physical copy в managed
+workspace. `WorkspaceSession.runtime_projections` — единственная authority для
+того, что этот root действительно разрешён, скопирован Controller-ом и
+runtime-only; существование одноимённого workspace path само по себе ничего не
+разрешает.
+
+В historical mode absolute toolchain path внутри source repository сначала
+превращается в canonical repo-relative path. Он rebind-ится только если лежит
+под наиболее узким authorized projection, ожидаемый destination находится в
+canonical workspace, имеет ожидаемый тип и ни один его ancestor не является
+symlink/junction/reparse alias. Все остальные source-local paths удаляются;
+external absolute paths и relative commands сохраняют прежнюю семантику.
+Публичный `benchmark_toolchain_sanitization.json` v2 фиксирует только relative
+destination rebind-а, без source absolute path.
+
+Projection не использует symlink, junction или hardlink, а destination entry
+проверяется как не совпадающий физически с source entry. Поэтому запись в
+workspace copy не меняет source dependency files. Большие projected directories
+не проходят recursive HMAC на каждом workflow boundary: это избегает скрытого
+O(N) обхода `node_modules`. Они всё равно Git-excluded, disposable вместе с
+managed workspace и не могут влиять на candidate/patch; отдельное
+content-integrity восстановление полного dependency tree остаётся будущим
+улучшением.
 
 ## 13. Security boundary
 

@@ -122,9 +122,14 @@ timeout_seconds = 30
         with_runtime_discovery: bool = False,
         with_replan: bool = False,
         benchmark_fail: bool = False,
+        projected_jest: bool = False,
     ) -> tuple[int, Path, str]:
         root = Path(tempfile.mkdtemp(prefix="slivin-main-workflow-"))
         repo = self.make_repo(root)
+        if projected_jest:
+            jest = repo / "node_modules" / "jest" / "bin" / "jest.js"
+            jest.parent.mkdir(parents=True)
+            jest.write_text("fake jest\n", encoding="utf-8")
         manifest = self.write_manifest(
             root,
             repo,
@@ -260,6 +265,16 @@ timeout_seconds = 30
                     "repo": str(repo),
                     "base_ref": "HEAD",
                     "result_mode": "keep_worktree",
+                    "toolchain": (
+                        {"jest": "{project_root}/node_modules/jest/bin/jest.js"}
+                        if projected_jest
+                        else {}
+                    ),
+                    "workspace": (
+                        {"copy_untracked": ["node_modules"]}
+                        if projected_jest
+                        else {}
+                    ),
                 }
             },
             "workspace": {"root": str(root / "workspaces")},
@@ -363,6 +378,27 @@ timeout_seconds = 30
         self.assertEqual(heldout["status"], "HELDOUT_PASS")
         isolation = json.loads((run_root / "benchmark_isolation.json").read_text(encoding="utf-8"))
         self.assertFalse(isolation["shared_git_metadata"])
+
+    def test_historical_workflow_records_projected_jest_rebind_without_source_path(self) -> None:
+        result, run_root, output = self.run_case(benchmark=True, projected_jest=True)
+        self.assertEqual(result, 0, output)
+        sanitization = json.loads(
+            (run_root / "benchmark_toolchain_sanitization.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(sanitization["schema_version"], "benchmark-toolchain-sanitization.v2")
+        self.assertEqual(
+            sanitization["rebound_to_workspace"],
+            {"jest": "node_modules/jest/bin/jest.js"},
+        )
+        self.assertEqual(sanitization["retained_keys"], [])
+        self.assertEqual(sanitization["removed"], {})
+        self.assertNotIn(str(run_root.parent / "repo"), json.dumps(sanitization))
+        self.assertFalse(sanitization["fresh_dependency_install_performed"])
+
+    def test_production_workflow_does_not_emit_historical_toolchain_sanitization(self) -> None:
+        result, run_root, output = self.run_case(benchmark=False, projected_jest=True)
+        self.assertEqual(result, 0, output)
+        self.assertFalse((run_root / "benchmark_toolchain_sanitization.json").exists())
 
     def test_benchmark_semantic_fail_stops_without_final_acceptance(self) -> None:
         result, run_root, output = self.run_case(

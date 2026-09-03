@@ -239,6 +239,27 @@ Submodules и небезопасные native-Windows symlink fixtures блок�
 
 Benchmark всегда использует `keep_worktree`.
 
+### Authorized source-owned toolchain rebind
+
+Для historical project local profile может объявить `copy_untracked =
+["node_modules"]`. Controller физически копирует directory в managed
+workspace; это не dependency installation и не изменение baseline.
+
+Перед capability/check execution `sanitize_benchmark_toolchain()` применяет
+три ветви к каждой entry: absolute source-local path rebind-ится на workspace
+copy только по Controller-authoritative projection provenance; source-local
+path без корректной projection удаляется fail-closed; relative command и
+absolute external path сохраняются. Rebind проверяет canonical containment,
+safe repo-relative path, наиболее узкий projection root, существование и тип
+destination, отсутствие symlink/junction/reparse aliases в ancestor-ах и
+отсутствие physical alias с source entry.
+
+`benchmark_toolchain_sanitization.json` имеет schema
+`benchmark-toolchain-sanitization.v2`: `removed`, внешние `retained_keys` и
+`rebound_to_workspace` разделены. Последнее содержит только repo-relative
+destination, а `fresh_dependency_install_performed` всегда `false` для этой
+projection. Direct source absolute paths в public artifact не записываются.
+
 ## 7. Held-out — экзамен, а не repair tool
 
 Held-out запускается только после normal pipeline PASS и никогда не передаётся Planner, Implementer или Evaluator.

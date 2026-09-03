@@ -8,7 +8,7 @@ import subprocess
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 WORKTREE_EXCLUDES = [
     ".harness_tmp/",
@@ -33,6 +33,24 @@ SENSITIVE_NAMES = {
 SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
 
 
+@dataclass(frozen=True)
+class RuntimeProjection:
+    """Controller-authoritative record of an independently copied runtime root.
+
+    This record exists only for a directory explicitly selected by the local
+    project profile.  Its destination is not inferred from a coincidental
+    workspace path: Phase 7 uses this provenance before it can rebind a
+    source-owned toolchain path in a historical benchmark.
+    """
+
+    relative_path: str
+    source_kind: str
+    destination: Path
+    is_directory: bool
+    copy_mode: str
+    runtime_only: bool
+
+
 @dataclass
 class WorkspaceSession:
     workspace: Path
@@ -45,6 +63,7 @@ class WorkspaceSession:
     base_sha: str | None = None
     result_mode: str = "keep_worktree"
     exposed_paths: tuple[str, ...] = ()
+    runtime_projections: tuple[RuntimeProjection, ...] = ()
     benchmark_isolated: bool = False
 
 
@@ -84,8 +103,19 @@ def _safe_path_segment(raw: str, *, fallback: str, max_length: int = 40) -> str:
 
 
 def _safe_relative_path(raw: str) -> Path:
-    rel = Path(raw.replace("\\", "/"))
-    if not raw.strip() or rel.is_absolute() or ".." in rel.parts:
+    value = str(raw)
+    normalized = value.replace("\\", "/")
+    windows = PureWindowsPath(value)
+    rel = Path(normalized)
+    if (
+        not value.strip()
+        or "\x00" in value
+        or normalized.startswith("/")
+        or bool(windows.drive or windows.root)
+        or rel.is_absolute()
+        or ".." in rel.parts
+        or str(rel) in {"", "."}
+    ):
         raise RuntimeError(f"Workspace exposure path must be repo-relative: {raw}")
     return rel
 
@@ -183,14 +213,30 @@ def assert_safe_runtime_path(
     read or write through it.
     """
 
-    root = Path(root).resolve(strict=False)
-    path = Path(path)
+    raw_root = Path(root)
+    raw_path = Path(path)
+    root = raw_root.resolve(strict=False)
+    candidate = raw_path.resolve(strict=False)
+    if not _canonical_is_within(root, candidate):
+        raise RuntimeError(f"Runtime path is outside its root: {path}")
     try:
-        rel = path.absolute().relative_to(root.absolute())
-    except ValueError as exc:
-        raise RuntimeError(f"Runtime path is outside its root: {path}") from exc
+        # Preserve the caller's path components when it supplied a root/path
+        # pair using the same spelling: this detects an alias that resolves
+        # *inside* the root as well as one that escapes it.  Native Windows may
+        # spell an equivalent root through its 8.3 alias, so fall back to a
+        # canonical relative path only when lexical derivation is impossible.
+        rel = raw_path.absolute().relative_to(raw_root.absolute())
+        traversal_root = raw_root
+    except ValueError:
+        try:
+            rel = Path(os.path.relpath(str(candidate), str(root)))
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"Runtime path is outside its root: {path}") from exc
+        traversal_root = root
+    if ".." in rel.parts:
+        raise RuntimeError(f"Runtime path is outside its root: {path}")
     parts = rel.parts if include_leaf else rel.parts[:-1]
-    current = root
+    current = traversal_root
     for part in parts:
         current = current / part
         if current.is_symlink() or _is_reparse_point(current):
@@ -214,6 +260,32 @@ def _assert_regular_tree(path: Path) -> None:
             )
         if item.exists() and not (item.is_file() or item.is_dir()):
             raise RuntimeError(f"Unsupported exposed filesystem object: {item}")
+
+
+def _assert_independent_copy(source: Path, target: Path, *, relative: Path) -> None:
+    """Verify the completed copy did not retain any source hardlink aliases."""
+
+    try:
+        if os.path.samefile(source, target):
+            raise RuntimeError(
+                "Refusing runtime projection that aliases the source path: "
+                + relative.as_posix()
+            )
+        if not source.is_dir():
+            return
+        for source_item in source.rglob("*"):
+            if not source_item.is_file():
+                continue
+            target_item = target / source_item.relative_to(source)
+            if not target_item.is_file() or os.path.samefile(source_item, target_item):
+                raise RuntimeError(
+                    "Refusing runtime projection with source hardlink alias: "
+                    + relative.as_posix()
+                )
+    except OSError as exc:
+        raise RuntimeError(
+            "Unable to verify independent runtime copy: " + relative.as_posix()
+        ) from exc
 
 
 def _make_worktree_excludes(workspace: Path, exposed_paths: list[str]) -> Path:
@@ -264,6 +336,7 @@ def _copy_exposed_paths(
     raw_paths: list[str],
     *,
     allow_sensitive_copy: bool,
+    missing_is_error: bool = False,
 ) -> tuple[str, ...]:
     copied: list[str] = []
     for raw in raw_paths:
@@ -271,6 +344,10 @@ def _copy_exposed_paths(
         source = source_repo / rel
         target = workspace / rel
         if not source.exists() and not source.is_symlink():
+            if missing_is_error:
+                raise RuntimeError(
+                    "Configured workspace runtime path does not exist: " + rel.as_posix()
+                )
             print("WORKSPACE_EXPOSE_MISSING:", rel.as_posix())
             continue
         assert_safe_runtime_path(source_repo, source, include_leaf=True)
@@ -305,6 +382,9 @@ def _copy_exposed_paths(
             shutil.copytree(source, target, symlinks=False)
         else:
             shutil.copy2(source, target, follow_symlinks=False)
+        _assert_regular_tree(target)
+        assert_safe_runtime_path(workspace, target, include_leaf=True)
+        _assert_independent_copy(source, target, relative=rel)
         copied.append(rel.as_posix())
         print("WORKSPACE_EXPOSE_COPIED:", rel.as_posix())
     return tuple(copied)
@@ -335,6 +415,11 @@ def _worktreeinclude_paths(source_repo: Path) -> tuple[str, ...]:
     selected: list[str] = []
     for raw in values:
         rel = _safe_relative_path(raw)
+        if rel.parts and rel.parts[0].casefold() == "node_modules":
+            raise RuntimeError(
+                ".worktreeinclude must not expose node_modules; use the local "
+                "workspace.copy_untracked runtime projection instead"
+            )
         source = source_repo / rel
         if not source.exists() and not source.is_symlink():
             continue
@@ -538,6 +623,9 @@ def prepare_workspace_session(
     if not isinstance(raw_exposed, list) or not all(isinstance(item, str) for item in raw_exposed):
         raise RuntimeError("copy_untracked must be an array of strings")
     configured_exposed = list(raw_exposed)
+    configured_relative = [
+        _safe_relative_path(item).as_posix() for item in configured_exposed
+    ]
     allow_sensitive_copy = bool(workspace_cfg.get("allow_sensitive_copy", False))
     repository_included = list(_worktreeinclude_paths(source_repo))
 
@@ -599,10 +687,27 @@ def prepare_workspace_session(
         manual_copied = _copy_exposed_paths(
             source_repo,
             workspace,
-            [item for item in configured_exposed if _safe_relative_path(item).as_posix() not in set(canonical_copied)],
+            [
+                item
+                for item, rel in zip(configured_exposed, configured_relative)
+                if rel not in set(canonical_copied)
+            ],
             allow_sensitive_copy=allow_sensitive_copy,
+            missing_is_error=True,
         )
         copied = tuple(dict.fromkeys([*canonical_copied, *manual_copied]))
+        runtime_projections = tuple(
+            RuntimeProjection(
+                relative_path=rel,
+                source_kind="workspace.copy_untracked",
+                destination=workspace / rel,
+                is_directory=True,
+                copy_mode="physical_copy",
+                runtime_only=True,
+            )
+            for rel in manual_copied
+            if (workspace / rel).is_dir()
+        )
         excludes = _make_worktree_excludes(workspace, list(copied))
         _run_git(workspace, "config", "--worktree", "core.excludesFile", str(excludes))
         status_text = _status_porcelain(workspace)
@@ -628,6 +733,7 @@ def prepare_workspace_session(
         base_sha=workspace_base_sha,
         result_mode=result_mode,
         exposed_paths=copied,
+        runtime_projections=runtime_projections,
         benchmark_isolated=benchmark_isolated,
     )
 

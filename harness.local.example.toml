@@ -57,8 +57,11 @@ enabled = false
 
 [projects.example.workspace]
 # Prefer repository-owned .worktreeinclude for ignored runtime files such as .env.
-# copy_untracked remains a machine-local override.
-copy_untracked = []
+# copy_untracked remains a machine-local override. A source-owned dependency
+# tree for a historical benchmark must be declared here, never in the tracked
+# .worktreeinclude baseline. Harness physically copies it; it never runs npm
+# install/npm ci in the managed workspace.
+copy_untracked = ["node_modules"]
 
 # Required only when copy_untracked intentionally includes .env, *.pem,
 # credentials.json or another sensitive path. The agent can read it.
@@ -74,3 +77,8 @@ require_clean_source = true
 project_python = "{project_root}/.venv/Scripts/python.exe"
 node = "C:/Users/<user>/Tools/node/node.exe"
 jest = "{project_root}/node_modules/jest/bin/jest.js"
+
+[projects.matrix_baseline.workspace]
+# Rebind source-local Jest to this Controller-copied runtime tree in a
+# standalone historical workspace. The source node_modules must already exist.
+copy_untracked = ["node_modules"]

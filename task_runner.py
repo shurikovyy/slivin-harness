@@ -560,10 +560,18 @@ def exposed_runtime_file_snapshot(
     *,
     control_plane: ControllerPlane,
 ) -> dict[str, str]:
-    """Fingerprint runtime-only files with a Controller-private keyed HMAC."""
+    """Fingerprint small runtime-only files with a Controller-private keyed HMAC.
+
+    A projected dependency directory is already checked during its Controller
+    physical copy and must not trigger a full recursive hash on every workflow
+    boundary.  It remains Git-excluded and is never candidate material.
+    """
 
     result: dict[str, str] = {}
+    projected = {item.relative_path.replace("\\", "/") for item in session.runtime_projections}
     for raw in session.exposed_paths:
+        if raw.replace("\\", "/") in projected:
+            continue
         root = session.workspace / raw
         if root.is_file():
             rel = raw.replace("\\", "/")
@@ -590,7 +598,10 @@ def restore_exposed_runtime_files(session: WorkspaceSession) -> None:
 
     if session.source_repo is None:
         return
+    projected = {item.relative_path.replace("\\", "/") for item in session.runtime_projections}
     for raw in session.exposed_paths:
+        if raw.replace("\\", "/") in projected:
+            continue
         source = session.source_repo / raw
         target = session.workspace / raw
         assert_safe_runtime_path(session.source_repo, source, include_leaf=True)
@@ -1988,18 +1999,28 @@ def main(argv: list[str] | None = None) -> int:
             toolchain["project_python"] = runtime_state.project_python
         benchmark_toolchain_removed: dict[str, str] = {}
         if workflow_mode == WorkflowMode.HISTORICAL_BENCHMARK:
-            toolchain, benchmark_toolchain_removed = sanitize_benchmark_toolchain(
+            benchmark_toolchain_sanitization = sanitize_benchmark_toolchain(
                 toolchain=toolchain,
                 source_repo=session.source_repo,
                 workspace=workspace,
+                runtime_projections=session.runtime_projections,
             )
+            toolchain = benchmark_toolchain_sanitization.toolchain
+            benchmark_toolchain_removed = benchmark_toolchain_sanitization.removed
             recorder.write_authoritative_json(
                 "benchmark_toolchain_sanitization.json",
                 {
-                    "schema_version": "benchmark-toolchain-sanitization.v1",
+                    "schema_version": "benchmark-toolchain-sanitization.v2",
                     "removed": benchmark_toolchain_removed,
-                    "retained_keys": sorted(toolchain),
+                    "retained_keys": sorted(
+                        set(toolchain)
+                        - set(benchmark_toolchain_sanitization.rebound_to_workspace)
+                    ),
+                    "rebound_to_workspace": dict(
+                        benchmark_toolchain_sanitization.rebound_to_workspace
+                    ),
                     "source_paths_exposed_to_agents": False,
+                    "fresh_dependency_install_performed": False,
                 },
             )
         validate_toolchain(toolchain)

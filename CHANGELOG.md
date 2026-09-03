@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Historical benchmarks can now physically project a source-owned runtime directory such as `node_modules` through the selected local `workspace.copy_untracked` profile and rebind an authorized source-local toolchain entry to its standalone workspace copy.
+- Added fail-closed Controller provenance, canonical containment/alias checks and `benchmark-toolchain-sanitization.v2`; source-local tool paths without a valid projection remain removed, while public artifacts retain only relative rebind destinations.
+- Projected runtime directories remain Git/candidate/patch/delivery/reconstruction-excluded and do not trigger `npm install` or `npm ci`. Their full recursive HMAC restoration is deliberately deferred to avoid an O(N) walk at each workflow boundary.
+
 ## 0.8.0a12 — Phase 7 stabilization: Intake contract recovery
 
 - Fixed the first real `_90` trial stopping after the calibrated baseline gate because the Intake model returned `READY` together with non-empty `ambiguities` or `reason`.

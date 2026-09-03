@@ -32,6 +32,7 @@ from slivin_harness.workflow import (
     WorkflowOutcome,
 )
 from slivin_harness.workspace import (
+    RuntimeProjection,
     WorkspaceSession,
     build_candidate_patch,
     prepare_workspace_session,
@@ -441,7 +442,7 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
         )
         self.assertEqual(mutated["status"], "HELDOUT_MUTATED_CANDIDATE")
 
-    def test_benchmark_toolchain_removes_original_source_paths(self) -> None:
+    def test_benchmark_toolchain_removes_unprojected_source_paths_and_retains_external(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="phase7-toolchain-"))
         source = root / "source"
         workspace = root / "workspace"
@@ -463,9 +464,126 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
             workspace=workspace,
         )
         self.assertNotIn("project_python", retained)
-        self.assertEqual(removed["project_python"], "SOURCE_REPOSITORY_PATH_REMOVED")
+        self.assertEqual(removed["project_python"], "SOURCE_REPOSITORY_PATH_NOT_PROJECTED")
         self.assertEqual(retained["node"], str(outside))
         self.assertEqual(retained["git"], "git")
+
+    def test_benchmark_toolchain_rebinds_only_authorized_runtime_projection(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="phase7-toolchain-rebind-"))
+        source = root / "source"
+        workspace = root / "workspace"
+        source_jest = source / "node_modules" / "jest" / "bin" / "jest.js"
+        workspace_jest = workspace / "node_modules" / "jest" / "bin" / "jest.js"
+        source_jest.parent.mkdir(parents=True)
+        workspace_jest.parent.mkdir(parents=True)
+        source_jest.write_text("source jest\n", encoding="utf-8")
+        workspace_jest.write_text("copied jest\n", encoding="utf-8")
+        projection = RuntimeProjection(
+            relative_path="node_modules",
+            source_kind="workspace.copy_untracked",
+            destination=workspace / "node_modules",
+            is_directory=True,
+            copy_mode="physical_copy",
+            runtime_only=True,
+        )
+
+        result = sanitize_benchmark_toolchain(
+            toolchain={"jest": str(source_jest)},
+            source_repo=source,
+            workspace=workspace,
+            runtime_projections=(projection,),
+        )
+
+        self.assertEqual(result.toolchain["jest"], str(workspace_jest))
+        self.assertEqual(
+            result.rebound_to_workspace,
+            {"jest": "node_modules/jest/bin/jest.js"},
+        )
+        self.assertEqual(result.removed, {})
+        self.assertNotIn(str(source_jest), json.dumps(result.rebound_to_workspace))
+
+    def test_benchmark_toolchain_refuses_unregistered_or_missing_projection_destination(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="phase7-toolchain-missing-"))
+        source = root / "source"
+        workspace = root / "workspace"
+        source_jest = source / "node_modules" / "jest" / "bin" / "jest.js"
+        source_jest.parent.mkdir(parents=True)
+        source_jest.write_text("source jest\n", encoding="utf-8")
+        (workspace / "node_modules" / "jest" / "bin").mkdir(parents=True)
+        (workspace / "node_modules" / "jest" / "bin" / "jest.js").write_text(
+            "unregistered\n", encoding="utf-8"
+        )
+
+        unregistered = sanitize_benchmark_toolchain(
+            toolchain={"jest": str(source_jest)}, source_repo=source, workspace=workspace
+        )
+        self.assertEqual(
+            unregistered.removed["jest"], "SOURCE_REPOSITORY_PATH_NOT_PROJECTED"
+        )
+
+        missing_root = root / "missing-workspace"
+        (missing_root / "node_modules").mkdir(parents=True)
+        projection = RuntimeProjection(
+            relative_path="node_modules",
+            source_kind="workspace.copy_untracked",
+            destination=missing_root / "node_modules",
+            is_directory=True,
+            copy_mode="physical_copy",
+            runtime_only=True,
+        )
+        missing = sanitize_benchmark_toolchain(
+            toolchain={"jest": str(source_jest)},
+            source_repo=source,
+            workspace=missing_root,
+            runtime_projections=(projection,),
+        )
+        self.assertEqual(
+            missing.removed["jest"], "SOURCE_REPOSITORY_PATH_PROJECTION_DESTINATION_MISSING"
+        )
+
+    def test_benchmark_toolchain_rejects_source_path_outside_projection_and_unsafe_root(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="phase7-toolchain-boundary-"))
+        source = root / "source"
+        workspace = root / "workspace"
+        source_script = source / "tools" / "script.py"
+        source_script.parent.mkdir(parents=True)
+        source_script.write_text("print('source')\n", encoding="utf-8")
+        (workspace / "node_modules").mkdir(parents=True)
+        normal = RuntimeProjection(
+            relative_path="node_modules",
+            source_kind="workspace.copy_untracked",
+            destination=workspace / "node_modules",
+            is_directory=True,
+            copy_mode="physical_copy",
+            runtime_only=True,
+        )
+        result = sanitize_benchmark_toolchain(
+            toolchain={"script": str(source_script)},
+            source_repo=source,
+            workspace=workspace,
+            runtime_projections=(normal,),
+        )
+        self.assertEqual(result.removed["script"], "SOURCE_REPOSITORY_PATH_NOT_PROJECTED")
+
+        source_tool = source / "tools" / "tool.exe"
+        source_tool.write_text("tool\n", encoding="utf-8")
+        (workspace / "tools").mkdir()
+        (workspace / "tools" / "tool.exe").write_text("copy\n", encoding="utf-8")
+        unsafe = RuntimeProjection(
+            relative_path="node_modules/../tools",
+            source_kind="workspace.copy_untracked",
+            destination=workspace / "tools",
+            is_directory=True,
+            copy_mode="physical_copy",
+            runtime_only=True,
+        )
+        result = sanitize_benchmark_toolchain(
+            toolchain={"tool": str(source_tool)},
+            source_repo=source,
+            workspace=workspace,
+            runtime_projections=(unsafe,),
+        )
+        self.assertEqual(result.removed["tool"], "SOURCE_REPOSITORY_PATH_NOT_PROJECTED")
 
     def test_historical_workspace_is_standalone_and_hides_other_refs(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="phase7-benchmark-"))

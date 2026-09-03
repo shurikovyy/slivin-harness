@@ -9,10 +9,10 @@ import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
-from slivin_harness.control_plane import is_within, safe_artifact_name
+from slivin_harness.control_plane import canonical_path, is_within, safe_artifact_name
 from slivin_harness.run_state import CandidateIdentity, build_candidate_identity
 from slivin_harness.workflow import (
     HeldoutStatus,
@@ -22,7 +22,12 @@ from slivin_harness.workflow import (
     StageState,
     WorkflowMode,
 )
-from slivin_harness.workspace import WorkspaceSession, build_repository_patch
+from slivin_harness.workspace import (
+    RuntimeProjection,
+    WorkspaceSession,
+    assert_safe_runtime_path,
+    build_repository_patch,
+)
 
 PHASE7_VERSION = "phase7-final-gate.v1"
 PATCH_PROOF_VERSION = "patch-proof.v1"
@@ -53,22 +58,113 @@ class Phase7Error(RuntimeError):
     """The final quality/delivery contract is inconsistent or unsafe."""
 
 
+@dataclass(frozen=True)
+class BenchmarkToolchainSanitization:
+    """Public-safe result of historical source-path toolchain filtering."""
+
+    toolchain: dict[str, str]
+    removed: dict[str, str]
+    rebound_to_workspace: dict[str, str]
+
+    def __iter__(self) -> Iterator[dict[str, str]]:
+        """Keep the previous two-value unpacking API for direct callers."""
+
+        yield self.toolchain
+        yield self.removed
+
+
+def _safe_projection_relative(raw: str) -> Path:
+    value = str(raw)
+    normalized = value.replace("\\", "/")
+    windows = PureWindowsPath(value)
+    rel = Path(normalized)
+    if (
+        not value.strip()
+        or "\x00" in value
+        or normalized.startswith("/")
+        or bool(windows.drive or windows.root)
+        or rel.is_absolute()
+        or ".." in rel.parts
+        or str(rel) in {"", "."}
+    ):
+        raise Phase7Error("Unsafe runtime projection path")
+    return rel
+
+
+def _canonical_relative(root: Path, candidate: Path) -> Path:
+    """Return a safe repository-relative path after canonical containment."""
+
+    if not is_within(root, candidate):
+        raise Phase7Error("Runtime path is outside its canonical root")
+    try:
+        raw = os.path.relpath(str(canonical_path(candidate)), str(canonical_path(root)))
+    except (OSError, ValueError) as exc:
+        raise Phase7Error("Unable to derive runtime projection relative path") from exc
+    return _safe_projection_relative(raw)
+
+
+def _projection_destination(
+    *,
+    projection: RuntimeProjection,
+    source_repo: Path,
+    workspace: Path,
+) -> tuple[Path, Path] | None:
+    """Validate one Controller record before it can authorize a rebind."""
+
+    if (
+        projection.source_kind != "workspace.copy_untracked"
+        or not projection.is_directory
+        or projection.copy_mode != "physical_copy"
+        or not projection.runtime_only
+    ):
+        return None
+    try:
+        relative = _safe_projection_relative(projection.relative_path)
+    except Phase7Error:
+        return None
+    source_root = source_repo / relative
+    destination_root = workspace / relative
+    if not is_within(source_repo, source_root) or not is_within(workspace, destination_root):
+        return None
+    if os.path.normcase(str(canonical_path(projection.destination))) != os.path.normcase(
+        str(canonical_path(destination_root))
+    ):
+        return None
+    if not source_root.is_dir() or not destination_root.is_dir():
+        return None
+    try:
+        assert_safe_runtime_path(source_repo, source_root, include_leaf=True)
+        assert_safe_runtime_path(workspace, destination_root, include_leaf=True)
+    except RuntimeError:
+        return None
+    try:
+        if os.path.samefile(source_root, destination_root):
+            return None
+    except OSError:
+        return None
+    return source_root, destination_root
+
+
 def sanitize_benchmark_toolchain(
     *,
     toolchain: Mapping[str, str],
     source_repo: Path | None,
     workspace: Path,
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Remove executable paths that reveal the unsanitized benchmark source.
+    runtime_projections: Iterable[RuntimeProjection] = (),
+) -> BenchmarkToolchainSanitization:
+    """Rebind authorized source runtime paths or remove source-local entries.
 
     Historical agents must operate on the standalone baseline repository.  A
-    project-local Python/Jest path from the original source checkout would both
-    disclose that checkout and provide a path around the sanitized repository.
-    Relative command names and paths outside the source repository are retained.
+    project-local Python/Jest path from the original source checkout must never
+    be retained.  It can only be replaced with a physical workspace copy that
+    the Controller recorded while preparing the workspace.  Relative command
+    names and paths outside the source repository are retained.
     """
 
     retained: dict[str, str] = {}
     removed: dict[str, str] = {}
+    rebound: dict[str, str] = {}
+    projections = tuple(runtime_projections)
     for name, raw in toolchain.items():
         path = Path(str(raw)).expanduser()
         if (
@@ -77,10 +173,71 @@ def sanitize_benchmark_toolchain(
             and is_within(source_repo, path)
             and not is_within(workspace, path)
         ):
-            removed[str(name)] = "SOURCE_REPOSITORY_PATH_REMOVED"
+            try:
+                source_relative = _canonical_relative(source_repo, path)
+            except Phase7Error:
+                removed[str(name)] = "SOURCE_REPOSITORY_PATH_NOT_PROJECTED"
+                continue
+            candidates: list[tuple[Path, Path, Path]] = []
+            for projection in projections:
+                validated = _projection_destination(
+                    projection=projection,
+                    source_repo=source_repo,
+                    workspace=workspace,
+                )
+                if validated is None:
+                    continue
+                source_root, destination_root = validated
+                if is_within(source_root, path):
+                    candidates.append((source_root, destination_root, source_relative))
+            if not candidates:
+                removed[str(name)] = "SOURCE_REPOSITORY_PATH_NOT_PROJECTED"
+                continue
+            source_root, destination_root, source_relative = max(
+                candidates,
+                key=lambda item: len(_canonical_relative(source_repo, item[0]).parts),
+            )
+            destination = workspace / source_relative
+            if not is_within(destination_root, destination):
+                removed[str(name)] = "SOURCE_REPOSITORY_PATH_PROJECTION_INVALID"
+                continue
+            try:
+                assert_safe_runtime_path(workspace, destination, include_leaf=True)
+            except RuntimeError:
+                removed[str(name)] = "SOURCE_REPOSITORY_PATH_PROJECTION_INVALID"
+                continue
+            if path.is_file():
+                expected = "file"
+                valid_destination = destination.is_file()
+            elif path.is_dir():
+                expected = "directory"
+                valid_destination = destination.is_dir()
+            else:
+                expected = "unsupported"
+                valid_destination = False
+            if not valid_destination:
+                removed[str(name)] = (
+                    "SOURCE_REPOSITORY_PATH_PROJECTION_DESTINATION_MISSING"
+                    if expected in {"file", "directory"}
+                    else "SOURCE_REPOSITORY_PATH_PROJECTION_INVALID"
+                )
+                continue
+            try:
+                if os.path.samefile(path, destination):
+                    removed[str(name)] = "SOURCE_REPOSITORY_PATH_PROJECTION_INVALID"
+                    continue
+            except OSError:
+                removed[str(name)] = "SOURCE_REPOSITORY_PATH_PROJECTION_INVALID"
+                continue
+            retained[str(name)] = str(destination)
+            rebound[str(name)] = source_relative.as_posix()
             continue
         retained[str(name)] = str(raw)
-    return retained, removed
+    return BenchmarkToolchainSanitization(
+        toolchain=retained,
+        removed=removed,
+        rebound_to_workspace=rebound,
+    )
 
 
 @dataclass(frozen=True)

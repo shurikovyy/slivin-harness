@@ -97,8 +97,31 @@ production write-capable credential and rely on a prompt instruction.
 ```
 
 Only matching ignored regular files are copied. Symlink/junction/reparse traversal is rejected
-on every path component. Runtime-only files are protected by Controller-private keyed HMAC and
-restored if a role changes them.
+on every path component. Small runtime-only files are protected by Controller-private keyed HMAC
+and restored if a role changes them.
+
+## Source-owned Node/Jest runtime projection
+
+For a historical benchmark with source-local Jest, declare the already installed
+dependency tree only in the selected local profile:
+
+```toml
+[projects.sa_icover.workspace]
+copy_untracked = ["node_modules"]
+```
+
+The path must be non-empty and repo-relative: no `..`, absolute path, drive
+path or UNC path. Do not put `node_modules` in tracked `.worktreeinclude`.
+Controller copies the tree into the managed workspace and rejects source or
+destination symlink/junction/reparse aliases; it does not use symlink,
+junction or hardlink projection. The copied dependency tree is ignored by Git,
+never enters candidate/patch/delivery/reconstruction and disappears with the
+managed workspace. `npm install`/`npm ci` is not run there.
+
+To avoid a recursive O(N) HMAC traversal of a large `node_modules` on every
+phase boundary, projected directories are not auto-restored after a workspace
+role writes to them. Their physical independence still prevents any source
+dependency mutation; full projected-tree integrity monitoring is deferred.
 
 ## Canonical path checks
 
