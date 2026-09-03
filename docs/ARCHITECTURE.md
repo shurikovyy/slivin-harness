@@ -142,15 +142,35 @@ Controller:
 
 ```text
 сохраняет raw request
-создаёт task-contract.v1
 фиксирует source baseline
 создаёт managed worktree
 копирует разрешённые .worktreeinclude files и local runtime projections
+фиксирует private full-tree runtime projection baseline
 создаёт worktree-local project runtime
-проверяет toolchain/capabilities
+resolve + historical sanitize/rebind toolchain
+выполняет static-toolchain-preflight.v1 для всех manifest checks
+только затем запускает semantic baseline command и Codex app-server
+создаёт task-contract.v1
 ```
 
 Historical benchmark вместо linked worktree получает standalone sanitized repository; подробнее ниже.
+
+Static preflight использует тот же strict `string.Formatter`-совместимый
+template contract, что и фактический check runner: только simple identifier
+placeholders, включая escaped literal braces. Он fail-closed отклоняет unknown,
+attribute/index access, conversion, format spec и malformed braces. Required
+toolchain entries выводятся только из реально используемых placeholders;
+optional configured entries получают `UNUSED_NOT_PROBED` и не блокируют run.
+
+Известные command families проверяются без запуска tests: executable resolution,
+Node/Python script inputs, Jest config и `--runTestsByPath` files. Bounded
+Controller probes проверяют Git, harness Python, Node и при необходимости
+project Python. Jest требует успешных Node/Jest version probes и `--showConfig`
+для каждого manifest config, что загружает config/test environment, но не
+запускает test suite или hidden oracle. Probes проходят через тот же
+`RuntimeProjectionIntegrityManager` с batch id `static-toolchain-preflight`.
+Failure маршрутизирует Step 0 в `BLOCKED`; Task Contract/Planner artifacts ещё
+не существуют.
 
 ## 4. Step 1 — Planner
 
@@ -176,7 +196,11 @@ TEST_EXTERNAL
 PROD_OBSERVE
 ```
 
-Owner-boundary и capability gates выполняются до writable Implementer.
+Owner-boundary и post-plan capability gate выполняются до writable Implementer.
+Tool-backed `GIT`, `PROJECT_PYTHON`, `NODE` и `JEST` считаются available только
+по успешному Controller probe evidence. Раннее evidence переиспользуется;
+новое требование Verification Plan пробуется on demand тем же registry.
+Configured/runtime semantics non-tool capabilities остаются отдельными.
 
 ## 6. Step 3 — Implementer
 
@@ -366,8 +390,9 @@ entry, пустые directories, размеры и полное содержим
 отклоняются fail-closed.
 
 Один `RuntimeProjectionIntegrityManager` защищает authoritative batches:
-historical baseline gate, Controller confirmation self-verify, deterministic и
-dynamic repair checks, runtime scenarios и final held-out. Перед batch он
+static toolchain probes, historical baseline gate, Controller confirmation
+self-verify, deterministic и dynamic repair checks, runtime scenarios и final
+held-out. Перед batch он
 проверяет неизменность source baseline, затем workspace; mismatch workspace
 удаляется только в пределах projection и заменяется новой independent physical
 copy из неизменного source. После batch повторная full-tree проверка запрещает

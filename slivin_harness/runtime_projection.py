@@ -218,6 +218,50 @@ class RuntimeProjectionIntegrityManager:
     def active(self) -> bool:
         return bool(self.session.runtime_projections)
 
+    def authorized_projection_for_path(
+        self,
+        path: Path,
+        *,
+        require_file: bool = False,
+        require_directory: bool = False,
+    ) -> str | None:
+        """Return the Controller-authorized projection root containing ``path``.
+
+        This is deliberately backed by the established private baseline rather
+        than by the mere presence of a similarly named directory in the
+        workspace.  Callers use it when a trusted tool entry was rebound into a
+        source-owned runtime projection.
+        """
+
+        if not self._established:
+            return None
+        candidate = Path(path)
+        try:
+            assert_safe_runtime_path(
+                self.session.workspace,
+                candidate,
+                include_leaf=True,
+            )
+            canonical_candidate = canonical_path(candidate)
+        except (OSError, RuntimeError):
+            return None
+        matches: list[tuple[int, str]] = []
+        for baseline in self._baselines.values():
+            try:
+                _, _, destination = self._projection_paths(baseline.projection)
+                canonical_destination = canonical_path(destination)
+            except (OSError, RuntimeProjectionIntegrityError, RuntimeError):
+                continue
+            if is_within(canonical_destination, canonical_candidate):
+                matches.append((len(Path(baseline.relative_path).parts), baseline.relative_path))
+        if not matches:
+            return None
+        if require_file and not candidate.is_file():
+            return None
+        if require_directory and not candidate.is_dir():
+            return None
+        return max(matches)[1]
+
     def _record_event(
         self,
         event_code: str,

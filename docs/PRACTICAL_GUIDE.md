@@ -34,6 +34,9 @@ repair-попытки не помогли, run останавливается к
 ```text
 0. Intake / Preflight
    → managed worktree, .worktreeinclude, optional worktree-local .venv
+   → source-owned runtime projection + private integrity baseline
+   → strict manifest command parsing + static toolchain/input probes
+   → historical semantic baseline gate (если configured)
    → User Task Contract
 
 1. fresh Planner v4
@@ -45,6 +48,19 @@ repair-попытки не помогли, run останавливается к
 6B. Contract/evidence audit in the same fresh evaluator thread
 7. Final Gate / patch proof / safe result handoff
 ```
+
+Static Toolchain Preflight выполняется до semantic baseline command и до любого
+Codex thread. Он анализирует repair и held-out commands, но не запускает их:
+проверяются placeholders, executables, известные input paths и lightweight
+version/config probes. Для Jest `--showConfig` загружает указанный config и test
+environment без `--runTestsByPath`. Ошибка даёт controlled
+`STATIC_TOOLCHAIN_PREFLIGHT_FAILED` и artifact
+`static_toolchain_preflight.json`; Task Contract и Plan ещё не создаются.
+
+После компиляции Verification Plan остаётся второй gate. Он переиспользует
+успешные static probes и проверяет on demand впервые появившиеся tool-backed или
+runtime capabilities. Поэтому optional `project_python`, не используемый
+manifest и не требуемый Verification Plan, остаётся `UNUSED_NOT_PROBED`.
 
 Runtime is not a ritual step. A local-only Verification Plan records:
 

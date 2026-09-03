@@ -31,7 +31,7 @@
 
 | Step | Machine id | Название | Единственная основная задача | Условный | Успешный result code | Состояние в текущей фазе |
 | ---: | --- | --- | --- | :---: | --- | --- |
-| 0 | `intake_preflight` | Intake / Preflight | Фиксирует задачу, baseline, workspace и доступные инструменты. | нет | PREFLIGHT_READY | IMPLEMENTED |
+| 0 | `intake_preflight` | Intake / Preflight | Фиксирует задачу/workspace и проверяет static toolchain до agent stages. | нет | PREFLIGHT_READY | IMPLEMENTED |
 | 1 | `planner` | Planner | Read-only исследование и техническая модель задачи. | нет | PLANNER_READY / PLANNER_SKIPPED_FAST | IMPLEMENTED |
 | 2 | `implementation_contract` | Implementation Contract | Controller превращает load-bearing выводы в обязательный минимум результата. | нет | IMPLEMENTATION_CONTRACT_READY | IMPLEMENTED |
 | 3 | `implementer` | Implementer | Создаёт candidate, tests/docs и собственное evidence. | нет | IMPLEMENTATION_COMPLETE | IMPLEMENTED |
@@ -107,6 +107,8 @@ machine-readable workflow и versioned Run State
 + IMPLEMENTER implementer.v3
 + transactional Contract / Verification Plan expansion
 + canonical .worktreeinclude exposure policy
++ strict static toolchain preflight before semantic baseline and agent stages
++ probe-backed tool capabilities with retained post-plan on-demand gate
 + worktree-local project-runtime bootstrap and drift reconciliation
 + Controller-private Contract Closure Record
 + LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE runtime scenario executor

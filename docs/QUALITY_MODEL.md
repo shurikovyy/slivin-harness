@@ -4,6 +4,7 @@
 
 ```text
 explicit user intent
+→ statically executable manifest toolchain
 → доказанная technical model
 → load-bearing Definition of Done
 → typed proof routes
@@ -26,6 +27,16 @@ SELF VERIFY
 ≠ Evaluator PASS
 ≠ Final Gate PASS
 ```
+
+## Static Toolchain Preflight
+
+`static-toolchain-preflight.v1` доказывает только, что manifest command
+templates однозначно раскрываются, required executables и известные inputs
+доступны, а lightweight tool probes проходят до agent stages. Для projected
+runtime probes действуют full-tree pre/post integrity guard и JIT restore.
+Preflight не запускает tests/hidden oracle, не доказывает product correctness и
+не заменяет post-plan capability gate для требований, появившихся из Planner и
+Verification Plan.
 
 ## Что доказывает каждый слой
 

@@ -51,6 +51,14 @@ A new runtime proof cannot be hidden inside prose. If a discovery requires `LIVE
 and its capabilities. When the executor/capability is unavailable, Step 2 becomes
 `BLOCKED` before the Implementer is allowed to claim completion.
 
+This post-plan gate is intentionally distinct from Stage 0 static toolchain
+preflight. Probe evidence for manifest-required `GIT`, `NODE`, `JEST` or
+`PROJECT_PYTHON` is reused. A tool-backed capability first introduced by the
+active Verification Plan is probed on demand through the same Controller
+registry and projected-runtime integrity guard; a configured key or boolean
+declaration alone is not capability evidence. Non-tool runtime scenario
+selection remains a late Verification Plan concern.
+
 ## Open-world Contract transaction
 
 Implementer protocol is now `implementer.v3`. A discovered obligation contains:

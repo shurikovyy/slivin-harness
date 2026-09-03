@@ -364,6 +364,10 @@ timeout_seconds = 30
     def test_benchmark_run_has_distinct_terminal_status_and_heldout_artifact(self) -> None:
         result, run_root, output = self.run_case(benchmark=True)
         self.assertEqual(result, 0, output)
+        self.assertLess(
+            output.index("STATIC_TOOLCHAIN_PREFLIGHT_PASS"),
+            output.index("=== USER TASK CONTRACT ==="),
+        )
         state = json.loads((run_root / "run_state.json").read_text(encoding="utf-8"))
         self.assertEqual(
             state["terminal"]["result_code"],
@@ -374,6 +378,15 @@ timeout_seconds = 30
         self.assertTrue((run_root / "heldout_results.json").is_file())
         self.assertTrue((run_root / "heldout_evidence.json").is_file())
         self.assertTrue((run_root / "benchmark_isolation.json").is_file())
+        static_preflight = json.loads(
+            (run_root / "static_toolchain_preflight.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            static_preflight["schema_version"], "static-toolchain-preflight.v1"
+        )
+        self.assertEqual(static_preflight["status"], "PASS")
+        self.assertFalse(static_preflight["tests_executed"])
+        self.assertFalse(static_preflight["hidden_commands_executed"])
         heldout = json.loads((run_root / "heldout_evidence.json").read_text(encoding="utf-8"))
         self.assertEqual(heldout["status"], "HELDOUT_PASS")
         isolation = json.loads((run_root / "benchmark_isolation.json").read_text(encoding="utf-8"))

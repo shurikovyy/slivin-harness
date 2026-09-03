@@ -77,6 +77,11 @@ from slivin_harness.phase7 import (
     reset_workspace_for_semantic_replan,
     sanitize_benchmark_toolchain,
 )
+from slivin_harness.preflight import (
+    ToolProbeRegistry,
+    expand_check_command,
+    run_static_toolchain_preflight,
+)
 from slivin_harness.protocol import (
     ArtifactContractError,
     EVALUATOR_PROTOCOL_VERSION,
@@ -100,6 +105,7 @@ from slivin_harness.task_contract import (
     validate_task_contract,
 )
 from slivin_harness.verification import (
+    Capability,
     VERIFICATION_PLAN_VERSION,
     available_capabilities,
     compile_verification_plan,
@@ -486,17 +492,29 @@ def resolve_toolchain(
         sources.append(manifest["toolchain"])
     for source in sources:
         merged.update({str(key): str(value) for key, value in source.items()})
-    return {
-        name: str(_resolve_tool_path(raw, project_root=project_root))
-        for name, raw in merged.items()
-    }
+    resolved: dict[str, str] = {}
+    for name, raw in merged.items():
+        formatted = os.path.expandvars(str(raw)).format(
+            home=str(Path.home()),
+            harness_root=str(HARNESS_ROOT),
+            project_root=str(project_root) if project_root else "",
+        )
+        if not any(sep in formatted for sep in ("/", "\\")) and not formatted.startswith("~"):
+            found = shutil.which(formatted)
+            resolved[name] = str(Path(found).resolve()) if found else formatted
+        else:
+            resolved[name] = str(
+                resolve_runtime_path(formatted, project_root=project_root)
+            )
+    return resolved
 
 
 def validate_toolchain(toolchain: dict[str, str]) -> None:
     for name, raw in toolchain.items():
-        path = Path(raw)
-        if not path.exists():
-            raise RuntimeError(f"Toolchain entry does not exist: {name}={path}")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(name)):
+            raise RuntimeError(f"Invalid toolchain entry name: {name!r}")
+        if not isinstance(raw, str) or not raw.strip():
+            raise RuntimeError(f"Toolchain entry must be a non-empty string: {name}")
 
 
 def resolve_project_runtime_config(
@@ -730,19 +748,12 @@ def expand_command(
     workspace: Path,
     toolchain: dict[str, str],
 ) -> list[str]:
-    values = {
-        "workspace": str(workspace.resolve()),
-        "harness_root": str(HARNESS_ROOT),
-        "python": toolchain.get("project_python", toolchain.get("python", sys.executable)),
-        **toolchain,
-    }
-    expanded: list[str] = []
-    for raw in command:
-        try:
-            expanded.append(raw.format(**values))
-        except KeyError as exc:
-            raise RuntimeError(f"Unknown command placeholder {exc} in {raw!r}") from exc
-    return expanded
+    return expand_check_command(
+        command,
+        workspace=workspace,
+        harness_root=HARNESS_ROOT,
+        toolchain=toolchain,
+    )
 
 
 def candidate_content_fingerprint(workspace: Path) -> str:
@@ -2176,6 +2187,7 @@ def main(argv: list[str] | None = None) -> int:
         if runtime_state is not None:
             toolchain["project_python"] = runtime_state.project_python
         benchmark_toolchain_removed: dict[str, str] = {}
+        benchmark_toolchain_rebound: dict[str, str] = {}
         if workflow_mode == WorkflowMode.HISTORICAL_BENCHMARK:
             benchmark_toolchain_sanitization = sanitize_benchmark_toolchain(
                 toolchain=toolchain,
@@ -2185,6 +2197,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             toolchain = benchmark_toolchain_sanitization.toolchain
             benchmark_toolchain_removed = benchmark_toolchain_sanitization.removed
+            benchmark_toolchain_rebound = dict(
+                benchmark_toolchain_sanitization.rebound_to_workspace
+            )
             recorder.write_authoritative_json(
                 "benchmark_toolchain_sanitization.json",
                 {
@@ -2202,6 +2217,47 @@ def main(argv: list[str] | None = None) -> int:
                 },
             )
         validate_toolchain(toolchain)
+        repair_specs, heldout_specs = split_checks(manifest["checks"])
+        tool_probe_registry = ToolProbeRegistry(
+            workspace=workspace,
+            harness_root=HARNESS_ROOT,
+            source_repo=session.source_repo,
+            toolchain=toolchain,
+            execution_broker=execution_broker,
+            runtime_integrity_manager=runtime_integrity_manager,
+            historical=workflow_mode == WorkflowMode.HISTORICAL_BENCHMARK,
+            rebound_to_workspace=benchmark_toolchain_rebound,
+        )
+        static_preflight = run_static_toolchain_preflight(
+            manifest["checks"],
+            workspace=workspace,
+            harness_root=HARNESS_ROOT,
+            toolchain=toolchain,
+            probe_registry=tool_probe_registry,
+        )
+        static_preflight_artifact = "static_toolchain_preflight.json"
+        recorder.write_json(static_preflight_artifact, static_preflight.public_dict())
+        recorder.write_private_json(
+            "static_toolchain_preflight_private.json",
+            static_preflight.private_dict(),
+        )
+        if not static_preflight.passed:
+            static_artifacts = [static_preflight_artifact]
+            if runtime_integrity_manager.active:
+                static_artifacts.append("runtime_projection_integrity.json")
+            run_state.route_stage(
+                StageId.INTAKE_PREFLIGHT,
+                outcome=WorkflowOutcome.BLOCKED,
+                result_code=StageResultCode.BLOCKED,
+                reason_code="STATIC_TOOLCHAIN_PREFLIGHT_FAILED",
+                artifacts=tuple(static_artifacts),
+            )
+            print(
+                "HARNESS_TASK_STOPPED: STATIC_TOOLCHAIN_PREFLIGHT_FAILED",
+                ", ".join(static_preflight.reason_codes),
+            )
+            return 2
+        print("STATIC_TOOLCHAIN_PREFLIGHT_PASS")
         runtime_scenarios = runtime_scenarios_from_config(
             local_config, project_name=session.project_name
         )
@@ -2219,7 +2275,6 @@ def main(argv: list[str] | None = None) -> int:
                 "scenarios": [item.public_summary() for item in runtime_scenarios],
             },
         )
-        repair_specs, heldout_specs = split_checks(manifest["checks"])
         risk = manifest.get("risk", "medium")
         timeout = manifest.get("turn_timeout_seconds", 900)
         allowed_paths = list(manifest.get("allowed_paths", []))
@@ -2377,6 +2432,7 @@ def main(argv: list[str] | None = None) -> int:
                 "preflight.json",
                 "repo_context.json",
                 "execution_policies.json",
+                "static_toolchain_preflight.json",
                 "task_contract_01.json",
             ]
             if benchmark_isolation_artifact:
@@ -2471,16 +2527,22 @@ def main(argv: list[str] | None = None) -> int:
                 local_config, project_name=session.project_name
             )
             runtime_capabilities = runtime_available_capabilities(runtime_scenarios)
+            post_plan_tool_probes = tool_probe_registry.ensure_capabilities(
+                verification_plan["required_capabilities"],
+                batch_id="post-plan-capability-gate-01",
+            )
             resolved_capabilities = available_capabilities(
                 toolchain=toolchain,
                 configured=declared_capabilities,
                 runtime=runtime_capabilities,
+                verified_tool_capabilities=tool_probe_registry.verified_capabilities,
             )
             capability_record = {
                 "schema_version": "capability-gate.v1",
                 "declared": declared_capabilities,
                 "available": sorted(resolved_capabilities),
                 "required": list(verification_plan["required_capabilities"]),
+                "tool_probe_evidence": post_plan_tool_probes.public_dict(),
             }
             capability_record["missing"] = required_capability_gaps(
                 verification_plan, available=resolved_capabilities
@@ -2743,10 +2805,15 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     raise HarnessControlledStop("OWNER_BOUNDARY_CONFLICT")
 
+                dynamic_tool_probes = tool_probe_registry.ensure_capabilities(
+                    verification_plan["required_capabilities"],
+                    batch_id=f"post-plan-capability-gate-{capability_gate_index + 1:02d}",
+                )
                 current_capabilities = available_capabilities(
                     toolchain=toolchain,
                     configured=declared_capabilities,
                     runtime=runtime_available_capabilities(runtime_scenarios),
+                    verified_tool_capabilities=tool_probe_registry.verified_capabilities,
                 )
                 capability_gate_index += 1
                 capability_artifact = f"capability_gate_{capability_gate_index:02d}.json"
@@ -2755,6 +2822,7 @@ def main(argv: list[str] | None = None) -> int:
                     "declared": declared_capabilities,
                     "available": sorted(current_capabilities),
                     "required": list(verification_plan["required_capabilities"]),
+                    "tool_probe_evidence": dynamic_tool_probes.public_dict(),
                 }
                 capability_record["missing"] = required_capability_gaps(
                     verification_plan,
@@ -3665,6 +3733,10 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         toolchain["project_python"] = runtime_state.project_python
                         validate_toolchain(toolchain)
+                        tool_probe_registry.toolchain["project_python"] = (
+                            runtime_state.project_python
+                        )
+                        tool_probe_registry.invalidate(Capability.PROJECT_PYTHON.value)
 
                     run_state.begin_stage(StageId.PLANNER)
                     plan = run_planner(
@@ -3755,10 +3827,15 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     active_contract_artifact = contract_artifact
                     active_verification_artifact = verification_artifact
+                    replan_tool_probes = tool_probe_registry.ensure_capabilities(
+                        verification_plan["required_capabilities"],
+                        batch_id=f"post-replan-capability-gate-{replan_cycles:02d}",
+                    )
                     current_capabilities = available_capabilities(
                         toolchain=toolchain,
                         configured=declared_capabilities,
                         runtime=runtime_available_capabilities(runtime_scenarios),
+                        verified_tool_capabilities=tool_probe_registry.verified_capabilities,
                     )
                     missing = required_capability_gaps(
                         verification_plan,
@@ -3788,6 +3865,7 @@ def main(argv: list[str] | None = None) -> int:
                         "declared": declared_capabilities,
                         "available": sorted(current_capabilities),
                         "required": list(verification_plan["required_capabilities"]),
+                        "tool_probe_evidence": replan_tool_probes.public_dict(),
                         "missing": missing,
                         "runtime_requirement_gaps": runtime_gaps,
                         "runtime_environment_gaps": runtime_env_gaps,

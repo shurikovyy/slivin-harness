@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added `static-toolchain-preflight.v1` after workspace/runtime projection setup and before historical semantic baseline commands or any Codex agent stage. It strictly parses all repair/held-out templates, resolves required executables and known inputs, and emits a public-safe controlled failure artifact.
+- Git, project Python, Node and Jest are now available capabilities only after bounded Controller probes. Jest requires Node, its own version probe and `--showConfig` for manifest configs; optional unused toolchain entries are not probed.
+- Static probes use the centralized projected-runtime integrity guard, and their evidence is reused by the retained post-plan gate. Newly inferred tool-backed requirements are probed on demand while non-tool runtime capability semantics remain late-bound.
 - Historical benchmarks can now physically project a source-owned runtime directory such as `node_modules` through the selected local `workspace.copy_untracked` profile and rebind an authorized source-local toolchain entry to its standalone workspace copy.
 - Added fail-closed Controller provenance, canonical containment/alias checks and `benchmark-toolchain-sanitization.v2`; source-local tool paths without a valid projection remain removed, while public artifacts retain only relative rebind destinations.
 - Added a Controller-private keyed full-tree baseline and centralized pre/post trusted-batch guard for projected runtimes. Workspace mismatch is physically recopied from an unchanged source; mutation during a check invalidates green results, semantic baseline/held-out evidence and self-verify receipts.

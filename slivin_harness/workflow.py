@@ -201,7 +201,7 @@ STAGES: tuple[StageDefinition, ...] = (
         0,
         StageId.INTAKE_PREFLIGHT,
         "Intake / Preflight",
-        "Фиксирует задачу, baseline, workspace и доступные инструменты.",
+        "Фиксирует задачу/workspace и проверяет static toolchain до agent stages.",
         (StageResultCode.PREFLIGHT_READY,),
         (),
         False,
@@ -703,6 +703,8 @@ machine-readable workflow и versioned Run State
 + IMPLEMENTER implementer.v3
 + transactional Contract / Verification Plan expansion
 + canonical .worktreeinclude exposure policy
++ strict static toolchain preflight before semantic baseline and agent stages
++ probe-backed tool capabilities with retained post-plan on-demand gate
 + worktree-local project-runtime bootstrap and drift reconciliation
 + Controller-private Contract Closure Record
 + LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE runtime scenario executor

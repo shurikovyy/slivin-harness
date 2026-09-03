@@ -84,6 +84,14 @@ CHECK_MUTATED_CANDIDATE
 Checks run with task-local temp/cache and a frozen candidate identity. If a check changes
 candidate files, its result is not accepted even if its assertions pass.
 
+Manifest check commands have one strict expansion contract shared by execution
+and `static-toolchain-preflight.v1`. Before any agent stage the Controller parses
+all repair/held-out templates, resolves required executables, validates only
+known input shapes (Node/Python scripts and Jest config/test paths), and runs
+bounded version/config probes. It does not execute a check body, test suite or
+hidden oracle. A newly registered dynamic check remains protected by the normal
+Controller batch guard and its post-plan capability gate.
+
 ## Enforcement honesty
 
 The Execution Broker records whether a filesystem/network boundary is `ENFORCED`,

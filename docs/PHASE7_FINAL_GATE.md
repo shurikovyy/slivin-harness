@@ -260,10 +260,19 @@ destination, отсутствие symlink/junction/reparse aliases в ancestor-�
 destination, а `fresh_dependency_install_performed` всегда `false` для этой
 projection. Direct source absolute paths в public artifact не записываются.
 
+После sanitize/rebind и structural validation, но до historical baseline
+semantic command, Controller выполняет `static-toolchain-preflight.v1` для всех
+repair/held-out templates. Source-owned rebound entry принимается только если
+его признаёт established runtime projection authority. Node/Jest probes и Jest
+`--showConfig` защищены тем же full-tree integrity batch guard; hidden held-out
+script лишь проверяется как существующий input и не исполняется. Failure
+останавливает Step 0 до Codex app-server, Task Contract и Planner.
+
 Physical independence защищает source, но не достаточна для trusted evidence.
 После initial copy Controller сохраняет private keyed fingerprint полного
 projection tree. Перед каждым historical baseline, Controller-confirmed
-self-verify, deterministic/dynamic check batch, runtime scenario и held-out он:
+self-verify, static probe, deterministic/dynamic check batch, runtime scenario и
+held-out он:
 
 1. требует совпадения текущего source tree с immutable-for-run baseline;
 2. при workspace mismatch полностью заменяет только destination projection

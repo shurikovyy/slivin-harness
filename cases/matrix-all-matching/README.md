@@ -84,7 +84,6 @@ require_clean_source = true
 result_mode = "keep_worktree"
 
 [projects.matrix_baseline.toolchain]
-project_python = "{project_root}/.venv/Scripts/python.exe"
 node = "C:/Users/<user>/Tools/node/node.exe"
 jest = "{project_root}/node_modules/jest/bin/jest.js"
 
@@ -104,6 +103,15 @@ Controller хранит private full-tree baseline всего `node_modules`, а
 транзитивные зависимости Jest входят в ту же integrity boundary. Проверка имеет
 стоимость O(total projected bytes) до и после trusted batch и не является
 заявлением OS-level immutability.
+
+Сразу после rebind и integrity baseline Static Toolchain Preflight строго
+разбирает все repair/held-out commands и до semantic baseline/Planner проверяет
+Node, Jest, `jest.config.cjs`, загрузку Jest test environment, перечисленные
+test paths, syntax/EOL scripts и Git. `--showConfig` не запускает tests, а hidden
+semantic script проверяется на наличие, но не исполняется. Public artifact не
+содержит source absolute path. Текущий manifest использует `{node}`, `{jest}` и
+`{python}`, но не `{project_python}`; поэтому optional local `project_python`
+не нужен и, если всё же задан, остаётся `UNUSED_NOT_PROBED`.
 
 Если baseline ещё не Git repository:
 

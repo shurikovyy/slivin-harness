@@ -136,6 +136,15 @@ limited check-to-exec TOCTOU boundary. Sharing-violation retries are bounded;
 exhaustion returns `RUNTIME_PROJECTION_WORKSPACE_RESTORE_FAILED` and the partial
 destination is not trusted.
 
+After rebind, Stage 0 runs bounded `shell=False` probes from the managed
+workspace with the Execution Broker environment: `git --version`, the required
+Python/Node `--version`, `node jest --version`, and Jest `--showConfig --config
+<workspace-config>`. The last command loads the configured test environment but
+does not run tests. Projected probes use the full-tree pre/post guard above.
+Only toolchain entries referenced by manifest commands are required at this
+point; an unused configured `project_python` is not probed. New tool-backed
+requirements can still be probed by the post-plan capability gate.
+
 ## Canonical path checks
 
 Windows paths can have different lexical spellings for the same location. Controller Plane,

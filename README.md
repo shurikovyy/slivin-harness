@@ -2,10 +2,13 @@
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Версия **0.8.0a12** сохраняет завершённый Phase 7 quality-core и добавляет первый post-trial stabilization fix для Intake:
+Текущий `0.8.0a12` quality-core сохраняет protocol/workflow versions и добавляет
+Stage 0 static toolchain gate до semantic baseline и agent stages:
 
 ```text
 RAW USER REQUEST
+        ↓
+STATIC TOOLCHAIN PREFLIGHT static-toolchain-preflight.v1
         ↓
 USER TASK CONTRACT task-contract.v1
         ↓
@@ -15,7 +18,7 @@ IMPLEMENTATION CONTRACT implementation-contract.v3
         ↓
 VERIFICATION PLAN verification-plan.v1
         ↓
-owner-boundary + capability gates
+owner-boundary + post-plan capability gate
         ↓
 IMPLEMENTER implementer.v3
         ↓
@@ -39,6 +42,21 @@ patch reconstruction + transactional result delivery
 Machine-readable workflow: **workflow.v6**. Реализуемая фаза: **phase7-final-gate-delivery-benchmark**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller plane: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Runtime evidence: **runtime-evidence.v1**. Blind audit: **blind-audit.v1**. Final Gate: **phase7-final-gate.v1**.
 
 ## Фундамент Phase 3
+
+### Static Toolchain Preflight
+
+После подготовки managed workspace, runtime projection и её private integrity
+baseline Controller строго разбирает templates всех repair/held-out manifest
+checks. Он проверяет только статически известную исполнимость: required
+placeholders/toolchain entries, executable resolution, manifest-known input
+files и bounded probes `git --version`, Python/Node `--version`, а для Jest —
+`node jest --version` и загрузку указанного config через `--showConfig`.
+Tests и hidden semantic oracle при этом не запускаются.
+
+Gate завершается до baseline semantic command, запуска Codex app-server,
+Task Contract и Planner. Неиспользуемая optional toolchain entry не блокирует
+run. Public `static_toolchain_preflight.json` не содержит source absolute paths,
+environment values или probe output целиком.
 
 ### User Task Contract
 
@@ -108,7 +126,12 @@ TEST_EXTERNAL
 PROD_OBSERVE
 ```
 
-До writable Implementer Controller проверяет owner boundary и наличие требуемых capabilities. Неисполняемый обязательный runtime proof блокирует задачу до расходования writable turn.
+После Verification Plan Controller сохраняет отдельный post-plan capability
+gate. Он переиспользует раннее probe evidence, но on demand проверяет новые
+tool-backed requirements и продолжает проверять runtime/non-tool capabilities,
+которые нельзя вывести из manifest. Неисполняемый обязательный runtime proof
+блокирует задачу до расходования writable turn. Tool availability не является
+test PASS и не доказывает product correctness.
 
 ## Фундамент Phase 4
 

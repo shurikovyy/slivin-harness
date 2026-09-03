@@ -35,7 +35,7 @@
       "number": 0,
       "stage_id": "intake_preflight",
       "title": "Intake / Preflight",
-      "purpose": "Фиксирует задачу, baseline, workspace и доступные инструменты.",
+      "purpose": "Фиксирует задачу/workspace и проверяет static toolchain до agent stages.",
       "success_codes": [
         "PREFLIGHT_READY"
       ],

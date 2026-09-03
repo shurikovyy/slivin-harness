@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from enum import Enum
-import shutil
 from typing import Any, Iterable, Mapping
 
 from slivin_harness.protocol import (
@@ -497,32 +496,29 @@ def available_capabilities(
     toolchain: Mapping[str, str],
     configured: Iterable[str] = (),
     runtime: Iterable[str] = (),
+    verified_tool_capabilities: Iterable[str] = (),
 ) -> set[str]:
     result = {Capability.DOCS_SYNC.value}
-    if shutil.which("git"):
-        result.add(Capability.GIT.value)
-    if toolchain.get("project_python") or toolchain.get("python"):
-        result.add(Capability.PROJECT_PYTHON.value)
-    if toolchain.get("node"):
-        result.add(Capability.NODE.value)
-    if toolchain.get("jest"):
-        result.add(Capability.JEST.value)
     allowed = {item.value for item in Capability}
-    phase3_implemented = {
+    tool_backed = {
         Capability.GIT.value,
         Capability.PROJECT_PYTHON.value,
         Capability.NODE.value,
         Capability.JEST.value,
-        Capability.DOCS_SYNC.value,
     }
+    for raw in verified_tool_capabilities:
+        value = str(raw)
+        if value not in tool_backed:
+            raise RuntimeError(f"Unknown verified tool capability: {value}")
+        result.add(value)
     for raw in configured:
         value = str(raw)
         if value not in allowed:
             raise RuntimeError(f"Unknown configured capability: {value}")
-        # A bare capability declaration is not enough for runtime authority.
-        # Only local deterministic capabilities are accepted from this legacy
-        # list; runtime capabilities must come from validated Phase 6 scenarios.
-        if value in phase3_implemented:
+        # Tool-backed declarations and configured paths are claims, not probe
+        # evidence. Runtime capabilities likewise remain authoritative only
+        # when supplied by validated Phase 6 scenarios.
+        if value == Capability.DOCS_SYNC.value:
             result.add(value)
     for raw in runtime:
         value = str(raw)

@@ -11,6 +11,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from slivin_harness.control_plane import canonical_path, is_within
 from slivin_harness.execution import ExecutionBroker, ExecutionRole
+from slivin_harness.preflight import CommandTemplateError, expand_command_template
 from slivin_harness.protocol import safe_repo_relative, stable_fingerprint
 from slivin_harness.run_state import CandidateIdentity, build_candidate_identity
 from slivin_harness.runtime_projection import (
@@ -508,15 +509,10 @@ def _expand_command(
         "python": toolchain.get("project_python", toolchain.get("python", "python")),
         **{str(key): str(value) for key, value in toolchain.items()},
     }
-    expanded: list[str] = []
-    for raw in command:
-        try:
-            expanded.append(str(raw).format(**values))
-        except KeyError as exc:
-            raise Phase6ContractError(
-                f"Unknown runtime command placeholder {exc} in {raw!r}"
-            ) from exc
-    return expanded
+    try:
+        return expand_command_template(command, values=values)
+    except CommandTemplateError as exc:
+        raise Phase6ContractError(str(exc)) from exc
 
 
 def _free_local_port() -> int:
