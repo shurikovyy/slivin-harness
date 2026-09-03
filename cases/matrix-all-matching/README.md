@@ -97,6 +97,14 @@ copy_untracked = ["node_modules"]
 source-local `jest` только на эту копию. `npm install` и `npm ci` в worktree
 не выполняются; `.worktreeinclude` для `node_modules` не используется.
 
+Controller хранит private full-tree baseline всего `node_modules`, а не только
+`jest/bin/jest.js`. Перед authoritative batch изменённая workspace copy
+полностью восстанавливается из неизменного source; mutation во время batch
+инвалидирует результат и также приводит runtime к baseline. Поэтому
+транзитивные зависимости Jest входят в ту же integrity boundary. Проверка имеет
+стоимость O(total projected bytes) до и после trusted batch и не является
+заявлением OS-level immutability.
+
 Если baseline ещё не Git repository:
 
 ```bash

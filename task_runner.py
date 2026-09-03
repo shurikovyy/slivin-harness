@@ -90,6 +90,10 @@ from slivin_harness.protocol import (
     stable_fingerprint,
 )
 from slivin_harness.run_state import RunState, build_candidate_identity
+from slivin_harness.runtime_projection import (
+    RuntimeProjectionIntegrityError,
+    RuntimeProjectionIntegrityManager,
+)
 from slivin_harness.task_contract import (
     TASK_CONTRACT_VERSION,
     run_task_contract_normalizer,
@@ -126,6 +130,7 @@ from slivin_harness.workspace import (
     assert_safe_runtime_path,
     build_candidate_patch,
     prepare_workspace_session,
+    remove_managed_workspace,
 )
 
 configure_utf8_stdio()
@@ -193,6 +198,7 @@ class CheckResult:
     candidate_before: str | None = None
     candidate_after: str | None = None
     execution_enforcement: str = "ADVISORY"
+    runtime_integrity_reason_code: str | None = None
 
     @property
     def classification(self) -> CheckClassification:
@@ -773,6 +779,21 @@ def _display_command(command: list[str]) -> str:
     return shlex.join(command)
 
 
+class SelfVerifyCommand(list[str]):
+    """Agent-visible argv carrying a private Controller check definition in memory."""
+
+    def __init__(self, argv: list[str], *, trusted_specs: list[dict]) -> None:
+        super().__init__(argv)
+        self.trusted_specs = tuple(
+            {
+                "name": str(item["name"]),
+                "command": [str(part) for part in item["command"]],
+                "timeout_seconds": int(item["timeout_seconds"]),
+            }
+            for item in trusted_specs
+        )
+
+
 def prepare_self_verify_runner(
     *,
     workspace: Path,
@@ -975,7 +996,11 @@ raise SystemExit(1)
         .replace("__CHECKS__", repr(json.dumps(checks, ensure_ascii=False)))
     )
     script_path.write_text(script, encoding="utf-8")
-    return script_path, stamp_path, [sys.executable, str(script_path)]
+    command = SelfVerifyCommand(
+        [sys.executable, str(script_path)],
+        trusted_specs=checks,
+    )
+    return script_path, stamp_path, command
 
 
 def verify_self_verification_stamp(
@@ -985,6 +1010,7 @@ def verify_self_verification_stamp(
     control_plane: ControllerPlane | None = None,
     run_state: RunState | None = None,
     check_registry_digest: str | None = None,
+    issue_receipt: bool = True,
 ) -> bool:
     """Validate the agent-writable claim and promote it to a private receipt.
 
@@ -1005,7 +1031,7 @@ def verify_self_verification_stamp(
         == candidate_id
     ):
         return False
-    if control_plane is not None and run_state is not None:
+    if issue_receipt and control_plane is not None and run_state is not None:
         raw_binding = run_state.verification_binding(
             candidate_id=candidate_id,
             check_registry_digest=check_registry_digest,
@@ -1229,23 +1255,60 @@ def run_checks(
     label: str,
     execution_broker: ExecutionBroker | None = None,
     execution_role: ExecutionRole = ExecutionRole.CONTROLLER_CHECK,
+    runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
+    batch_id: str | None = None,
 ) -> list[CheckResult]:
     print(f"=== {label} ===")
-    results: list[CheckResult] = []
-    for index, spec in enumerate(specs, start=1):
-        result = run_check(
-            spec,
-            workspace=workspace,
-            toolchain=toolchain,
-            runtime_tmp=runtime_root / f"check_{index:02d}",
-            execution_broker=execution_broker,
-            execution_role=execution_role,
+    started = time.monotonic()
+
+    def execute() -> list[CheckResult]:
+        results: list[CheckResult] = []
+        for index, spec in enumerate(specs, start=1):
+            result = run_check(
+                spec,
+                workspace=workspace,
+                toolchain=toolchain,
+                runtime_tmp=runtime_root / f"check_{index:02d}",
+                execution_broker=execution_broker,
+                execution_role=execution_role,
+            )
+            results.append(result)
+        return results
+
+    try:
+        results = (
+            runtime_integrity_manager.run_batch(batch_id or label, execute)
+            if runtime_integrity_manager is not None
+            else execute()
         )
-        results.append(result)
-        state = result.classification.value
-        print(f"[{index}/{len(specs)}] {spec['name']}: {state} ({result.duration_seconds:.2f}s)")
-        if result.output.strip():
-            print(result.output.rstrip())
+    except RuntimeProjectionIntegrityError as exc:
+        # Discard command output from an invalidated batch. In particular, a
+        # held-out command that mutated its runtime must not publish hidden
+        # output while being reclassified as infrastructure/integrity failure.
+        print("RUNTIME_PROJECTION_INTEGRITY_FAILURE:", exc.reason_code)
+        fingerprint = controller_check_fingerprint(workspace)
+        results = [
+            CheckResult(
+                name=f"{label} runtime projection integrity",
+                command=[],
+                returncode=None,
+                output="",
+                infra_error=True,
+                duration_seconds=time.monotonic() - started,
+                candidate_before=fingerprint,
+                candidate_after=fingerprint,
+                runtime_integrity_reason_code=exc.reason_code,
+            )
+        ]
+    else:
+        for index, (spec, result) in enumerate(zip(specs, results), start=1):
+            state = result.classification.value
+            print(
+                f"[{index}/{len(specs)}] {spec['name']}: "
+                f"{state} ({result.duration_seconds:.2f}s)"
+            )
+            if result.output.strip():
+                print(result.output.rstrip())
     print()
     return results
 
@@ -1289,6 +1352,7 @@ def check_records(results: list[CheckResult]) -> list[dict]:
             "candidate_before": item.candidate_before,
             "candidate_after": item.candidate_after,
             "execution_enforcement": item.execution_enforcement,
+            "runtime_integrity_reason_code": item.runtime_integrity_reason_code,
         }
         for item in results
     ]
@@ -1577,6 +1641,7 @@ def run_benchmark_baseline_gate(
     runtime_root: Path,
     failure_marker: str,
     execution_broker: ExecutionBroker | None = None,
+    runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
 ) -> dict:
     if not specs:
         raise RuntimeError("Baseline gate requires at least one held-out check")
@@ -1588,7 +1653,15 @@ def run_benchmark_baseline_gate(
         label="BENCHMARK BASELINE GATE",
         execution_broker=execution_broker,
         execution_role=ExecutionRole.HELDOUT,
+        runtime_integrity_manager=runtime_integrity_manager,
+        batch_id="HISTORICAL_BENCHMARK_BASELINE_GATE",
     )
+    integrity_failure = next(
+        (item.runtime_integrity_reason_code for item in results if item.runtime_integrity_reason_code),
+        None,
+    )
+    if integrity_failure is not None:
+        raise HarnessControlledStop(integrity_failure)
     if any(item.timed_out for item in results):
         raise RuntimeError("Historical baseline held-out timed out; benchmark setup is invalid")
     if any(item.passed for item in results):
@@ -1707,10 +1780,36 @@ def run_implementer_report(
     control_plane: ControllerPlane | None = None,
     run_state: RunState | None = None,
     check_registry_digest: str | None = None,
+    runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
+    execution_broker: ExecutionBroker | None = None,
 ) -> dict:
+    def stop_for_integrity(
+        reason_code: str,
+        *,
+        cause: BaseException | None = None,
+    ) -> None:
+        if run_state is not None:
+            run_state.route_stage(
+                StageId.IMPLEMENTER,
+                outcome=WorkflowOutcome.BLOCKED,
+                result_code=StageResultCode.BLOCKED,
+                reason_code=reason_code,
+                artifacts=("runtime_projection_integrity.json",),
+            )
+        if cause is not None:
+            raise HarnessControlledStop(reason_code) from cause
+        raise HarnessControlledStop(reason_code)
+
     current_prompt = prompt
     current_label = label
     timeout_continuations = 0
+    if runtime_integrity_manager is not None and runtime_integrity_manager.active:
+        try:
+            runtime_integrity_manager.prepare_before_batch(
+                f"IMPLEMENTER_DEVELOPMENT_START:{label}"
+            )
+        except RuntimeProjectionIntegrityError as exc:
+            stop_for_integrity(exc.reason_code, cause=exc)
     while True:
         try:
             raw = run_agent_turn(
@@ -1737,17 +1836,71 @@ def run_implementer_report(
             current_label = f"{label} CONTINUE"
     report = parse_implementation_report(raw)
     changed_paths = collect_changed_paths(workspace)
-    validate_implementation_report(
-        report,
-        contract=implementation_contract,
-        changed_paths=changed_paths,
-        self_verification_ok=verify_self_verification_stamp(
+    stamp_matches_candidate = verify_self_verification_stamp(
+        workspace=workspace,
+        stamp_path=stamp_path,
+        control_plane=control_plane,
+        run_state=run_state,
+        check_registry_digest=check_registry_digest,
+        issue_receipt=False,
+    )
+    controller_self_verify_ok = True
+    projection_confirmation_required = bool(
+        runtime_integrity_manager is not None and runtime_integrity_manager.active
+    )
+    if (
+        report.get("status") == ImplementerStatus.COMPLETE.value
+        and projection_confirmation_required
+    ):
+        trusted_specs = getattr(self_verify_command, "trusted_specs", None)
+        if trusted_specs is None:
+            controller_self_verify_ok = False
+        else:
+            confirmation = run_checks(
+                list(trusted_specs),
+                workspace=workspace,
+                toolchain={},
+                runtime_root=(
+                    control_plane.run_root / "self_verify_confirmation"
+                    if control_plane is not None
+                    else workspace / ".harness_tmp" / "self_verify_confirmation"
+                ),
+                label=f"CONTROLLER SELF-VERIFY CONFIRMATION {label}",
+                execution_broker=execution_broker,
+                execution_role=ExecutionRole.CONTROLLER_CHECK,
+                runtime_integrity_manager=runtime_integrity_manager,
+                batch_id=f"IMPLEMENTER_SELF_VERIFY:{label}",
+            )
+            integrity_failure = next(
+                (
+                    item.runtime_integrity_reason_code
+                    for item in confirmation
+                    if item.runtime_integrity_reason_code
+                ),
+                None,
+            )
+            if integrity_failure is not None:
+                stop_for_integrity(integrity_failure)
+            controller_self_verify_ok = bool(confirmation) and all(
+                item.passed for item in confirmation
+            )
+    elif projection_confirmation_required:
+        controller_self_verify_ok = False
+    self_verification_ok = bool(stamp_matches_candidate and controller_self_verify_ok)
+    if self_verification_ok:
+        self_verification_ok = verify_self_verification_stamp(
             workspace=workspace,
             stamp_path=stamp_path,
             control_plane=control_plane,
             run_state=run_state,
             check_registry_digest=check_registry_digest,
-        ),
+            issue_receipt=True,
+        )
+    validate_implementation_report(
+        report,
+        contract=implementation_contract,
+        changed_paths=changed_paths,
+        self_verification_ok=self_verification_ok,
         documentation_paths=[],
     )
     print("=== IMPLEMENTATION REPORT ===")
@@ -1925,6 +2078,31 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
 
+        runtime_integrity_manager = RuntimeProjectionIntegrityManager(
+            session=session,
+            control_plane=recorder.control_plane,
+        )
+        try:
+            runtime_integrity_manager.establish_baseline()
+        except RuntimeProjectionIntegrityError as exc:
+            # A copy that cannot be proven identical is a preparation failure,
+            # not a managed workspace that may be retained for agent use.
+            remove_managed_workspace(session)
+            session = None
+            run_state.route_stage(
+                StageId.INTAKE_PREFLIGHT,
+                outcome=WorkflowOutcome.BLOCKED,
+                result_code=StageResultCode.BLOCKED,
+                reason_code=exc.reason_code,
+                artifacts=("runtime_projection_integrity.json",),
+            )
+            print("HARNESS_TASK_STOPPED:", exc.reason_code)
+            return 2
+        except (RuntimeError, OSError):
+            remove_managed_workspace(session)
+            session = None
+            raise
+
         runtime_manager: ProjectRuntimeManager | None = None
         runtime_state: ProjectRuntimeState | None = None
         try:
@@ -2032,6 +2210,7 @@ def main(argv: list[str] | None = None) -> int:
             source_repo=session.source_repo,
             toolchain=toolchain,
             execution_broker=execution_broker,
+            runtime_integrity_manager=runtime_integrity_manager,
         )
         recorder.write_authoritative_json(
             "runtime_scenarios.json",
@@ -2089,14 +2268,26 @@ def main(argv: list[str] | None = None) -> int:
                 recorder=recorder,
             )
         if benchmark.get("confirm_current_baseline_broken"):
-            benchmark_evidence = run_benchmark_baseline_gate(
-                heldout_specs,
-                workspace=workspace,
-                toolchain=toolchain,
-                runtime_root=recorder.root / "benchmark_baseline_gate_tmp",
-                failure_marker=str(benchmark["baseline_failure_marker"]),
-                execution_broker=execution_broker,
-            )
+            try:
+                benchmark_evidence = run_benchmark_baseline_gate(
+                    heldout_specs,
+                    workspace=workspace,
+                    toolchain=toolchain,
+                    runtime_root=recorder.root / "benchmark_baseline_gate_tmp",
+                    failure_marker=str(benchmark["baseline_failure_marker"]),
+                    execution_broker=execution_broker,
+                    runtime_integrity_manager=runtime_integrity_manager,
+                )
+            except HarnessControlledStop as exc:
+                run_state.route_stage(
+                    StageId.INTAKE_PREFLIGHT,
+                    outcome=WorkflowOutcome.BLOCKED,
+                    result_code=StageResultCode.BLOCKED,
+                    reason_code=str(exc),
+                    artifacts=("runtime_projection_integrity.json",),
+                )
+                print("HARNESS_TASK_STOPPED:", exc)
+                return 2
             recorder.write_json("benchmark_baseline_gate.json", benchmark_evidence)
 
         run_state.set_baseline(
@@ -2675,6 +2866,8 @@ def main(argv: list[str] | None = None) -> int:
                     control_plane=recorder.control_plane,
                     run_state=run_state,
                     check_registry_digest=check_registry.digest(),
+                    runtime_integrity_manager=runtime_integrity_manager,
+                    execution_broker=execution_broker,
                 )
                 next_artifact = (
                     f"implementation_report_{implementation_report_index:02d}.json"
@@ -2814,6 +3007,8 @@ def main(argv: list[str] | None = None) -> int:
                 control_plane=recorder.control_plane,
                 run_state=run_state,
                 check_registry_digest=check_registry.digest(),
+                runtime_integrity_manager=runtime_integrity_manager,
+                execution_broker=execution_broker,
             )
             report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
             recorder.write_json(report_artifact, report)
@@ -2886,6 +3081,8 @@ def main(argv: list[str] | None = None) -> int:
                     label=f"CHECKS #{check_index}",
                     execution_broker=execution_broker,
                     execution_role=ExecutionRole.CONTROLLER_CHECK,
+                    runtime_integrity_manager=runtime_integrity_manager,
+                    batch_id=f"DETERMINISTIC_CHECKS:{check_index:02d}",
                 )
                 checks_artifact = f"checks_{check_index:02d}.json"
                 recorder.write_authoritative_json(checks_artifact, check_records(repair_results))
@@ -2906,14 +3103,22 @@ def main(argv: list[str] | None = None) -> int:
                     if result.classification is CheckClassification.INFRA_ERROR
                 ]
                 if infrastructure_failures:
+                    integrity_reason = next(
+                        (
+                            result.runtime_integrity_reason_code
+                            for result in infrastructure_failures
+                            if result.runtime_integrity_reason_code
+                        ),
+                        None,
+                    )
                     run_state.route_stage(
                         StageId.DETERMINISTIC_CHECKS,
                         outcome=WorkflowOutcome.BLOCKED,
                         result_code=StageResultCode.BLOCKED,
-                        reason_code="CHECK_INFRA_ERROR",
+                        reason_code=integrity_reason or "CHECK_INFRA_ERROR",
                         artifacts=(checks_artifact, "candidate_identity_current.json"),
                     )
-                    print("HARNESS_TASK_STOPPED: CHECK_INFRA_ERROR")
+                    print("HARNESS_TASK_STOPPED:", integrity_reason or "CHECK_INFRA_ERROR")
                     return 2
 
                 if any(not result.passed for result in repair_results):
@@ -2973,6 +3178,8 @@ def main(argv: list[str] | None = None) -> int:
                         control_plane=recorder.control_plane,
                         run_state=run_state,
                         check_registry_digest=check_registry.digest(),
+                        runtime_integrity_manager=runtime_integrity_manager,
+                        execution_broker=execution_broker,
                     )
                     report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
                     recorder.write_json(report_artifact, report)
@@ -3103,6 +3310,8 @@ def main(argv: list[str] | None = None) -> int:
                         control_plane=recorder.control_plane,
                         run_state=run_state,
                         check_registry_digest=check_registry.digest(),
+                        runtime_integrity_manager=runtime_integrity_manager,
+                        execution_broker=execution_broker,
                     )
                     report_artifact = (
                         f"implementation_report_{implementation_report_index:02d}.json"
@@ -3330,6 +3539,8 @@ def main(argv: list[str] | None = None) -> int:
                         control_plane=recorder.control_plane,
                         run_state=run_state,
                         check_registry_digest=check_registry.digest(),
+                        runtime_integrity_manager=runtime_integrity_manager,
+                        execution_broker=execution_broker,
                     )
                     report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
                     recorder.write_json(report_artifact, report)
@@ -3670,6 +3881,8 @@ def main(argv: list[str] | None = None) -> int:
                         control_plane=recorder.control_plane,
                         run_state=run_state,
                         check_registry_digest=check_registry.digest(),
+                        runtime_integrity_manager=runtime_integrity_manager,
+                        execution_broker=execution_broker,
                     )
                     report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
                     recorder.write_json(report_artifact, report)
@@ -3767,6 +3980,8 @@ def main(argv: list[str] | None = None) -> int:
                 label="HELD-OUT",
                 execution_broker=execution_broker,
                 execution_role=ExecutionRole.HELDOUT,
+                runtime_integrity_manager=runtime_integrity_manager,
+                batch_id="FINAL_HELDOUT_CHECKS",
             )
             heldout_results_artifact = "heldout_results.json"
             recorder.write_authoritative_json(

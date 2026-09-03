@@ -33,8 +33,13 @@ from slivin_harness.phase6 import (
     validate_contract_closure_record,
 )
 from slivin_harness.protocol import EVALUATOR_PROTOCOL_VERSION
+from slivin_harness.runtime_projection import (
+    RUNTIME_PROJECTION_MUTATED_DURING_CHECK,
+    RuntimeProjectionIntegrityManager,
+)
 from slivin_harness.verification import compile_verification_plan
 from slivin_harness.workflow import RuntimeStatus
+from slivin_harness.workspace import RuntimeProjection, WorkspaceSession
 from test_protocol import proof, valid_plan, valid_task_contract
 
 
@@ -104,6 +109,7 @@ class RuntimePhaseTests(unittest.TestCase):
         git(self.repo, "config", "user.name", "Test")
         git(self.repo, "config", "user.email", "test@example.invalid")
         (self.repo / "target.txt").write_text("baseline\n", encoding="utf-8")
+        (self.repo / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
         (self.repo / "runtime_probe.py").write_text(PROBE_SOURCE, encoding="utf-8")
         (self.repo / "mutating_probe.py").write_text(
             MUTATING_PROBE_SOURCE, encoding="utf-8"
@@ -378,6 +384,69 @@ class RuntimePhaseTests(unittest.TestCase):
         record = self.executor().execute(verification, (scenario,))
         self.assertEqual(record.status, RuntimeStatus.MUTATED_CANDIDATE.value)
         self.assertEqual(record.reason_code, "RUNTIME_MUTATED_CANDIDATE")
+
+    def test_runtime_projection_mutation_invalidates_green_runtime_result(self) -> None:
+        source = self.root / "source"
+        source_dep = source / "node_modules" / "dep" / "index.js"
+        workspace_dep = self.repo / "node_modules" / "dep" / "index.js"
+        source_dep.parent.mkdir(parents=True)
+        workspace_dep.parent.mkdir(parents=True)
+        source_dep.write_text("baseline\n", encoding="utf-8")
+        workspace_dep.write_text("baseline\n", encoding="utf-8")
+        mutator = self.repo / "runtime_projection_mutator.py"
+        mutator.write_text(
+            "from pathlib import Path\n"
+            "Path('node_modules/dep/index.js').write_text('mutated')\n"
+            "exec(Path('runtime_probe.py').read_text(encoding='utf-8'))\n",
+            encoding="utf-8",
+        )
+        git(self.repo, "add", "runtime_projection_mutator.py")
+        git(self.repo, "commit", "-m", "runtime projection mutator")
+        plane = ControllerPlane(self.run_root)
+        manager = RuntimeProjectionIntegrityManager(
+            session=WorkspaceSession(
+                workspace=self.repo,
+                mode="benchmark_isolated",
+                managed=True,
+                source_repo=source,
+                runtime_projections=(
+                    RuntimeProjection(
+                        relative_path="node_modules",
+                        source_kind="workspace.copy_untracked",
+                        destination=self.repo / "node_modules",
+                        is_directory=True,
+                        copy_mode="physical_copy",
+                        runtime_only=True,
+                    ),
+                ),
+            ),
+            control_plane=plane,
+            retry_delay_seconds=0,
+        )
+        manager.establish_baseline()
+        _contract, verification = self.runtime_plan(
+            level="LIVE_LOCAL", capabilities=["LOCAL_APP"]
+        )
+        scenario = RuntimeScenarioConfig(
+            scenario_id="runtime-projection-mutator",
+            profile="LIVE_LOCAL",
+            capabilities=("LOCAL_APP",),
+            command=(sys.executable, "runtime_projection_mutator.py"),
+        )
+        executor = RuntimeExecutor(
+            workspace=self.repo,
+            source_repo=None,
+            toolchain=self.toolchain,
+            execution_broker=self.broker,
+            runtime_integrity_manager=manager,
+        )
+        record = executor.execute(verification, (scenario,))
+        self.assertEqual(record.status, RuntimeStatus.INFRA_ERROR.value)
+        self.assertEqual(
+            record.reason_code,
+            RUNTIME_PROJECTION_MUTATED_DURING_CHECK,
+        )
+        self.assertEqual(workspace_dep.read_text(encoding="utf-8"), "baseline\n")
 
     def test_runtime_rejects_oversized_structured_result(self) -> None:
         script = self.repo / "oversized_result.py"

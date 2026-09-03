@@ -111,17 +111,30 @@ copy_untracked = ["node_modules"]
 ```
 
 The path must be non-empty and repo-relative: no `..`, absolute path, drive
-path or UNC path. Do not put `node_modules` in tracked `.worktreeinclude`.
+path or UNC path. Exact duplicates, slash/case-normalized duplicates and
+parent/child overlaps are rejected before workspace creation, independent of
+configuration order. Independent siblings such as `.env.local` and
+`node_modules` remain valid. Do not put `node_modules` in tracked
+`.worktreeinclude`.
 Controller copies the tree into the managed workspace and rejects source or
 destination symlink/junction/reparse aliases; it does not use symlink,
 junction or hardlink projection. The copied dependency tree is ignored by Git,
 never enters candidate/patch/delivery/reconstruction and disappears with the
 managed workspace. `npm install`/`npm ci` is not run there.
 
-To avoid a recursive O(N) HMAC traversal of a large `node_modules` on every
-phase boundary, projected directories are not auto-restored after a workspace
-role writes to them. Their physical independence still prevents any source
-dependency mutation; full projected-tree integrity monitoring is deferred.
+Controller keeps a private keyed full-tree baseline. Before a trusted check it
+verifies that source still matches that baseline and restores a changed
+workspace projection by bounded delete + physical recopy. After the check it
+re-hashes the full tree; any mutation invalidates that attempt even when the
+command returned zero, then triggers restore. Fingerprinting rejects nested
+symlink/junction/reparse and unsupported objects and detects case-colliding
+relative names. Junctions and hardlinks are never used for projection.
+
+This is source-safe detect/restore, not an NTFS ACL immutability claim. It costs
+O(total projected bytes) before and after each trusted batch and retains a
+limited check-to-exec TOCTOU boundary. Sharing-violation retries are bounded;
+exhaustion returns `RUNTIME_PROJECTION_WORKSPACE_RESTORE_FAILED` and the partial
+destination is not trusted.
 
 ## Canonical path checks
 

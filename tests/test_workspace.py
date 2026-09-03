@@ -8,7 +8,9 @@ from pathlib import Path
 
 from slivin_harness.workspace import (
     apply_candidate_to_source,
+    assert_safe_runtime_path,
     build_candidate_patch,
+    normalize_copy_untracked_paths,
     prepare_workspace_session,
     remove_managed_workspace,
 )
@@ -45,6 +47,47 @@ def make_source(root: Path) -> Path:
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_copy_untracked_roots_reject_duplicates_and_overlaps_order_independently(self) -> None:
+        for values in (
+            ["node_modules", "node_modules"],
+            ["node_modules", "node_modules/jest"],
+            ["node_modules/jest", "node_modules"],
+            ["Node_Modules", "node_modules"],
+            ["node_modules\\jest", "node_modules/jest"],
+        ):
+            with self.subTest(values=values):
+                with self.assertRaisesRegex(RuntimeError, "duplicate or overlapping"):
+                    normalize_copy_untracked_paths(values)
+        self.assertEqual(
+            normalize_copy_untracked_paths([".env.local", "node_modules"]),
+            (".env.local", "node_modules"),
+        )
+
+    def test_copy_untracked_overlap_is_rejected_before_worktree_creation(self) -> None:
+        sandbox = Path(tempfile.mkdtemp(prefix="slivin-runtime-overlap-"))
+        source = make_source(sandbox)
+        (source / "node_modules" / "jest").mkdir(parents=True)
+        before = git(source, "worktree", "list", "--porcelain")
+        local_config = {
+            "workspace": {"root": str(sandbox / "workspaces")},
+            "projects": {
+                "demo": {
+                    "repo": str(source),
+                    "workspace": {
+                        "copy_untracked": ["node_modules/jest", "node_modules"]
+                    },
+                }
+            },
+        }
+        with self.assertRaisesRegex(RuntimeError, "duplicate or overlapping"):
+            prepare_workspace_session(
+                manifest={"project": "demo", "workspace_mode": "git_worktree"},
+                local_config=local_config,
+                harness_root=sandbox,
+                task_id="RUNTIME_OVERLAP",
+            )
+        self.assertEqual(git(source, "worktree", "list", "--porcelain"), before)
+
     def test_managed_worktree_isolated_and_can_apply_exact_result(self) -> None:
         sandbox = Path(tempfile.mkdtemp(prefix="slivin-worktree-"))
         source = make_source(sandbox)
@@ -300,6 +343,53 @@ class WorkspaceTests(unittest.TestCase):
                 task_id="NESTED_SYMLINK",
             )
         self.assertEqual(git(source, "worktree", "list", "--porcelain"), before)
+
+    @unittest.skipIf(os.name == "nt", "Creating symlinks is not reliably permitted on Windows")
+    def test_runtime_path_diagnostics_distinguish_alias_and_sibling_escape(self) -> None:
+        sandbox = Path(tempfile.mkdtemp(prefix="slivin-runtime-paths-"))
+        root = sandbox / "root"
+        outside = sandbox / "outside"
+        sibling = sandbox / "root-sibling"
+        root.mkdir()
+        outside.mkdir()
+        sibling.mkdir()
+        (outside / "file.txt").write_text("outside", encoding="utf-8")
+        os.symlink(outside, root / "alias", target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, "symlink/junction/reparse"):
+            assert_safe_runtime_path(root, root / "alias" / "file.txt")
+        with self.assertRaisesRegex(RuntimeError, "outside its root"):
+            assert_safe_runtime_path(root, sibling / "file.txt")
+
+        root_alias = sandbox / "root-alias"
+        os.symlink(root, root_alias, target_is_directory=True)
+        (root / "inside.txt").write_text("inside", encoding="utf-8")
+        assert_safe_runtime_path(root_alias, root / "inside.txt")
+
+    @unittest.skipUnless(os.name == "nt", "Windows reparse-point fixture")
+    def test_nested_windows_junction_is_rejected_when_fixture_is_available(self) -> None:
+        sandbox = Path(tempfile.mkdtemp(prefix="slivin-runtime-junction-"))
+        root = sandbox / "root"
+        outside = sandbox / "outside"
+        root.mkdir()
+        outside.mkdir()
+        (outside / "file.txt").write_text("outside", encoding="utf-8")
+        junction = root / "alias"
+        created = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if created.returncode != 0:
+            self.skipTest("Windows junction creation is unavailable")
+        try:
+            with self.assertRaisesRegex(RuntimeError, "symlink/junction/reparse"):
+                assert_safe_runtime_path(root, junction / "file.txt")
+        finally:
+            os.rmdir(junction)
 
     @unittest.skipIf(os.name == "nt", "Creating symlinks is not reliably permitted on Windows")
     def test_symlink_exposure_is_rejected_and_cleaned_up(self) -> None:

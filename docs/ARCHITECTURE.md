@@ -354,12 +354,34 @@ destination rebind-а, без source absolute path.
 
 Projection не использует symlink, junction или hardlink, а destination entry
 проверяется как не совпадающий физически с source entry. Поэтому запись в
-workspace copy не меняет source dependency files. Большие projected directories
-не проходят recursive HMAC на каждом workflow boundary: это избегает скрытого
-O(N) обхода `node_modules`. Они всё равно Git-excluded, disposable вместе с
-managed workspace и не могут влиять на candidate/patch; отдельное
-content-integrity восстановление полного dependency tree остаётся будущим
-улучшением.
+workspace copy не меняет source dependency files. Это граница source safety,
+но сама по себе она не делает результаты checks доверенными.
+
+Для evidence integrity Controller сразу после physical copy строит private
+keyed full-tree fingerprint source и workspace projection. Baseline привязан к
+конкретному run и relative projection root и не находится в agent-writable
+workspace. Fingerprint детерминированно включает relative path и type каждого
+entry, пустые directories, размеры и полное содержимое regular files; чтение
+идёт потоково. Symlink/junction/reparse, special objects и case-collision paths
+отклоняются fail-closed.
+
+Один `RuntimeProjectionIntegrityManager` защищает authoritative batches:
+historical baseline gate, Controller confirmation self-verify, deterministic и
+dynamic repair checks, runtime scenarios и final held-out. Перед batch он
+проверяет неизменность source baseline, затем workspace; mismatch workspace
+удаляется только в пределах projection и заменяется новой independent physical
+copy из неизменного source. После batch повторная full-tree проверка запрещает
+принять PASS, baseline evidence, receipt или held-out semantic result, если
+runtime изменился, и восстанавливает projection для следующей диагностики.
+Replan/repair не создают новый baseline.
+
+Public `runtime_projection_integrity.json` содержит только relative roots,
+batch identifiers и status/event codes; keyed fingerprints остаются в
+`controller_private`. Модель является detect/restore, а не OS-level
+immutability: между проверкой и запуском остаётся ограниченное TOCTOU-окно.
+Стоимость — O(total projected bytes) до и после каждого trusted batch; на
+произвольных LLM/UI phase boundaries дерево не хешируется. Projection остаётся
+Git-excluded, disposable и не входит в candidate/patch/delivery/reconstruction.
 
 ## 13. Security boundary
 

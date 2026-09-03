@@ -120,6 +120,33 @@ def _safe_relative_path(raw: str) -> Path:
     return rel
 
 
+def normalize_copy_untracked_paths(raw_paths: list[str]) -> tuple[str, ...]:
+    """Validate projection roots and reject order-dependent overlaps.
+
+    Windows workspaces are case-insensitive in the supported deployment model,
+    so equality and parent/child comparisons deliberately use ``casefold`` on
+    every normalized path component on every host.
+    """
+
+    normalized = tuple(_safe_relative_path(item).as_posix() for item in raw_paths)
+    keyed = [
+        (value, tuple(part.casefold() for part in Path(value).parts))
+        for value in normalized
+    ]
+    conflicts: set[str] = set()
+    for index, (left, left_parts) in enumerate(keyed):
+        for right, right_parts in keyed[index + 1 :]:
+            shortest = min(len(left_parts), len(right_parts))
+            if left_parts[:shortest] == right_parts[:shortest]:
+                conflicts.update((left, right))
+    if conflicts:
+        raise RuntimeError(
+            "workspace.copy_untracked contains duplicate or overlapping paths: "
+            + ", ".join(sorted(conflicts, key=str.casefold))
+        )
+    return normalized
+
+
 def _format_path(
     raw: str | Path,
     *,
@@ -216,9 +243,6 @@ def assert_safe_runtime_path(
     raw_root = Path(root)
     raw_path = Path(path)
     root = raw_root.resolve(strict=False)
-    candidate = raw_path.resolve(strict=False)
-    if not _canonical_is_within(root, candidate):
-        raise RuntimeError(f"Runtime path is outside its root: {path}")
     try:
         # Preserve the caller's path components when it supplied a root/path
         # pair using the same spelling: this detects an alias that resolves
@@ -228,6 +252,9 @@ def assert_safe_runtime_path(
         rel = raw_path.absolute().relative_to(raw_root.absolute())
         traversal_root = raw_root
     except ValueError:
+        candidate = raw_path.resolve(strict=False)
+        if not _canonical_is_within(root, candidate):
+            raise RuntimeError(f"Runtime path is outside its root: {path}")
         try:
             rel = Path(os.path.relpath(str(candidate), str(root)))
         except (OSError, ValueError) as exc:
@@ -244,6 +271,7 @@ def assert_safe_runtime_path(
                 "Refusing runtime path through symlink/junction/reparse point: "
                 + str(current)
             )
+    candidate = raw_path.resolve(strict=False)
     probe = path if include_leaf else path.parent
     if not _canonical_is_within(root, probe):
         raise RuntimeError(f"Runtime path escaped its root after resolution: {path}")
@@ -622,10 +650,8 @@ def prepare_workspace_session(
     raw_exposed = workspace_cfg.get("copy_untracked", [])
     if not isinstance(raw_exposed, list) or not all(isinstance(item, str) for item in raw_exposed):
         raise RuntimeError("copy_untracked must be an array of strings")
-    configured_exposed = list(raw_exposed)
-    configured_relative = [
-        _safe_relative_path(item).as_posix() for item in configured_exposed
-    ]
+    configured_relative = list(normalize_copy_untracked_paths(raw_exposed))
+    configured_exposed = list(configured_relative)
     allow_sensitive_copy = bool(workspace_cfg.get("allow_sensitive_copy", False))
     repository_included = list(_worktreeinclude_paths(source_repo))
 

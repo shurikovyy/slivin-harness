@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -8,6 +9,20 @@ from task_runner import resolve_runtime_path, resolve_toolchain
 
 
 class RuntimeConfigTests(unittest.TestCase):
+    def test_local_config_examples_keep_runtime_projection_project_specific(self) -> None:
+        harness_root = Path(__file__).resolve().parents[1]
+        with (harness_root / "harness.local.example.toml").open("rb") as handle:
+            example = tomllib.load(handle)
+        self.assertEqual(example["projects"]["example"]["workspace"]["copy_untracked"], [])
+        self.assertEqual(
+            example["projects"]["matrix_baseline"]["workspace"]["copy_untracked"],
+            ["node_modules"],
+        )
+        matrix_readme = (harness_root / "cases" / "matrix-all-matching" / "README.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('copy_untracked = ["node_modules"]', matrix_readme)
+
     def test_project_toolchain_is_resolved_from_project_root_and_manifest_wins(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="slivin-config-"))
         project = root / "project"

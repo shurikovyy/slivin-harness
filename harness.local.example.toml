@@ -57,11 +57,10 @@ enabled = false
 
 [projects.example.workspace]
 # Prefer repository-owned .worktreeinclude for ignored runtime files such as .env.
-# copy_untracked remains a machine-local override. A source-owned dependency
-# tree for a historical benchmark must be declared here, never in the tracked
-# .worktreeinclude baseline. Harness physically copies it; it never runs npm
-# install/npm ci in the managed workspace.
-copy_untracked = ["node_modules"]
+# copy_untracked remains a machine-local, project-specific override. Keep the
+# generic profile empty; declare a source-owned dependency tree only in the
+# project profile that actually has it (see matrix_baseline below).
+copy_untracked = []
 
 # Required only when copy_untracked intentionally includes .env, *.pem,
 # credentials.json or another sensitive path. The agent can read it.

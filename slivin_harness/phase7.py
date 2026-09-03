@@ -611,7 +611,14 @@ def classify_heldout_results(
         reason = "HELDOUT_TIMEOUT"
     elif any(item.infra_error for item in results):
         status = HeldoutStatus.INFRA_ERROR.value
-        reason = "HELDOUT_INFRA_ERROR"
+        reason = next(
+            (
+                str(item.runtime_integrity_reason_code)
+                for item in results
+                if getattr(item, "runtime_integrity_reason_code", None)
+            ),
+            "HELDOUT_INFRA_ERROR",
+        )
     elif not all(oracle_marker in str(item.output) for item in results):
         status = HeldoutStatus.INFRA_ERROR.value
         reason = "HELDOUT_ORACLE_NOT_REACHED"

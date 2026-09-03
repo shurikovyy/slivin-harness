@@ -4,7 +4,10 @@
 
 - Historical benchmarks can now physically project a source-owned runtime directory such as `node_modules` through the selected local `workspace.copy_untracked` profile and rebind an authorized source-local toolchain entry to its standalone workspace copy.
 - Added fail-closed Controller provenance, canonical containment/alias checks and `benchmark-toolchain-sanitization.v2`; source-local tool paths without a valid projection remain removed, while public artifacts retain only relative rebind destinations.
-- Projected runtime directories remain Git/candidate/patch/delivery/reconstruction-excluded and do not trigger `npm install` or `npm ci`. Their full recursive HMAC restoration is deliberately deferred to avoid an O(N) walk at each workflow boundary.
+- Added a Controller-private keyed full-tree baseline and centralized pre/post trusted-batch guard for projected runtimes. Workspace mismatch is physically recopied from an unchanged source; mutation during a check invalidates green results, semantic baseline/held-out evidence and self-verify receipts.
+- Full-tree fingerprints stream regular-file contents and cover names, types, empty directories, additions, deletions and renames; aliases, unsupported objects and Windows case collisions fail closed. The detect/restore boundary costs O(total projected bytes) at trusted check boundaries and does not claim OS immutability.
+- `workspace.copy_untracked` now rejects duplicate, case/slash-equivalent and parent/child roots before workspace creation; POSIX symlink ancestors retain alias-specific diagnostics. The generic local-config example remains empty while the Matrix-specific profile opts into `node_modules`.
+- Projected runtime directories remain Git/candidate/patch/delivery/reconstruction-excluded and do not trigger `npm install` or `npm ci`.
 
 ## 0.8.0a12 — Phase 7 stabilization: Intake contract recovery
 

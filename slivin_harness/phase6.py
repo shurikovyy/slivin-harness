@@ -13,6 +13,10 @@ from slivin_harness.control_plane import canonical_path, is_within
 from slivin_harness.execution import ExecutionBroker, ExecutionRole
 from slivin_harness.protocol import safe_repo_relative, stable_fingerprint
 from slivin_harness.run_state import CandidateIdentity, build_candidate_identity
+from slivin_harness.runtime_projection import (
+    RuntimeProjectionIntegrityError,
+    RuntimeProjectionIntegrityManager,
+)
 from slivin_harness.verification import Capability, ProofLevel, validate_verification_plan
 from slivin_harness.workflow import RuntimeStatus
 
@@ -728,11 +732,13 @@ class RuntimeExecutor:
         source_repo: Path | None,
         toolchain: Mapping[str, str],
         execution_broker: ExecutionBroker,
+        runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
     ) -> None:
         self.workspace = canonical_path(workspace)
         self.source_repo = canonical_path(source_repo) if source_repo else None
         self.toolchain = {str(key): str(value) for key, value in toolchain.items()}
         self.execution_broker = execution_broker
+        self.runtime_integrity_manager = runtime_integrity_manager
 
     def _source_head(self) -> str | None:
         if self.source_repo is None:
@@ -1113,15 +1119,50 @@ class RuntimeExecutor:
                 scenarios=(),
                 reason_code="NO_RUNTIME_PROOF_REQUIRED",
             )
-        results = tuple(
-            self._run_scenario(
-                scenario,
-                requirements,
-                verification_plan_fingerprint=str(verification_plan["fingerprint"]),
-                index=index,
-            )
-            for index, (scenario, requirements) in enumerate(assignments, start=1)
-        )
+        results_list: list[RuntimeScenarioExecution] = []
+        for index, (scenario, requirements) in enumerate(assignments, start=1):
+            def execute_scenario() -> RuntimeScenarioExecution:
+                return self._run_scenario(
+                    scenario,
+                    requirements,
+                    verification_plan_fingerprint=str(verification_plan["fingerprint"]),
+                    index=index,
+                )
+
+            try:
+                result = (
+                    self.runtime_integrity_manager.run_batch(
+                        f"RUNTIME_VERIFICATION:{scenario.scenario_id}",
+                        execute_scenario,
+                    )
+                    if self.runtime_integrity_manager is not None
+                    else execute_scenario()
+                )
+            except RuntimeProjectionIntegrityError as exc:
+                candidate_now = build_candidate_identity(self.workspace).candidate_id
+                result = RuntimeScenarioExecution(
+                    scenario.scenario_id,
+                    scenario.profile,
+                    RuntimeStatus.INFRA_ERROR.value,
+                    candidate_now,
+                    candidate_now,
+                    {
+                        "protocol_version": RUNTIME_REQUEST_VERSION,
+                        "scenario_id": scenario.scenario_id,
+                        "profile": scenario.profile,
+                    },
+                    None,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    0.0,
+                    exc.reason_code,
+                )
+            results_list.append(result)
+        results = tuple(results_list)
         final_candidate = build_candidate_identity(self.workspace)
         if final_candidate.candidate_id != candidate.candidate_id:
             status = RuntimeStatus.MUTATED_CANDIDATE.value

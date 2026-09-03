@@ -394,6 +394,21 @@ timeout_seconds = 30
         self.assertEqual(sanitization["removed"], {})
         self.assertNotIn(str(run_root.parent / "repo"), json.dumps(sanitization))
         self.assertFalse(sanitization["fresh_dependency_install_performed"])
+        integrity = json.loads(
+            (run_root / "runtime_projection_integrity.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(integrity["schema_version"], "runtime-projection-integrity.v1")
+        self.assertEqual(integrity["projection_roots"], ["node_modules"])
+        public_integrity = json.dumps(integrity, sort_keys=True)
+        self.assertNotIn(str(run_root.parent / "repo"), public_integrity)
+        self.assertNotIn("keyed_hmac_sha256", public_integrity)
+        private_baseline = json.loads(
+            (run_root / "controller_private" / "runtime_projection_baseline.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(private_baseline["projections"][0]["relative_path"], "node_modules")
+        self.assertIn("keyed_hmac_sha256", private_baseline["projections"][0])
 
     def test_production_workflow_does_not_emit_historical_toolchain_sanitization(self) -> None:
         result, run_root, output = self.run_case(benchmark=False, projected_jest=True)

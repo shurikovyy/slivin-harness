@@ -260,6 +260,38 @@ destination, отсутствие symlink/junction/reparse aliases в ancestor-�
 destination, а `fresh_dependency_install_performed` всегда `false` для этой
 projection. Direct source absolute paths в public artifact не записываются.
 
+Physical independence защищает source, но не достаточна для trusted evidence.
+После initial copy Controller сохраняет private keyed fingerprint полного
+projection tree. Перед каждым historical baseline, Controller-confirmed
+self-verify, deterministic/dynamic check batch, runtime scenario и held-out он:
+
+1. требует совпадения текущего source tree с immutable-for-run baseline;
+2. при workspace mismatch полностью заменяет только destination projection
+   новой physical copy;
+3. повторно проверяет containment, regular-tree shape, отсутствие aliases и
+   точное совпадение fingerprint;
+4. после batch снова проверяет workspace tree независимо от exit code.
+
+Mutation во время batch инвалидирует весь текущий result: green exit code не
+становится PASS, self-verify receipt не выпускается, baseline не считается
+semantic broken, а held-out не становится semantic PASS/FAIL. После обнаружения
+Controller восстанавливает runtime без скрытого retry самого check. Distinct
+integrity reasons:
+
+```text
+RUNTIME_PROJECTION_SOURCE_CHANGED
+RUNTIME_PROJECTION_WORKSPACE_RESTORE_FAILED
+RUNTIME_PROJECTION_BASELINE_MISMATCH
+RUNTIME_PROJECTION_MUTATED_DURING_CHECK
+RUNTIME_PROJECTION_UNSUPPORTED_ENTRY
+```
+
+Safe public events находятся в `runtime_projection_integrity.json`; source
+absolute paths, file contents и private fingerprints туда не попадают.
+Full-tree pre/post proof стоит O(total projected bytes) на trusted batch
+boundary. Это detect/restore boundary, не заявление OS-level immutability;
+ограниченное TOCTOU-окно сохраняется.
+
 ## 7. Held-out — экзамен, а не repair tool
 
 Held-out запускается только после normal pipeline PASS и никогда не передаётся Planner, Implementer или Evaluator.

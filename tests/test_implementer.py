@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from slivin_harness.app_server import TurnTimeoutError
+from slivin_harness.control_plane import ControllerPlane
 from slivin_harness.implementer import (
     IMPLEMENTER_PROTOCOL_VERSION,
     IMPLEMENTATION_CONTRACT_VERSION,
@@ -15,6 +16,7 @@ from slivin_harness.implementer import (
     validate_implementation_report,
 )
 from task_runner import (
+    HarnessControlledStop,
     build_dynamic_check_specs,
     build_trusted_check_id_specs,
     candidate_content_fingerprint,
@@ -22,6 +24,11 @@ from task_runner import (
     run_implementer_report,
     verify_self_verification_stamp,
 )
+from slivin_harness.runtime_projection import (
+    RUNTIME_PROJECTION_MUTATED_DURING_CHECK,
+    RuntimeProjectionIntegrityManager,
+)
+from slivin_harness.workspace import RuntimeProjection, WorkspaceSession
 from test_protocol import proof, valid_plan, valid_task_contract
 
 
@@ -199,6 +206,107 @@ class ImplementerContractTests(unittest.TestCase):
         (repo / "src" / "a.py").write_text("VALUE = 3\n", encoding="utf-8")
         self.assertNotEqual(before, candidate_content_fingerprint(repo))
         self.assertFalse(verify_self_verification_stamp(workspace=repo, stamp_path=stamp))
+
+    def test_mutating_self_verify_cannot_issue_controller_receipt(self) -> None:
+        repo = self.make_repo()
+        (repo / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+        git(repo, "add", ".gitignore")
+        git(repo, "commit", "-m", "ignore runtime")
+        source = repo.parent / (repo.name + "-source")
+        source_dep = source / "node_modules" / "dep" / "index.js"
+        workspace_dep = repo / "node_modules" / "dep" / "index.js"
+        source_dep.parent.mkdir(parents=True)
+        workspace_dep.parent.mkdir(parents=True)
+        source_dep.write_text("baseline\n", encoding="utf-8")
+        workspace_dep.write_text("baseline\n", encoding="utf-8")
+        control_plane = ControllerPlane(repo.parent / (repo.name + "-run"))
+        manager = RuntimeProjectionIntegrityManager(
+            session=WorkspaceSession(
+                workspace=repo,
+                mode="benchmark_isolated",
+                managed=True,
+                source_repo=source,
+                runtime_projections=(
+                    RuntimeProjection(
+                        relative_path="node_modules",
+                        source_kind="workspace.copy_untracked",
+                        destination=repo / "node_modules",
+                        is_directory=True,
+                        copy_mode="physical_copy",
+                        runtime_only=True,
+                    ),
+                ),
+            ),
+            control_plane=control_plane,
+            retry_delay_seconds=0,
+        )
+        manager.establish_baseline()
+        (repo / "src" / "a.py").write_text("VALUE = 2\n", encoding="utf-8")
+        specs = [
+            {
+                "name": "mutating self verify",
+                "feedback": "repair",
+                "command": [
+                    "{python}",
+                    "-c",
+                    (
+                        "from pathlib import Path; "
+                        "Path('node_modules/dep/index.js').write_text('mutated')"
+                    ),
+                ],
+                "timeout_seconds": 30,
+            }
+        ]
+        _, stamp, command = prepare_self_verify_runner(
+            workspace=repo,
+            specs=specs,
+            toolchain={"project_python": sys.executable},
+        )
+        contract = self.contract()
+        report = {
+            "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
+            "status": "COMPLETE",
+            "summary": "done",
+            "contract_evidence": [
+                {"item_id": item["id"], "status": "VERIFIED", "evidence": ["checked"]}
+                for item in contract["items"]
+            ],
+            "self_verification": {
+                "status": "PASS",
+                "command": "self",
+                "evidence": ["SELF_VERIFY_PASS"],
+            },
+            "additional_check_paths": [],
+            "blockers": [],
+        }
+
+        class FakeCodex:
+            def run_turn(self, **_kwargs):
+                completed = subprocess.run(command, cwd=repo, check=False)
+                if completed.returncode != 0:
+                    raise AssertionError("agent self verify fixture did not report PASS")
+                return json.dumps(report)
+
+        with self.assertRaises(HarnessControlledStop) as raised:
+            run_implementer_report(
+                FakeCodex(),
+                thread_id="thread",
+                prompt="implement",
+                timeout=60,
+                label="IMPLEMENT",
+                implementation_contract=contract,
+                self_verify_command=command,
+                workspace=repo,
+                stamp_path=stamp,
+                plan=valid_plan(),
+                control_plane=control_plane,
+                runtime_integrity_manager=manager,
+            )
+        self.assertEqual(str(raised.exception), RUNTIME_PROJECTION_MUTATED_DURING_CHECK)
+        self.assertEqual(workspace_dep.read_text(encoding="utf-8"), "baseline\n")
+        self.assertFalse(
+            (control_plane.private_root / "self_verify_receipt_current.json").exists()
+        )
 
     def test_dynamic_checks_accept_test_paths_not_arbitrary_commands(self) -> None:
         repo = self.make_repo()
