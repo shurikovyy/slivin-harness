@@ -110,8 +110,15 @@ Node, Jest, `jest.config.cjs`, загрузку Jest test environment, пере�
 test paths, syntax/EOL scripts и Git. `--showConfig` не запускает tests, а hidden
 semantic script проверяется на наличие, но не исполняется. Public artifact не
 содержит source absolute path. Текущий manifest использует `{node}`, `{jest}` и
-`{python}`, но не `{project_python}`; поэтому optional local `project_python`
-не нужен и, если всё же задан, остаётся `UNUSED_NOT_PROBED`.
+`{harness_python}`, но не `{python}`/`{project_python}`; поэтому optional local
+`project_python` не нужен и, если всё же задан, остаётся `UNUSED_NOT_PROBED`.
+
+`{python}` в generic project checks остаётся project-first alias, тогда как EOL
+check Matrix явно использует `{harness_python}`, потому что
+`tools/check_changed_eol.py` принадлежит Harness. Jest config является
+исполняемым project code: preflight сравнивает canonical candidate identity до
+и после `--showConfig`, а raw output сохраняет только в Controller-private log.
+Поддерживаются explicit `--config` и стандартный discovery из workspace cwd.
 
 Если baseline ещё не Git repository:
 

@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a12
+# Документация Slivin Harness 0.8.0a13
 
-Актуальная версия: **0.8.0a12 — Phase 7 stabilization**.
+Актуальная версия: **0.8.0a13 — static preflight trust-boundary hardening**.
 
 Основные документы:
 

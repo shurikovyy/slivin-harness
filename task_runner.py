@@ -17,6 +17,7 @@ from typing import Any
 
 from slivin_harness import __version__
 from slivin_harness.app_server import CodexAppServer, TurnTimeoutError
+from slivin_harness.build_identity import detect_harness_build_identity
 from slivin_harness.console import configure_utf8_stdio
 from slivin_harness.control_plane import (
     ArtifactVisibility,
@@ -80,6 +81,7 @@ from slivin_harness.phase7 import (
 from slivin_harness.preflight import (
     ToolProbeRegistry,
     expand_check_command,
+    resolve_python_command,
     run_static_toolchain_preflight,
 )
 from slivin_harness.protocol import (
@@ -105,7 +107,6 @@ from slivin_harness.task_contract import (
     validate_task_contract,
 )
 from slivin_harness.verification import (
-    Capability,
     VERIFICATION_PLAN_VERSION,
     available_capabilities,
     compile_verification_plan,
@@ -1109,13 +1110,13 @@ def build_dynamic_check_specs(
             if "manage.py" in cmd and "test" in cmd:
                 label = rel[:-3].replace("/", ".") if rel.endswith(".py") else rel
                 python_cmd = [
-                    toolchain.get("project_python", toolchain.get("python", sys.executable)),
+                    resolve_python_command(toolchain).value,
                     "manage.py", "test", label,
                 ]
                 break
             if "-m" in cmd and "pytest" in cmd:
                 python_cmd = [
-                    toolchain.get("project_python", toolchain.get("python", sys.executable)),
+                    resolve_python_command(toolchain).value,
                     "-m", "pytest", rel, "-q",
                 ]
                 break
@@ -2034,6 +2035,27 @@ def main(argv: list[str] | None = None) -> int:
         workflow_mode = workflow_mode_for_manifest(manifest)
         pipeline_profile = pipeline_profile_for_manifest(manifest)
         recorder = RunRecorder(manifest["task_id"])
+        harness_build_identity = detect_harness_build_identity(
+            harness_root=HARNESS_ROOT,
+            version=__version__,
+        )
+        recorder.write_authoritative_json(
+            "harness_build_identity.json",
+            harness_build_identity.to_dict(),
+        )
+        print("HARNESS_VERSION:", harness_build_identity.version)
+        print(
+            "HARNESS_GIT_COMMIT:",
+            harness_build_identity.git_commit or "UNAVAILABLE",
+        )
+        print(
+            "HARNESS_GIT_DIRTY:",
+            (
+                str(harness_build_identity.git_dirty).lower()
+                if harness_build_identity.git_dirty is not None
+                else "unknown"
+            ),
+        )
         recorder.write_authoritative_json("manifest_snapshot.json", manifest)
         recorder.write_authoritative_json(
             "workflow_snapshot.json",
@@ -2224,6 +2246,7 @@ def main(argv: list[str] | None = None) -> int:
             source_repo=session.source_repo,
             toolchain=toolchain,
             execution_broker=execution_broker,
+            control_plane=recorder.control_plane,
             runtime_integrity_manager=runtime_integrity_manager,
             historical=workflow_mode == WorkflowMode.HISTORICAL_BENCHMARK,
             rebound_to_workspace=benchmark_toolchain_rebound,
@@ -2234,6 +2257,7 @@ def main(argv: list[str] | None = None) -> int:
             harness_root=HARNESS_ROOT,
             toolchain=toolchain,
             probe_registry=tool_probe_registry,
+            candidate_baseline_sha=session.base_sha or preflight["head_sha"],
         )
         static_preflight_artifact = "static_toolchain_preflight.json"
         recorder.write_json(static_preflight_artifact, static_preflight.public_dict())
@@ -2242,7 +2266,10 @@ def main(argv: list[str] | None = None) -> int:
             static_preflight.private_dict(),
         )
         if not static_preflight.passed:
-            static_artifacts = [static_preflight_artifact]
+            static_artifacts = [
+                "harness_build_identity.json",
+                static_preflight_artifact,
+            ]
             if runtime_integrity_manager.active:
                 static_artifacts.append("runtime_projection_integrity.json")
             run_state.route_stage(
@@ -2289,6 +2316,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError(
                     "Workspace HEAD changed during the task; Git history is Controller-owned"
                 )
+            tool_probe_registry.bind_candidate_identity(identity.candidate_id)
             run_state.observe_candidate(identity, reason_code=reason_code)
             recorder.write_authoritative_json(
                 "candidate_identity_current.json", identity.to_dict()
@@ -2296,7 +2324,6 @@ def main(argv: list[str] | None = None) -> int:
             return identity
 
         print("TASK_STARTED:", datetime.now().astimezone().isoformat())
-        print("HARNESS_VERSION:", __version__)
         print("TASK:", manifest["task_id"])
         print("RISK:", risk)
         print("WORKFLOW_MODE:", workflow_mode.value)
@@ -2427,6 +2454,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("HARNESS_TASK_STOPPED: NEEDS_USER_DECISION")
                 return 2
             intake_artifacts = [
+                "harness_build_identity.json",
                 "manifest_snapshot.json",
                 "workflow_snapshot.json",
                 "preflight.json",
@@ -2952,8 +2980,13 @@ def main(argv: list[str] | None = None) -> int:
                 reconciliation = runtime_manager.reconcile(runtime_state)
                 runtime_state = reconciliation.state
                 toolchain["project_python"] = runtime_state.project_python
+                tool_probe_registry.toolchain["project_python"] = (
+                    runtime_state.project_python
+                )
                 if not reconciliation.changed:
                     return False, ""
+
+                tool_probe_registry.invalidate_runtime_environment_evidence()
 
                 trigger = (
                     InvalidationTrigger.DEPENDENCY_MANIFEST_CHANGED
@@ -3736,7 +3769,7 @@ def main(argv: list[str] | None = None) -> int:
                         tool_probe_registry.toolchain["project_python"] = (
                             runtime_state.project_python
                         )
-                        tool_probe_registry.invalidate(Capability.PROJECT_PYTHON.value)
+                        tool_probe_registry.invalidate_runtime_environment_evidence()
 
                     run_state.begin_stage(StageId.PLANNER)
                     plan = run_planner(

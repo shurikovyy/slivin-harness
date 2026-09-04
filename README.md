@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a12 — Phase 7
+# Slivin Harness 0.8.0a13 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Текущий `0.8.0a12` quality-core сохраняет protocol/workflow versions и добавляет
+Текущий `0.8.0a13` quality-core сохраняет protocol/workflow versions и добавляет
 Stage 0 static toolchain gate до semantic baseline и agent stages:
 
 ```text
@@ -50,8 +50,21 @@ baseline Controller строго разбирает templates всех repair/he
 checks. Он проверяет только статически известную исполнимость: required
 placeholders/toolchain entries, executable resolution, manifest-known input
 files и bounded probes `git --version`, Python/Node `--version`, а для Jest —
-`node jest --version` и загрузку указанного config через `--showConfig`.
-Tests и hidden semantic oracle при этом не запускаются.
+`node jest --version` и загрузку explicit либо cwd-discovered config через
+`--showConfig`. Tests и hidden semantic oracle при этом не запускаются.
+
+`{python}` остаётся compatibility alias с project-first разрешением:
+`project_python` → configured `python` → Harness Python. `{project_python}`
+явно требует project runtime и probe evidence, а `{harness_python}` всегда
+выбирает interpreter самого Harness. Project-owned config является исполняемым
+кодом, поэтому static preflight связан одновременно с full-tree runtime guard и
+canonical candidate identity до/после probe batch. Любое изменение candidate
+делает evidence недействительным.
+
+Полный stdout/stderr probes хранится только в Controller-private plane. Public
+artifact содержит typed status, bounded version либо фиксированную failure
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a13`, exact Git
+commit и tracked dirty/archive state без публикации локального пути.
 
 Gate завершается до baseline semantic command, запуска Codex app-server,
 Task Contract и Planner. Неиспользуемая optional toolchain entry не блокирует
@@ -260,7 +273,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a12 ...
+DOCS_SYNC_PASS harness=0.8.0a13 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -274,7 +287,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a12` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a13` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

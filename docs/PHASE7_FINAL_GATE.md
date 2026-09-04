@@ -264,9 +264,11 @@ projection. Direct source absolute paths в public artifact не записыв�
 semantic command, Controller выполняет `static-toolchain-preflight.v1` для всех
 repair/held-out templates. Source-owned rebound entry принимается только если
 его признаёт established runtime projection authority. Node/Jest probes и Jest
-`--showConfig` защищены тем же full-tree integrity batch guard; hidden held-out
-script лишь проверяется как существующий input и не исполняется. Failure
-останавливает Step 0 до Codex app-server, Task Contract и Planner.
+`--showConfig` (explicit config или cwd discovery) защищены тем же full-tree
+integrity batch guard и canonical candidate identity до/после; hidden held-out
+script лишь проверяется как существующий input и не исполняется. Candidate
+mutation очищает probe evidence и останавливает run до semantic baseline.
+Failure останавливает Step 0 до Codex app-server, Task Contract и Planner.
 
 Physical independence защищает source, но не достаточна для trusted evidence.
 После initial copy Controller сохраняет private keyed fingerprint полного
@@ -346,7 +348,7 @@ Execution Broker продолжает честно различать `ENFORCED`
 
 ## 9. Следующий checkpoint
 
-После Windows `HARNESS_SELF_CHECK_PASS` версии `0.8.0a12` новых архитектурных фаз quality-core не требуется.
+После Windows `HARNESS_SELF_CHECK_PASS` версии `0.8.0a13` новых архитектурных фаз quality-core не требуется.
 
 Следующий шаг:
 

@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a12 — Phase 7
+# Модель качества Slivin Harness 0.8.0a13 — Phase 7
 
 ## Основная формула
 
@@ -37,6 +37,13 @@ runtime probes действуют full-tree pre/post integrity guard и JIT rest
 Preflight не запускает tests/hidden oracle, не доказывает product correctness и
 не заменяет post-plan capability gate для требований, появившихся из Planner и
 Verification Plan.
+
+Jest config выполняется как project code даже при `--showConfig`. Поэтому второй
+независимый guard сравнивает canonical candidate identity до/после preflight:
+tracked mutation, deletion или untracked addition отменяет любое зелёное probe
+evidence. Runtime-only exclusions сохраняются. Raw probe output остаётся private,
+а public artifact содержит только typed diagnostic. Explicit Jest config и cwd
+auto-discovery поддерживаются без запуска tests.
 
 ## Что доказывает каждый слой
 
@@ -264,7 +271,7 @@ historical benchmark не раскрывает другие refs/objects/held-ou
 успешный CI/deployment/production rollout;
 ```
 
-Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a12` первый такой checkpoint — historical `_90`.
+Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a13` первый такой checkpoint — historical `_90`.
 
 ## Версии
 

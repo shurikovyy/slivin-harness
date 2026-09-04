@@ -92,6 +92,20 @@ bounded version/config probes. It does not execute a check body, test suite or
 hidden oracle. A newly registered dynamic check remains protected by the normal
 Controller batch guard and its post-plan capability gate.
 
+`{python}` is the project-first compatibility alias (`project_python`, then a
+configured `python`, then the Harness interpreter). `{project_python}` is an
+explicit probe-backed requirement; `{harness_python}` always selects the
+Controller/Harness interpreter. Static expansion and actual manifest,
+self-verify, deterministic, held-out and generated dynamic check expansion share
+this resolver.
+
+Because Jest config is executable project code, static preflight freezes the
+canonical `candidate.v1` before and after its runtime-guarded probe batch.
+Tracked changes, deletions or untracked additions invalidate every successful
+probe and stop the run. `.harness_tmp`, worktree `.venv` and registered projected
+runtime roots retain the existing candidate exclusions. Raw probe output is
+Controller-private; public failure evidence is typed and contains no raw output.
+
 ## Enforcement honesty
 
 The Execution Broker records whether a filesystem/network boundary is `ENFORCED`,

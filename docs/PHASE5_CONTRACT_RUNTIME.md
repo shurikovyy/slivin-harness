@@ -59,6 +59,14 @@ registry and projected-runtime integrity guard; a configured key or boolean
 declaration alone is not capability evidence. Non-tool runtime scenario
 selection remains a late Verification Plan concern.
 
+The command placeholder contract preserves the Phase 5 runtime: `{python}` uses
+the worktree-local `project_python` when it exists, then configured `python`, and
+only then the Harness interpreter. `{project_python}` has no fallback and needs
+a successful `PROJECT_PYTHON` probe. Harness-owned utilities use
+`{harness_python}` explicitly so an optional invalid project runtime does not
+affect them. Candidate/runtime revision changes invalidate the corresponding
+cached tool evidence before a later gate may reuse it.
+
 ## Open-world Contract transaction
 
 Implementer protocol is now `implementer.v3`. A discovered obligation contains:

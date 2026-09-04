@@ -1,4 +1,4 @@
-# Практическая работа с Slivin Harness 0.8.0a12
+# Практическая работа с Slivin Harness 0.8.0a13
 
 ## Установка и self-check
 
@@ -11,8 +11,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемый финал:
 
 ```text
-0.8.0a12
-DOCS_SYNC_PASS harness=0.8.0a12 ...
+0.8.0a13
+DOCS_SYNC_PASS harness=0.8.0a13 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -52,10 +52,17 @@ repair-попытки не помогли, run останавливается к
 Static Toolchain Preflight выполняется до semantic baseline command и до любого
 Codex thread. Он анализирует repair и held-out commands, но не запускает их:
 проверяются placeholders, executables, известные input paths и lightweight
-version/config probes. Для Jest `--showConfig` загружает указанный config и test
-environment без `--runTestsByPath`. Ошибка даёт controlled
+version/config probes. Для Jest `--showConfig` загружает explicit config либо
+использует стандартный discovery из workspace cwd без `--runTestsByPath`.
+Project-owned config считается executable code: `candidate.v1` сравнивается до
+и после preflight, а raw output остаётся в Controller-private plane. Ошибка даёт controlled
 `STATIC_TOOLCHAIN_PREFLIGHT_FAILED` и artifact
 `static_toolchain_preflight.json`; Task Contract и Plan ещё не создаются.
+
+В command templates `{python}` означает project-first цепочку
+`project_python` → configured `python` → Harness Python. Для явной зависимости
+от worktree runtime используется `{project_python}`, для Harness utility —
+`{harness_python}`.
 
 После компиляции Verification Plan остаётся второй gate. Он переиспользует
 успешные static probes и проверяет on demand впервые появившиеся tool-backed или

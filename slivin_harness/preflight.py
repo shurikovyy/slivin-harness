@@ -6,12 +6,22 @@ import shutil
 import string
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable, Mapping, Sequence
 
-from slivin_harness.control_plane import canonical_path, is_within
+from slivin_harness.control_plane import (
+    ArtifactVisibility,
+    ControllerPlane,
+    canonical_path,
+    is_within,
+)
 from slivin_harness.execution import ExecutionBroker, ExecutionRole
+from slivin_harness.run_state import (
+    DEFAULT_CANDIDATE_EXCLUDES,
+    CandidateIdentity,
+    build_candidate_identity,
+)
 from slivin_harness.runtime_projection import (
     RuntimeProjectionIntegrityError,
     RuntimeProjectionIntegrityManager,
@@ -33,11 +43,12 @@ STATIC_JEST_CONFIG_PROBE_FAILED = "STATIC_JEST_CONFIG_PROBE_FAILED"
 STATIC_CHECK_INPUT_NOT_FOUND = "STATIC_CHECK_INPUT_NOT_FOUND"
 STATIC_COMMAND_TEMPLATE_INVALID = "STATIC_COMMAND_TEMPLATE_INVALID"
 STATIC_RUNTIME_INTEGRITY_FAILED = "STATIC_RUNTIME_INTEGRITY_FAILED"
+STATIC_PREFLIGHT_MUTATED_CANDIDATE = "STATIC_PREFLIGHT_MUTATED_CANDIDATE"
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _FORMATTER = string.Formatter()
 _BUILTIN_PLACEHOLDERS = frozenset(
-    {"workspace", "harness_root", "project_root", "python"}
+    {"workspace", "harness_root", "project_root", "python", "harness_python"}
 )
 _KNOWN_TOOLCHAIN_KEYS = frozenset({"node", "jest", "project_python"})
 TOOL_BACKED_CAPABILITIES = frozenset(
@@ -60,6 +71,66 @@ class StaticPreflightError(RuntimeError):
     def __init__(self, reason_code: str, message: str) -> None:
         self.reason_code = reason_code
         super().__init__(message)
+
+
+@dataclass(frozen=True)
+class PythonCommandResolution:
+    value: str
+    source: str
+    toolchain_key: str | None
+    capability: str | None
+
+
+def resolve_python_command(
+    toolchain: Mapping[str, str],
+    *,
+    placeholder: str = "python",
+) -> PythonCommandResolution:
+    """Resolve the shared project-first Python placeholder contract."""
+
+    harness_python = str(Path(sys.executable).resolve())
+    if placeholder == "harness_python":
+        return PythonCommandResolution(
+            value=harness_python,
+            source="HARNESS_PYTHON",
+            toolchain_key=None,
+            capability=None,
+        )
+    if placeholder == "project_python":
+        value = toolchain.get("project_python")
+        if not value:
+            raise StaticPreflightError(
+                STATIC_TOOLCHAIN_MISSING_ENTRY,
+                "Required toolchain entry is missing: project_python",
+            )
+        return PythonCommandResolution(
+            value=str(value),
+            source="PROJECT_PYTHON",
+            toolchain_key="project_python",
+            capability=Capability.PROJECT_PYTHON.value,
+        )
+    if placeholder != "python":
+        raise ValueError(f"Unsupported Python placeholder: {placeholder!r}")
+    if toolchain.get("project_python"):
+        return PythonCommandResolution(
+            value=str(toolchain["project_python"]),
+            source="PROJECT_PYTHON",
+            toolchain_key="project_python",
+            capability=Capability.PROJECT_PYTHON.value,
+        )
+    if toolchain.get("python"):
+        return PythonCommandResolution(
+            value=str(toolchain["python"]),
+            source="CONFIGURED_PYTHON",
+            toolchain_key="python",
+            capability=None,
+        )
+    return PythonCommandResolution(
+        value=harness_python,
+        source="HARNESS_PYTHON",
+        toolchain_key=None,
+        capability=None,
+    )
 
 
 def extract_command_placeholders(command: Sequence[str]) -> tuple[str, ...]:
@@ -126,7 +197,10 @@ def expand_check_command(
             # also prevents a historical command from receiving the source
             # checkout through a similarly named placeholder.
             "project_root": str((project_root or workspace).resolve()),
-            "python": str(Path(sys.executable).resolve()),
+            "python": resolve_python_command(toolchain).value,
+            "harness_python": resolve_python_command(
+                toolchain, placeholder="harness_python"
+            ).value,
         }
     )
     return expand_command_template(command, values=values)
@@ -170,6 +244,8 @@ class ToolProbeRecord:
     status: str
     reason_code: str | None = None
     safe_summary: str = ""
+    returncode: int | None = None
+    timed_out: bool = False
 
     def public_dict(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -179,9 +255,17 @@ class ToolProbeRecord:
         }
         if self.reason_code:
             value["reason_code"] = self.reason_code
+        value["returncode"] = self.returncode
+        value["timed_out"] = self.timed_out
         if self.safe_summary:
             value["summary"] = self.safe_summary
         return value
+
+
+@dataclass(frozen=True)
+class JestConfigProbe:
+    cache_key: str
+    path: Path | None
 
 
 @dataclass
@@ -221,6 +305,7 @@ class StaticToolchainPreflightResult:
     resolved_executables: tuple[dict[str, Any], ...]
     optional_toolchain_entries: tuple[dict[str, str], ...]
     reason_codes: tuple[str, ...]
+    candidate_unchanged: bool = True
     private_details: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -239,6 +324,7 @@ class StaticToolchainPreflightResult:
             "resolved_executables": list(self.resolved_executables),
             "optional_toolchain_entries": list(self.optional_toolchain_entries),
             "reason_codes": list(self.reason_codes),
+            "candidate_unchanged": self.candidate_unchanged,
             "source_paths_exposed": False,
             "hidden_commands_executed": False,
             "tests_executed": False,
@@ -264,6 +350,7 @@ class ToolProbeRegistry:
         source_repo: Path | None,
         toolchain: Mapping[str, str],
         execution_broker: ExecutionBroker,
+        control_plane: ControllerPlane,
         runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
         historical: bool = False,
         rebound_to_workspace: Mapping[str, str] | None = None,
@@ -292,6 +379,7 @@ class ToolProbeRegistry:
         self._redaction_roots = tuple(redaction_roots)
         self.toolchain = {str(key): str(value) for key, value in toolchain.items()}
         self.execution_broker = execution_broker
+        self.control_plane = control_plane
         self.runtime_integrity_manager = runtime_integrity_manager
         self.historical = historical
         self.rebound_to_workspace = {
@@ -301,10 +389,13 @@ class ToolProbeRegistry:
         self.probe_timeout_seconds = max(1, int(probe_timeout_seconds))
         self.output_limit = max(128, int(output_limit))
         self._verified_capabilities: set[str] = set()
-        self._python_verified = False
+        self._verified_python_bindings: set[tuple[str, str]] = set()
         self._verified_jest_configs: set[str] = set()
+        self._known_jest_configs: dict[str, JestConfigProbe] = {}
+        self._candidate_binding: str | None = None
         self._resolved_public: dict[str, dict[str, Any]] = {}
         self._private_probe_commands: list[dict[str, Any]] = []
+        self._probe_sequence = 0
 
     @property
     def verified_capabilities(self) -> frozenset[str]:
@@ -321,6 +412,23 @@ class ToolProbeRegistry:
     def invalidate(self, *capabilities: str) -> None:
         for capability in capabilities:
             self._verified_capabilities.discard(str(capability))
+
+    def invalidate_all_evidence(self) -> None:
+        self._verified_capabilities.clear()
+        self._verified_python_bindings.clear()
+        self._verified_jest_configs.clear()
+
+    def bind_candidate_identity(self, candidate_id: str) -> None:
+        value = str(candidate_id)
+        if self._candidate_binding is not None and self._candidate_binding != value:
+            self._verified_capabilities.discard(Capability.JEST.value)
+            self._verified_jest_configs.clear()
+        self._candidate_binding = value
+
+    def invalidate_runtime_environment_evidence(self) -> None:
+        self._verified_capabilities.discard(Capability.PROJECT_PYTHON.value)
+        self._verified_capabilities.discard(Capability.JEST.value)
+        self._verified_jest_configs.clear()
 
     def _safe_summary(self, raw: str) -> str:
         value = str(raw).replace("\r", " ").replace("\n", " ").strip()
@@ -339,6 +447,24 @@ class ToolProbeRegistry:
                     flags=re.IGNORECASE,
                 )
         return value[: self.output_limit]
+
+    def _safe_version_summary(self, probe_id: str, raw: str) -> str:
+        lines = str(raw).splitlines()
+        first_line = lines[0] if lines else ""
+        line = "".join(
+            character for character in first_line if character.isprintable()
+        ).strip()[:120]
+        patterns = {
+            "git.version": r"git version [0-9][0-9A-Za-z.+_-]*",
+            "node.version": r"v[0-9][0-9A-Za-z.+_-]*",
+            "jest.version": r"[0-9][0-9A-Za-z.+_-]*",
+            "python.version": r"Python [0-9][0-9A-Za-z.+_-]*",
+            "project-python.version": r"Python [0-9][0-9A-Za-z.+_-]*",
+        }
+        pattern = patterns.get(probe_id)
+        if not pattern or not re.fullmatch(pattern, line):
+            return "Version probe passed"
+        return line
 
     def _public_location(self, path: Path) -> dict[str, Any]:
         canonical = canonical_path(path)
@@ -448,14 +574,24 @@ class ToolProbeRegistry:
     def _run_probe(
         self,
         *,
+        batch_id: str,
         probe_id: str,
         capability: str | None,
         command: Sequence[str],
         failure_reason: str,
     ) -> ToolProbeRecord:
-        scratch = self.execution_broker.scratch_root(ExecutionRole.CONTROLLER_CHECK) / "preflight"
-        scratch.mkdir(parents=True, exist_ok=True)
-        log_path = scratch / (re.sub(r"[^A-Za-z0-9_.-]", "_", probe_id) + ".log")
+        self._probe_sequence += 1
+        batch_slug = re.sub(r"[^A-Za-z0-9_.-]", "_", batch_id).strip(".") or "batch"
+        probe_slug = re.sub(r"[^A-Za-z0-9_.-]", "_", probe_id).strip(".") or "probe"
+        private_log_name = (
+            f"preflight_logs/{batch_slug}/"
+            f"{self._probe_sequence:04d}-{probe_slug}.log"
+        )
+        log_path = self.control_plane.path_for(
+            private_log_name,
+            ArtifactVisibility.PRIVATE,
+        )
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         returncode: int | None = None
         timed_out = False
         error_text = ""
@@ -475,20 +611,23 @@ class ToolProbeRegistry:
             timed_out = True
         except (FileNotFoundError, PermissionError, OSError) as exc:
             error_text = f"{type(exc).__name__}: {exc}"
+            try:
+                with log_path.open("ab") as output:
+                    output.write((error_text + "\n").encode("utf-8", errors="replace"))
+            except OSError:
+                pass
         try:
-            output_text = log_path.read_bytes()[: self.output_limit].decode(
-                "utf-8", errors="replace"
-            )
+            with log_path.open("r", encoding="utf-8", errors="replace") as output:
+                output_text = output.read(min(self.output_limit, 256))
         except OSError:
             output_text = ""
         passed = returncode == 0 and not timed_out and not error_text
-        raw_summary = error_text or output_text
         if passed and probe_id.endswith(".version"):
-            lines = raw_summary.splitlines()
-            raw_summary = lines[0] if lines else ""
+            summary = self._safe_version_summary(probe_id, output_text)
         elif passed:
-            raw_summary = ""
-        summary = self._safe_summary(raw_summary)
+            summary = ""
+        else:
+            summary = "Probe failed; see Controller-private diagnostics"
         self._private_probe_commands.append(
             {
                 "id": probe_id,
@@ -496,6 +635,8 @@ class ToolProbeRegistry:
                 "argv": [str(part) for part in command],
                 "returncode": returncode,
                 "timed_out": timed_out,
+                "launcher_error": bool(error_text),
+                "log_artifact": private_log_name,
             }
         )
         return ToolProbeRecord(
@@ -504,6 +645,8 @@ class ToolProbeRegistry:
             status="PASS" if passed else "FAIL",
             reason_code=None if passed else failure_reason,
             safe_summary=summary,
+            returncode=returncode,
+            timed_out=timed_out,
         )
 
     def ensure_capabilities(
@@ -511,17 +654,59 @@ class ToolProbeRegistry:
         capabilities: Iterable[str],
         *,
         batch_id: str,
-        include_python: bool = False,
-        jest_configs: Iterable[Path] = (),
+        python_placeholders: Iterable[str] = (),
+        jest_configs: Iterable[JestConfigProbe] = (),
     ) -> ToolProbeBatchResult:
         requested = set(str(item) for item in capabilities) & set(TOOL_BACKED_CAPABILITIES)
+        python_resolutions = tuple(
+            {
+                (
+                    resolution.source,
+                    resolution.value,
+                    resolution.toolchain_key,
+                    resolution.capability,
+                ): resolution
+                for resolution in (
+                    resolve_python_command(self.toolchain, placeholder=str(placeholder))
+                    for placeholder in sorted(set(python_placeholders))
+                )
+            }.values()
+        )
+        if any(
+            item.capability == Capability.PROJECT_PYTHON.value
+            for item in python_resolutions
+        ):
+            requested.add(Capability.PROJECT_PYTHON.value)
         if Capability.JEST.value in requested:
             requested.add(Capability.NODE.value)
-        configs = tuple(sorted({str(canonical_path(path)) for path in jest_configs}))
+        supplied_configs = {
+            item.cache_key: item for item in jest_configs
+        }
+        self._known_jest_configs.update(supplied_configs)
+        configs = (
+            tuple(
+                sorted(
+                    (
+                        supplied_configs.values()
+                        if supplied_configs
+                        else self._known_jest_configs.values()
+                    ),
+                    key=lambda item: item.cache_key,
+                )
+            )
+            if Capability.JEST.value in requested
+            else ()
+        )
         reused = requested & self._verified_capabilities
         needs_work = bool(requested - self._verified_capabilities)
-        needs_work = needs_work or (include_python and not self._python_verified)
-        needs_work = needs_work or bool(set(configs) - self._verified_jest_configs)
+        needs_work = needs_work or any(
+            (item.source, item.value) not in self._verified_python_bindings
+            and item.capability is None
+            for item in python_resolutions
+        )
+        needs_work = needs_work or bool(
+            {item.cache_key for item in configs} - self._verified_jest_configs
+        )
         if not needs_work:
             return ToolProbeBatchResult(
                 requested_capabilities=tuple(sorted(requested)),
@@ -532,7 +717,7 @@ class ToolProbeRegistry:
             )
 
         new_verified = set(self._verified_capabilities)
-        new_python_verified = self._python_verified
+        new_python_bindings = set(self._verified_python_bindings)
         new_jest_configs = set(self._verified_jest_configs)
         records: list[ToolProbeRecord] = []
         reasons: list[str] = []
@@ -544,23 +729,31 @@ class ToolProbeRegistry:
             return item.status == "PASS"
 
         def operation() -> None:
-            nonlocal new_python_verified
-            if include_python and not new_python_verified:
-                python_path = canonical_path(Path(sys.executable))
-                self._resolved_public["python"] = {
-                    "name": "python",
-                    "status": "READY",
-                    "location_kind": "HARNESS_BUILTIN",
-                }
+            for resolution in python_resolutions:
+                binding = (resolution.source, resolution.value)
+                if resolution.capability is not None or binding in new_python_bindings:
+                    continue
+                try:
+                    if resolution.toolchain_key:
+                        python_path = self.resolve_tool_entry(resolution.toolchain_key)
+                    else:
+                        python_path = self.resolve_executable(
+                            resolution.value,
+                            record_name="harness_python",
+                        )
+                except StaticPreflightError as exc:
+                    reasons.append(exc.reason_code)
+                    continue
                 if record(
                     self._run_probe(
+                        batch_id=batch_id,
                         probe_id="python.version",
                         capability=None,
                         command=[str(python_path), "--version"],
                         failure_reason=STATIC_TOOLCHAIN_PROBE_FAILED,
                     )
                 ):
-                    new_python_verified = True
+                    new_python_bindings.add(binding)
 
             if Capability.GIT.value in requested and Capability.GIT.value not in new_verified:
                 try:
@@ -570,6 +763,7 @@ class ToolProbeRegistry:
                 else:
                     if record(
                         self._run_probe(
+                            batch_id=batch_id,
                             probe_id="git.version",
                             capability=Capability.GIT.value,
                             command=[str(git_path), "--version"],
@@ -587,6 +781,7 @@ class ToolProbeRegistry:
                 else:
                     if Capability.NODE.value in new_verified or record(
                         self._run_probe(
+                            batch_id=batch_id,
                             probe_id="node.version",
                             capability=Capability.NODE.value,
                             command=[str(node_path), "--version"],
@@ -606,6 +801,7 @@ class ToolProbeRegistry:
                 else:
                     if record(
                         self._run_probe(
+                            batch_id=batch_id,
                             probe_id="project-python.version",
                             capability=Capability.PROJECT_PYTHON.value,
                             command=[str(project_python), "--version"],
@@ -634,6 +830,7 @@ class ToolProbeRegistry:
                 ):
                     jest_version_ok = record(
                         self._run_probe(
+                            batch_id=batch_id,
                             probe_id="jest.version",
                             capability=Capability.JEST.value,
                             command=[str(node_path), str(jest_path), "--version"],
@@ -642,29 +839,34 @@ class ToolProbeRegistry:
                     )
                 config_ok = True
                 if jest_version_ok and node_path is not None and jest_path is not None:
-                    for config_text in configs:
-                        if config_text in new_jest_configs:
+                    for config in configs:
+                        if config.cache_key in new_jest_configs:
                             continue
-                        config_path = Path(config_text)
+                        config_command = [
+                            str(node_path),
+                            str(jest_path),
+                            "--showConfig",
+                        ]
+                        if config.path is not None:
+                            config_command.extend(["--config", str(config.path)])
                         item = self._run_probe(
+                            batch_id=batch_id,
                             probe_id="jest.config." + str(len(new_jest_configs) + 1),
                             capability=Capability.JEST.value,
-                            command=[
-                                str(node_path),
-                                str(jest_path),
-                                "--showConfig",
-                                "--config",
-                                str(config_path),
-                            ],
+                            command=config_command,
                             failure_reason=STATIC_JEST_CONFIG_PROBE_FAILED,
                         )
                         if record(item):
-                            new_jest_configs.add(config_text)
+                            new_jest_configs.add(config.cache_key)
                         else:
                             config_ok = False
                 elif configs:
                     config_ok = False
-                if jest_version_ok and config_ok and set(configs) <= new_jest_configs:
+                if (
+                    jest_version_ok
+                    and config_ok
+                    and {item.cache_key for item in configs} <= new_jest_configs
+                ):
                     new_verified.add(Capability.JEST.value)
                 else:
                     new_verified.discard(Capability.JEST.value)
@@ -687,7 +889,7 @@ class ToolProbeRegistry:
 
         if not reasons:
             self._verified_capabilities = new_verified
-            self._python_verified = new_python_verified
+            self._verified_python_bindings = new_python_bindings
             self._verified_jest_configs = new_jest_configs
         return ToolProbeBatchResult(
             requested_capabilities=tuple(sorted(requested)),
@@ -730,6 +932,10 @@ def _argument_after(command: Sequence[str], option: str) -> str | None:
     return None
 
 
+def _option_present(command: Sequence[str], option: str) -> bool:
+    return any(value == option or value.startswith(option + "=") for value in command)
+
+
 def _validate_known_inputs(
     command: Sequence[str],
     *,
@@ -737,24 +943,35 @@ def _validate_known_inputs(
     workspace: Path,
     harness_root: Path,
     jest_path: Path | None,
-) -> tuple[Path, ...]:
-    configs: list[Path] = []
+) -> tuple[JestConfigProbe, ...]:
+    configs: list[JestConfigProbe] = []
     if family == "jest":
         config_raw = _argument_after(command, "--config")
-        if config_raw is None:
-            if "--runTestsByPath" in command:
+        if _option_present(command, "--config"):
+            if not config_raw:
                 raise StaticPreflightError(
                     STATIC_JEST_CONFIG_NOT_FOUND,
-                    "Manifest Jest test command must identify its config with --config",
+                    "Explicit Jest --config requires a path",
                 )
-            return ()
-        config = _resolve_required_input(
-            config_raw,
-            workspace=workspace,
-            harness_root=harness_root,
-            reason_code=STATIC_JEST_CONFIG_NOT_FOUND,
-        )
-        configs.append(config)
+            config = _resolve_required_input(
+                config_raw,
+                workspace=workspace,
+                harness_root=harness_root,
+                reason_code=STATIC_JEST_CONFIG_NOT_FOUND,
+            )
+            configs.append(
+                JestConfigProbe(
+                    cache_key="explicit:" + str(canonical_path(config)),
+                    path=config,
+                )
+            )
+        else:
+            configs.append(
+                JestConfigProbe(
+                    cache_key="auto:" + str(canonical_path(workspace)),
+                    path=None,
+                )
+            )
         if "--runTestsByPath" in command:
             start = command.index("--runTestsByPath") + 1
             for raw in command[start:]:
@@ -791,7 +1008,7 @@ def _validate_known_inputs(
                         harness_root=harness_root,
                         reason_code=STATIC_CHECK_INPUT_NOT_FOUND,
                     )
-    elif family in {"python", "project_python"} and len(command) >= 2:
+    elif family in {"python", "project_python", "harness_python"} and len(command) >= 2:
         script = command[1]
         if not script.startswith("-") and script.endswith(".py"):
             _resolve_required_input(
@@ -803,7 +1020,7 @@ def _validate_known_inputs(
     return tuple(configs)
 
 
-def run_static_toolchain_preflight(
+def _run_static_toolchain_preflight_operation(
     checks: Sequence[Mapping[str, Any]],
     *,
     workspace: Path,
@@ -816,11 +1033,11 @@ def run_static_toolchain_preflight(
     required_placeholders: set[str] = set()
     required_entries: set[str] = set()
     requested_capabilities: set[str] = set()
-    include_python = False
+    python_placeholders: set[str] = set()
     check_records: list[dict[str, Any]] = []
     private_checks: list[dict[str, Any]] = []
     reasons: list[str] = []
-    jest_configs: set[Path] = set()
+    jest_configs: set[JestConfigProbe] = set()
     allowed = set(_BUILTIN_PLACEHOLDERS) | set(toolchain) | set(_KNOWN_TOOLCHAIN_KEYS)
 
     for spec in checks:
@@ -859,7 +1076,14 @@ def run_static_toolchain_preflight(
         required_placeholders.update(placeholders)
         required_entries.update(set(placeholders) - set(_BUILTIN_PLACEHOLDERS))
         if "python" in placeholders:
-            include_python = True
+            python_placeholders.add("python")
+            python_resolution = resolve_python_command(toolchain)
+            if python_resolution.toolchain_key:
+                required_entries.add(python_resolution.toolchain_key)
+            if python_resolution.capability:
+                requested_capabilities.add(python_resolution.capability)
+        if "harness_python" in placeholders:
+            python_placeholders.add("harness_python")
         if "node" in placeholders:
             requested_capabilities.add(Capability.NODE.value)
         if "jest" in placeholders:
@@ -880,6 +1104,8 @@ def run_static_toolchain_preflight(
                     requested_capabilities.add(Capability.GIT.value)
                 elif "project_python" in extract_command_placeholders(raw_command[:1]):
                     family = "project_python"
+                elif "harness_python" in extract_command_placeholders(raw_command[:1]):
+                    family = "harness_python"
                 elif "python" in extract_command_placeholders(raw_command[:1]):
                     family = "python"
                 elif "node" in extract_command_placeholders(raw_command[:1]):
@@ -887,7 +1113,10 @@ def run_static_toolchain_preflight(
                 jest_path: Path | None = None
                 if "jest" in placeholders:
                     jest_path = probe_registry.resolve_tool_entry("jest")
-                    if len(expanded) > 1 and canonical_path(Path(expanded[1])) == jest_path:
+                    if canonical_path(Path(expanded[0])) == jest_path or (
+                        len(expanded) > 1
+                        and canonical_path(Path(expanded[1])) == jest_path
+                    ):
                         family = "jest"
                 for key in sorted(required_entries & set(placeholders)):
                     probe_registry.resolve_tool_entry(
@@ -933,7 +1162,7 @@ def run_static_toolchain_preflight(
         probe_result = probe_registry.ensure_capabilities(
             requested_capabilities,
             batch_id="static-toolchain-preflight",
-            include_python=include_python,
+            python_placeholders=python_placeholders,
             jest_configs=jest_configs,
         )
         reasons.extend(probe_result.reason_codes)
@@ -959,3 +1188,123 @@ def run_static_toolchain_preflight(
             "integrity_reason_code": probe_result.integrity_reason_code,
         },
     )
+
+
+def _candidate_excludes(probe_registry: ToolProbeRegistry) -> tuple[str, ...]:
+    values = list(DEFAULT_CANDIDATE_EXCLUDES)
+    manager = probe_registry.runtime_integrity_manager
+    if manager is not None:
+        values.extend(
+            projection.relative_path
+            for projection in manager.session.runtime_projections
+        )
+    return tuple(_dedupe(values))
+
+
+def _candidate_guard_details(
+    before: CandidateIdentity,
+    after: CandidateIdentity | None,
+) -> dict[str, Any]:
+    changed = sorted(
+        set(before.changed_paths)
+        | (set(after.changed_paths) if after is not None else set())
+    )
+    return {
+        "candidate_id_before": before.candidate_id,
+        "candidate_id_after": after.candidate_id if after is not None else None,
+        "changed_relative_paths": changed,
+    }
+
+
+def run_static_toolchain_preflight(
+    checks: Sequence[Mapping[str, Any]],
+    *,
+    workspace: Path,
+    harness_root: Path,
+    toolchain: Mapping[str, str],
+    probe_registry: ToolProbeRegistry,
+    candidate_baseline_sha: str | None = None,
+) -> StaticToolchainPreflightResult:
+    """Run static preflight with the canonical candidate pre/post guard.
+
+    Production callers always provide ``candidate_baseline_sha``.  The optional
+    form preserves isolated non-Git unit fixtures while managed Git workspaces
+    remain fail-closed.
+    """
+
+    before: CandidateIdentity | None = None
+    after: CandidateIdentity | None = None
+    operation_error: Exception | None = None
+    result: StaticToolchainPreflightResult | None = None
+    if candidate_baseline_sha is not None:
+        before = build_candidate_identity(
+            workspace,
+            baseline_sha=candidate_baseline_sha,
+            excluded_prefixes=_candidate_excludes(probe_registry),
+        )
+    try:
+        result = _run_static_toolchain_preflight_operation(
+            checks,
+            workspace=workspace,
+            harness_root=harness_root,
+            toolchain=toolchain,
+            probe_registry=probe_registry,
+        )
+    except Exception as exc:
+        operation_error = exc
+    finally:
+        if before is not None:
+            try:
+                after = build_candidate_identity(
+                    workspace,
+                    baseline_sha=candidate_baseline_sha,
+                    excluded_prefixes=_candidate_excludes(probe_registry),
+                )
+            except (OSError, RuntimeError):
+                after = None
+
+    candidate_changed = bool(
+        before is not None
+        and (after is None or before.candidate_id != after.candidate_id)
+    )
+    if candidate_changed:
+        probe_registry.invalidate_all_evidence()
+        details = _candidate_guard_details(before, after)
+        if result is None:
+            result = StaticToolchainPreflightResult(
+                status="FAIL",
+                required_placeholders=(),
+                required_toolchain_entries=(),
+                verified_capabilities=(),
+                checks=(),
+                probes=(),
+                resolved_executables=probe_registry.resolved_executables,
+                optional_toolchain_entries=(),
+                reason_codes=(STATIC_PREFLIGHT_MUTATED_CANDIDATE,),
+            )
+        private_details = dict(result.private_details)
+        private_details["candidate_guard"] = details
+        return replace(
+            result,
+            status="FAIL",
+            verified_capabilities=(),
+            reason_codes=tuple(
+                _dedupe((*result.reason_codes, STATIC_PREFLIGHT_MUTATED_CANDIDATE))
+            ),
+            candidate_unchanged=False,
+            private_details=private_details,
+        )
+
+    if operation_error is not None:
+        raise operation_error
+    assert result is not None
+    if before is not None and after is not None:
+        probe_registry.bind_candidate_identity(after.candidate_id)
+        private_details = dict(result.private_details)
+        private_details["candidate_guard"] = _candidate_guard_details(before, after)
+        result = replace(
+            result,
+            candidate_unchanged=True,
+            private_details=private_details,
+        )
+    return result

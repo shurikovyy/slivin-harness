@@ -104,7 +104,7 @@ timeout_seconds = 30
 name = "EOL contract"
 feedback = "repair"
 command = [
-    "{python}",
+    "{harness_python}",
     "tools/check_changed_eol.py",
 ]
 timeout_seconds = 120

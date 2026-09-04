@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class Phase7ExecutableIntegrationTests(unittest.TestCase):
     def test_release_and_contract_versions_are_phase7(self) -> None:
-        self.assertEqual(slivin_harness.__version__, "0.8.0a12")
+        self.assertEqual(slivin_harness.__version__, "0.8.0a13")
         self.assertEqual(WORKFLOW_VERSION, "workflow.v6")
         self.assertEqual(WORKFLOW_PHASE, "phase7-final-gate-delivery-benchmark")
         self.assertEqual(PHASE7_VERSION, "phase7-final-gate.v1")

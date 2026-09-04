@@ -1,4 +1,4 @@
-# Windows setup для Slivin Harness 0.8.0a12
+# Windows setup для Slivin Harness 0.8.0a13
 
 ## Целевая среда
 
@@ -23,8 +23,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемо:
 
 ```text
-0.8.0a12
-DOCS_SYNC_PASS harness=0.8.0a12 ...
+0.8.0a13
+DOCS_SYNC_PASS harness=0.8.0a13 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -138,9 +138,12 @@ destination is not trusted.
 
 After rebind, Stage 0 runs bounded `shell=False` probes from the managed
 workspace with the Execution Broker environment: `git --version`, the required
-Python/Node `--version`, `node jest --version`, and Jest `--showConfig --config
-<workspace-config>`. The last command loads the configured test environment but
-does not run tests. Projected probes use the full-tree pre/post guard above.
+Python/Node `--version`, `node jest --version`, and Jest `--showConfig` with an
+explicit config or normal workspace-cwd discovery. The last command loads the
+configured test environment but does not run tests. Projected probes use the
+full-tree pre/post guard above; canonical candidate identity separately rejects
+tracked/untracked/deleted project mutations. Complete stdout/stderr is stored
+only under the Controller-private run plane, outside the managed workspace.
 Only toolchain entries referenced by manifest commands are required at this
 point; an unused configured `project_python` is not probed. New tool-backed
 requirements can still be probed by the post-plan capability gate.
@@ -210,4 +213,4 @@ benchmark сразу. Ожидаема строка `INTAKE_ARTIFACT_REPAIR`; п
 
 ## Следующий checkpoint
 
-После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a12` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.
+После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a13` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.

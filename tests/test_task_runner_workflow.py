@@ -328,6 +328,14 @@ timeout_seconds = 30
             (run_root / "controller_private" / "self_verify_receipt_current.json").is_file()
         )
         self.assertTrue((run_root / "execution_policies.json").is_file())
+        build_identity = json.loads(
+            (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
+        self.assertEqual(build_identity["version"], "0.8.0a13")
+        self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
+        self.assertNotIn(str(task_runner.HARNESS_ROOT), json.dumps(build_identity))
+        self.assertIn("HARNESS_GIT_COMMIT:", output)
         private_state = json.loads(
             (run_root / "controller_private" / "run_state.json").read_text(encoding="utf-8")
         )
@@ -539,7 +547,7 @@ Change target.txt from before to after.
 [[checks]]
 name = "Candidate content"
 feedback = "repair"
-command = ["{python}", "-c", "from pathlib import Path; assert Path('target.txt').read_text().strip() == 'after'"]
+command = ["{python}", "-c", "import sys; from pathlib import Path; p = Path('.harness_tmp/project_python_runs.txt'); p.parent.mkdir(parents=True, exist_ok=True); p.write_text((p.read_text(encoding='utf-8') if p.exists() else '') + sys.executable + chr(10), encoding='utf-8'); assert Path('target.txt').read_text().strip() == 'after'"]
 timeout_seconds = 30
 ''',
             encoding="utf-8",
@@ -635,6 +643,12 @@ timeout_seconds = 30
         project_python = Path(runtime["project_python"])
         self.assertTrue(project_python.is_file())
         self.assertIn(".venv", project_python.parts)
+        self.assertNotEqual(project_python.resolve(), Path(sys.executable).resolve())
+        workspace = project_python.parent.parent.parent
+        marker = workspace / ".harness_tmp" / "project_python_runs.txt"
+        executions = [Path(item).resolve() for item in marker.read_text(encoding="utf-8").splitlines()]
+        self.assertGreaterEqual(len(executions), 2)
+        self.assertTrue(all(item == project_python.resolve() for item in executions))
         patch = (run_root / "candidate.patch").read_text(encoding="utf-8")
         self.assertNotIn(".venv", patch)
 

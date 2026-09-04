@@ -704,6 +704,9 @@ machine-readable workflow и versioned Run State
 + transactional Contract / Verification Plan expansion
 + canonical .worktreeinclude exposure policy
 + strict static toolchain preflight before semantic baseline and agent stages
++ project-first Python placeholders plus explicit Harness interpreter
++ static candidate pre/post identity and Controller-private raw probe logs
++ exact harness version/Git build identity for each run
 + probe-backed tool capabilities with retained post-plan on-demand gate
 + worktree-local project-runtime bootstrap and drift reconciliation
 + Controller-private Contract Closure Record

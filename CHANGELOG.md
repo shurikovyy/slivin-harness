@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.0a13 — Static preflight trust-boundary hardening
+
 - Added `static-toolchain-preflight.v1` after workspace/runtime projection setup and before historical semantic baseline commands or any Codex agent stage. It strictly parses all repair/held-out templates, resolves required executables and known inputs, and emits a public-safe controlled failure artifact.
 - Git, project Python, Node and Jest are now available capabilities only after bounded Controller probes. Jest requires Node, its own version probe and `--showConfig` for manifest configs; optional unused toolchain entries are not probed.
 - Static probes use the centralized projected-runtime integrity guard, and their evidence is reused by the retained post-plan gate. Newly inferred tool-backed requirements are probed on demand while non-tool runtime capability semantics remain late-bound.
@@ -11,6 +13,11 @@
 - Full-tree fingerprints stream regular-file contents and cover names, types, empty directories, additions, deletions and renames; aliases, unsupported objects and Windows case collisions fail closed. The detect/restore boundary costs O(total projected bytes) at trusted check boundaries and does not claim OS immutability.
 - `workspace.copy_untracked` now rejects duplicate, case/slash-equivalent and parent/child roots before workspace creation; POSIX symlink ancestors retain alias-specific diagnostics. The generic local-config example remains empty while the Matrix-specific profile opts into `node_modules`.
 - Projected runtime directories remain Git/candidate/patch/delivery/reconstruction-excluded and do not trigger `npm install` or `npm ci`.
+- Restored the project-first `{python}` contract, added explicit `{harness_python}`, and kept `{project_python}` fail-closed and probe-backed. The Matrix EOL utility now selects the Harness interpreter explicitly.
+- Added canonical candidate identity before/after static preflight. Project-owned Jest config code that modifies tracked, deleted or untracked candidate state invalidates all probe evidence and stops before semantic baseline or agent stages.
+- Moved complete probe stdout/stderr to unique Controller-private logs. Public failures now expose only typed status, return code, timeout state and a fixed diagnostic summary.
+- Added Jest cwd config auto-discovery alongside explicit `--config`/`--config=...`, without executing test suites or the hidden oracle.
+- Added `harness-build-identity.v1` with package version `0.8.0a13`, exact local Git commit and tracked dirty state, plus a non-failing archive fallback.
 
 ## 0.8.0a12 — Phase 7 stabilization: Intake contract recovery
 

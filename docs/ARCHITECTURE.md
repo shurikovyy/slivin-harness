@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a12 — Phase 7
+# Архитектура Slivin Harness 0.8.0a13 — Phase 7
 
 ## Назначение
 
-`0.8.0a12` завершает согласованный Step 0–7 quality-core. Phase 7 не добавляет нового reviewer-а: она делает финальную приёмку, patch proof, безопасную доставку и historical benchmark isolation детерминированной ответственностью Controller.
+`0.8.0a13` сохраняет согласованный Step 0–7 quality-core и укрепляет trust boundary static preflight без изменения protocol/workflow versions.
 
 Machine phase id:
 
@@ -35,7 +35,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a12
+Harness                     0.8.0a13
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -166,11 +166,34 @@ optional configured entries получают `UNUSED_NOT_PROBED` и не бло�
 Node/Python script inputs, Jest config и `--runTestsByPath` files. Bounded
 Controller probes проверяют Git, harness Python, Node и при необходимости
 project Python. Jest требует успешных Node/Jest version probes и `--showConfig`
-для каждого manifest config, что загружает config/test environment, но не
-запускает test suite или hidden oracle. Probes проходят через тот же
+для каждого explicit manifest config либо один cwd auto-discovery probe, что
+загружает executable project-owned config/test environment, но не запускает
+test suite или hidden oracle. Probes проходят через тот же
 `RuntimeProjectionIntegrityManager` с batch id `static-toolchain-preflight`.
 Failure маршрутизирует Step 0 в `BLOCKED`; Task Contract/Planner artifacts ещё
 не существуют.
+
+Python placeholders имеют одну semantics во всех manifest checks и generated
+dynamic Python checks: `{python}` выбирает `project_python`, затем configured
+`python`, затем `sys.executable`; `{project_python}` требует явную entry и
+`PROJECT_PYTHON` probe; `{harness_python}` всегда выбирает interpreter Harness.
+Matrix EOL utility использует последний вариант как Harness-owned script.
+
+Runtime guard защищает projected dependency tree, но project-owned Jest config
+может менять candidate. Поэтому Controller строит canonical `candidate.v1` до
+и после всего static preflight независимо от probe success, timeout или launcher
+error. Tracked/untracked/deleted mutation добавляет
+`STATIC_PREFLIGHT_MUTATED_CANDIDATE`, очищает accepted probe evidence и запрещает
+semantic baseline/agent stages. Полный probe output записывается через
+`ControllerPlane` только в `controller_private/preflight_logs`; public artifact
+содержит лишь typed status, return code/timeout и безопасную version/failure
+diagnostic.
+
+До workspace/agent stages Controller также записывает
+`harness-build-identity.v1`: package version `0.8.0a13`, exact Git HEAD и tracked
+dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
+остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
+artifact не входит.
 
 ## 4. Step 1 — Planner
 
@@ -418,7 +441,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a12` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a13` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 
