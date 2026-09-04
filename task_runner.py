@@ -184,7 +184,13 @@ IMPLEMENTER_INSTRUCTIONS = """
 - temp/cache размещай в .harness_tmp;
 - если две разные попытки записи завершаются Permission denied/Access denied, не повторяй их: зафиксируй инфраструктурную блокировку;
 - не ослабляй тесты ради PASS;
-- финальный ответ — structured Implementation Report. COMPLETE допустим только после self-verification PASS и проверки всего Implementation Contract. REPLAN_REQUIRED/BLOCKED/NEEDS_USER_DECISION требуют одну конкретную reason + evidence, а не искусственный ledger по каждому item.
+- финальный ответ — structured Implementation Report. Все wire-level поля schema обязательны;
+  для неприменимых полей используй пустую строку/массив, а `self_verification.receipt_id`
+  всегда оставляй пустым — Controller выдаёт receipt независимо. COMPLETE допустим только
+  после self-verification PASS и проверки всего Implementation Contract.
+  REPLAN_REQUIRED/BLOCKED/NEEDS_USER_DECISION требуют одну конкретную reason + evidence,
+  пустые contract_evidence/discovered_obligations/registered_checks допустимы и не должны
+  превращаться в искусственный ledger по каждому item.
 """.strip()
 
 TOP_LEVEL_FIELDS = {

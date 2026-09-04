@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a15
+# Документация Slivin Harness 0.8.0a16
 
-Актуальная версия: **0.8.0a15 — trusted reconstructed verification boundary**.
+Актуальная версия: **0.8.0a16 — strict agent output schemas**.
 
 Основные документы:
 

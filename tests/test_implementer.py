@@ -66,6 +66,64 @@ class ImplementerContractTests(unittest.TestCase):
             task_contract=valid_task_contract(),
         )
 
+    def canonical_report(self, status: str) -> dict:
+        contract = self.contract()
+        complete = status == "COMPLETE"
+        return {
+            "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
+            "status": status,
+            "summary": "completed" if complete else f"{status.lower()} outcome",
+            "reason": "" if complete else "concrete terminal reason",
+            "evidence": [] if complete else ["concrete terminal evidence"],
+            "contract_evidence": [
+                {"item_id": item["id"], "status": "VERIFIED", "evidence": ["checked"]}
+                for item in contract["items"]
+            ] if complete else [],
+            "self_verification": {
+                "status": "PASS" if complete else "NOT_RUN",
+                "command": "self" if complete else "",
+                "evidence": ["SELF_VERIFY_PASS"] if complete else [],
+                "receipt_id": "",
+            },
+            "additional_check_paths": [],
+            "registered_checks": [],
+            "discovered_obligations": [],
+            "blockers": [] if complete else ["concrete terminal blocker"],
+        }
+
+    def test_canonical_complete_report_passes_semantic_validation(self) -> None:
+        validate_implementation_report(
+            self.canonical_report("COMPLETE"),
+            contract=self.contract(),
+            changed_paths=[],
+            self_verification_ok=True,
+            documentation_paths=[],
+        )
+
+    def test_canonical_non_complete_reports_do_not_need_fake_contract_ledger(self) -> None:
+        for status in ("BLOCKED", "REPLAN_REQUIRED", "NEEDS_USER_DECISION"):
+            with self.subTest(status=status):
+                validate_implementation_report(
+                    self.canonical_report(status),
+                    contract=self.contract(),
+                    changed_paths=[],
+                    self_verification_ok=False,
+                    documentation_paths=[],
+                )
+
+    def test_agent_receipt_id_is_not_controller_self_verify_authority(self) -> None:
+        report = self.canonical_report("COMPLETE")
+        report["self_verification"]["receipt_id"] = "agent-forged-receipt"
+        report["self_verification"]["evidence"] = []
+        with self.assertRaisesRegex(RuntimeError, "evidence before receipt issuance"):
+            validate_implementation_report(
+                report,
+                contract=self.contract(),
+                changed_paths=[],
+                self_verification_ok=True,
+                documentation_paths=[],
+            )
+
     def test_contract_keeps_user_requirements_and_consumers_explicit(self) -> None:
         contract = self.contract()
         ids = [item["id"] for item in contract["items"]]

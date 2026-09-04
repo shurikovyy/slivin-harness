@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.0a16 — Strict agent output schemas
+
+- Added recursive Controller validation for every JSON Schema passed to Codex App Server Structured Outputs. Object schemas must reject additional properties and require every declared property before `turn/start`.
+- Made the `implementer.v3` wire schema strict-compatible without changing its semantic protocol: all wire fields are present, while non-complete statuses keep empty ledgers and Controller validation remains status-dependent.
+- Reserved `self_verification.receipt_id` as an empty agent field; only Controller-private receipt issuance is authoritative.
+- Raised the package version to `0.8.0a16` without changing manifest, workflow, candidate, Planner, Implementer, or Evaluator protocol versions.
+
 ## 0.8.0a15 — Trusted reconstructed verification boundary
 
 - Made Git control restoration path-stable: the baseline owns immutable paths and restore policy, while shared, source-repository, and external controls are detect-only. Mutated `core.hooksPath`, `core.excludesFile`, or `core.attributesFile` values can no longer select a scan or restore destination.

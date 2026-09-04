@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a15 — Phase 7
+# Модель качества Slivin Harness 0.8.0a16 — Phase 7
 
 ## Основная формула
 
@@ -57,6 +57,12 @@ auto-discovery поддерживаются без запуска tests.
 `ambiguities` и `reason`; если модель нарушила это или другое semantic правило artifact, Controller
 возвращает validation feedback в тот же Intake-thread и принимает только исправленный полный объект.
 Две bounded repair-попытки относятся к protocol correction, а не к product implementation loop.
+
+Все JSON schemas, реально передаваемые как App Server Structured Outputs для
+Task Contract, Planner, Implementer и двух Evaluator turns, проходят одну
+recursive strict-schema validation до `turn/start`. Wire-level обязательность
+всех properties не заменяет Controller semantic validation по status и не даёт
+agent-provided `receipt_id` Controller authority.
 
 ### Planner
 
@@ -299,7 +305,7 @@ historical benchmark не раскрывает другие refs/objects/held-ou
 успешный CI/deployment/production rollout;
 ```
 
-Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a15` первый такой checkpoint — historical `_90`.
+Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a16` первый такой checkpoint — historical `_90`.
 
 ## Версии
 

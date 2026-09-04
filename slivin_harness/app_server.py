@@ -15,6 +15,8 @@ class TurnTimeoutError(RuntimeError):
 
 from typing import Callable
 
+from slivin_harness.output_schema import validate_strict_output_schema
+
 
 def _phase4_inactivity_expired(
     *,
@@ -395,6 +397,7 @@ class CodexAppServer:
         )
         turn_params: dict = {"threadId": thread_id, "input": turn_input}
         if output_schema is not None:
+            validate_strict_output_schema(output_schema)
             turn_params["outputSchema"] = output_schema
 
         turn_id = str(self.request("turn/start", turn_params)["turn"]["id"])

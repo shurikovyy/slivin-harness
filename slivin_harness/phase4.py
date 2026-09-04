@@ -500,7 +500,7 @@ def validate_implementer_report(
     receipt_id = str(self_verification.get("receipt_id", "")).strip()
     if require_receipt and not receipt_id:
         raise Phase4ContractError("COMPLETE requires Controller-owned self-verification receipt_id")
-    if not require_receipt and not receipt_id:
+    if not require_receipt:
         legacy_evidence = self_verification.get("evidence")
         if not isinstance(legacy_evidence, list) or not any(str(item).strip() for item in legacy_evidence):
             raise Phase4ContractError("COMPLETE requires self-verification evidence before receipt issuance")

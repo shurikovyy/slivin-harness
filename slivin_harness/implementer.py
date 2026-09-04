@@ -52,9 +52,10 @@ IMPLEMENTER_REPORT_SCHEMA = {
                 "status": {"type": "string", "enum": ["PASS", "FAIL", "NOT_RUN"]},
                 "command": {"type": "string"},
                 "evidence": {"type": "array", "items": {"type": "string"}},
-                "receipt_id": {"type": "string"},
+                # Agent output cannot mint Controller receipt authority.
+                "receipt_id": {"type": "string", "enum": [""]},
             },
-            "required": ["status"],
+            "required": ["status", "command", "evidence", "receipt_id"],
         },
         "additional_check_paths": {"type": "array", "items": {"type": "string"}},
         "registered_checks": {
@@ -89,9 +90,22 @@ IMPLEMENTER_REPORT_SCHEMA = {
         },
         "blockers": {"type": "array", "items": {"type": "string"}},
     },
-    # Status-specific completeness is enforced by Controller code. Keeping the
-    # schema compact lets BLOCKED/REPLAN_REQUIRED avoid a fake full ledger.
-    "required": ["protocol_version", "status", "summary"],
+    # Structured Outputs requires every wire property. Status-specific semantic
+    # completeness remains in Controller code, so non-COMPLETE reports use empty
+    # collections/strings instead of fabricating a full contract ledger.
+    "required": [
+        "protocol_version",
+        "status",
+        "summary",
+        "reason",
+        "evidence",
+        "contract_evidence",
+        "self_verification",
+        "additional_check_paths",
+        "registered_checks",
+        "discovered_obligations",
+        "blockers",
+    ],
 }
 
 

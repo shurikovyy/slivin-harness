@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a15 — Phase 7
+# Архитектура Slivin Harness 0.8.0a16 — Phase 7
 
 ## Назначение
 
-`0.8.0a15` сохраняет согласованный Step 0–7 quality-core и укрепляет Git/candidate trust boundary без изменения protocol/workflow versions.
+`0.8.0a16` сохраняет согласованный Step 0–7 quality-core и проверяет strict Structured Outputs contract локально до App Server `turn/start`, без изменения protocol/workflow versions.
 
 Machine phase id:
 
@@ -35,7 +35,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a15
+Harness                     0.8.0a16
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -220,7 +220,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a15`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a16`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -258,6 +258,15 @@ Configured/runtime semantics non-tool capabilities остаются отдель
 ## 6. Step 3 — Implementer
 
 `implementer.v3` получает Task Contract, compact Planner context, active Contract и trusted capabilities.
+
+Перед любым App Server `turn/start` Controller рекурсивно проверяет production
+`outputSchema`: каждый object с `properties` обязан иметь
+`additionalProperties=false` и `required`, в точности равный набору properties.
+Проверка охватывает nested objects, array items и composition branches. Для
+`implementer.v3` все поля обязательны на wire-level, но semantic completeness
+остаётся status-dependent: non-COMPLETE status передаёт пустые ledgers, а не
+фиктивное закрытие Contract. Agent всегда возвращает пустой `receipt_id`;
+Controller-private self-verification receipt остаётся единственной authority.
 
 Он:
 
@@ -479,7 +488,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a15` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a16` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 
