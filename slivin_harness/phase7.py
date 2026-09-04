@@ -13,6 +13,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from slivin_harness.control_plane import canonical_path, is_within, safe_artifact_name
+from slivin_harness.git_integrity import CandidateWorkspaceBaseline, candidate_baseline_for
 from slivin_harness.run_state import CandidateIdentity, build_candidate_identity
 from slivin_harness.workflow import (
     HeldoutStatus,
@@ -505,6 +506,11 @@ def build_patch_reconstruction_proof(
             baseline_sha,
         )
         _run_git(proof_repo, "checkout", "--detach", "FETCH_HEAD")
+        CandidateWorkspaceBaseline.capture(
+            proof_repo,
+            baseline_sha=baseline_sha,
+            excluded_prefixes=(".git", ".harness_tmp", ".venv"),
+        )
         # An empty production candidate is uncommon but can be legitimate when
         # the requested state already exists.  ``git apply`` rejects an empty
         # stream as "No valid patches", so treat it as the identity transform
@@ -613,9 +619,13 @@ def classify_heldout_results(
         status = HeldoutStatus.INFRA_ERROR.value
         reason = next(
             (
-                str(item.runtime_integrity_reason_code)
+                str(
+                    getattr(item, "runtime_integrity_reason_code", None)
+                    or getattr(item, "git_integrity_reason_code", None)
+                )
                 for item in results
                 if getattr(item, "runtime_integrity_reason_code", None)
+                or getattr(item, "git_integrity_reason_code", None)
             ),
             "HELDOUT_INFRA_ERROR",
         )
@@ -1042,6 +1052,53 @@ def reset_workspace_for_semantic_replan(
 
     root = Path(workspace).resolve()
     before = build_candidate_identity(root, baseline_sha=baseline_sha)
+    physical_baseline = candidate_baseline_for(root)
+    if physical_baseline is not None:
+        baseline_paths = {item.path for item in physical_baseline.entries}
+        current_changes = physical_baseline.changed_entries()
+        additions = [
+            str(item["path"])
+            for item in current_changes
+            if item["state"] != "deleted" and str(item["path"]) not in baseline_paths
+        ]
+        tracked_changes = [
+            str(item["path"])
+            for item in current_changes
+            if str(item["path"]) in baseline_paths
+        ]
+        if tracked_changes:
+            _run_git(
+                root,
+                "restore",
+                "--source",
+                baseline_sha,
+                "--worktree",
+                "--",
+                *tracked_changes,
+            )
+        for rel in sorted(additions, key=lambda value: (value.count("/"), value), reverse=True):
+            target = root / _safe_relative(rel)
+            if target.is_symlink() or target.is_file():
+                target.unlink(missing_ok=True)
+            elif target.is_dir():
+                shutil.rmtree(target)
+        after = build_candidate_identity(root, baseline_sha=baseline_sha)
+        if after.changed_paths:
+            raise Phase7Error(
+                "Semantic replan restore left candidate changes: "
+                + ", ".join(after.changed_paths)
+            )
+        return {
+            "schema_version": "semantic-replan-reset.v1",
+            "baseline_sha": baseline_sha,
+            "rejected_candidate_id": before.candidate_id,
+            "restored_candidate_id": after.candidate_id,
+            "removed_untracked": sorted(additions),
+            "preserved_prefixes": sorted(
+                item.replace("\\", "/").strip("/") for item in preserve_prefixes
+            ),
+            "status": "SEMANTIC_REPLAN_RESET_PASS",
+        }
     raw_untracked = str(
         _run_git(
             root,

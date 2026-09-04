@@ -84,6 +84,14 @@ CHECK_MUTATED_CANDIDATE
 Checks run with task-local temp/cache and a frozen candidate identity. If a check changes
 candidate files, its result is not accepted even if its assertions pass.
 
+Candidate freeze — physical inventory относительно Controller baseline, а не
+`git status`/ignore/index view. Поэтому project code не может скрыть helper через
+`.gitignore`, info exclude, local excludes file или index flags. Параллельный
+Git-control guard проверяет HEAD/ref, persistent index, local/worktree config и
+repository control files до/после self-verify, deterministic/dynamic/runtime и
+held-out batches. Green command, изменившая Git control state, классифицируется
+как infrastructure/integrity failure и не выпускает receipt.
+
 Manifest check commands have one strict expansion contract shared by execution
 and `static-toolchain-preflight.v1`. Before any agent stage the Controller parses
 all repair/held-out templates, resolves required executables, validates only
@@ -104,7 +112,8 @@ canonical `candidate.v1` before and after its runtime-guarded probe batch.
 Tracked changes, deletions or untracked additions invalidate every successful
 probe and stop the run. `.harness_tmp`, worktree `.venv` and registered projected
 runtime roots retain the existing candidate exclusions. Raw probe output is
-Controller-private; public failure evidence is typed and contains no raw output.
+Controller-private and hard-capped at 1 MiB; public failure evidence is typed
+and contains no raw output.
 
 ## Enforcement honesty
 

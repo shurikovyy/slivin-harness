@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a13
+# Документация Slivin Harness 0.8.0a14
 
-Актуальная версия: **0.8.0a13 — static preflight trust-boundary hardening**.
+Актуальная версия: **0.8.0a14 — Git control and physical candidate integrity**.
 
 Основные документы:
 

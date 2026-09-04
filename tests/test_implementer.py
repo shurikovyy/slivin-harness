@@ -15,6 +15,12 @@ from slivin_harness.implementer import (
     build_implementation_contract,
     validate_implementation_report,
 )
+from slivin_harness.git_integrity import (
+    GIT_CONTROL_STATE_MUTATED_DURING_BATCH,
+    CandidateWorkspaceBaseline,
+    GitControlIntegrityManager,
+)
+from slivin_harness.run_state import build_candidate_identity
 from task_runner import (
     HarnessControlledStop,
     build_dynamic_check_specs,
@@ -319,6 +325,56 @@ class ImplementerContractTests(unittest.TestCase):
         self.assertEqual(len(specs), 1)
         self.assertIn("thing.test.cjs", specs[0]["name"])
         self.assertTrue(any("not test-like" in note for note in notes))
+
+    def test_git_control_mutation_blocks_implementer_receipt_and_hidden_file_is_visible(self) -> None:
+        repo = self.make_repo()
+        baseline_sha = git(repo, "rev-parse", "HEAD")
+        control_plane = ControllerPlane(repo.parent / f"{repo.name}-run")
+        CandidateWorkspaceBaseline.capture(
+            repo,
+            baseline_sha=baseline_sha,
+            excluded_prefixes=(".git", ".harness_tmp", ".venv", ".harness_git_excludes"),
+            control_plane=control_plane,
+        )
+        git_manager = GitControlIntegrityManager(
+            workspace=repo,
+            control_plane=control_plane,
+        )
+        git_manager.establish_baseline()
+
+        class FakeCodex:
+            def run_turn(self, **_kwargs):
+                with (repo / ".git" / "info" / "exclude").open("a", encoding="utf-8") as stream:
+                    stream.write("stealth.py\n")
+                (repo / "stealth.py").write_text("hidden candidate\n", encoding="utf-8")
+                return "{}"
+
+        with self.assertRaises(HarnessControlledStop) as raised:
+            run_implementer_report(
+                FakeCodex(),
+                thread_id="thread",
+                prompt="implement",
+                timeout=60,
+                label="IMPLEMENT",
+                implementation_contract=self.contract(),
+                self_verify_command=[],
+                workspace=repo,
+                stamp_path=repo / ".harness_tmp" / "missing.json",
+                plan=valid_plan(),
+                control_plane=control_plane,
+                git_integrity_manager=git_manager,
+            )
+
+        self.assertEqual(
+            str(raised.exception), GIT_CONTROL_STATE_MUTATED_DURING_BATCH
+        )
+        self.assertIn(
+            "stealth.py",
+            build_candidate_identity(repo, baseline_sha=baseline_sha).changed_paths,
+        )
+        self.assertFalse(
+            (control_plane.private_root / "self_verify_receipt_current.json").exists()
+        )
 
     def test_trusted_check_id_must_resolve_to_controller_owned_spec(self) -> None:
         specs, notes = build_trusted_check_id_specs(

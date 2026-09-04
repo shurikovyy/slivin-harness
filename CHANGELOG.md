@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.0a14 — Git control and physical candidate integrity
+
+- Froze worktree Git control state (HEAD/ref identity, index bytes/semantic flags, local/worktree config, exclude/attribute/sparse-control files, hooks and Harness excludes) around authoritative batches, with typed mutation/restore failures and public-safe diagnostics.
+- Replaced ignore/index-dependent candidate discovery with a Controller-private physical workspace baseline. Mutable `.gitignore`, `.git/info/exclude`, `core.excludesFile`, `assume-unchanged` and `skip-worktree` can no longer hide candidate files or modifications.
+- Candidate patch generation now stages the canonical physical changed-set through a disposable `GIT_INDEX_FILE`, forces ignored additions, disables hooks and leaves the real worktree index unchanged; Phase 7 reconstruction compares the same physical `candidate.v1`.
+- Preserved the lexical POSIX virtualenv entrypoint for `PROJECT_PYTHON` probes and added a venv-binding probe instead of executing the canonical bootstrap target.
+- Capped Controller-private combined probe output at 1 MiB, terminates the probe process group on timeout/overflow, and reports `STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT` without publishing raw output.
+- Updated gitless workflow coverage: `ARCHIVE_OR_UNKNOWN` legitimately records `git_commit=null` and `git_dirty=null` while Git checkouts continue to require an exact commit.
+
 ## 0.8.0a13 — Static preflight trust-boundary hardening
 
 - Added `static-toolchain-preflight.v1` after workspace/runtime projection setup and before historical semantic baseline commands or any Codex agent stage. It strictly parses all repair/held-out templates, resolves required executables and known inputs, and emits a public-safe controlled failure artifact.

@@ -6,6 +6,8 @@ import shutil
 import string
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable, Mapping, Sequence
@@ -17,6 +19,10 @@ from slivin_harness.control_plane import (
     is_within,
 )
 from slivin_harness.execution import ExecutionBroker, ExecutionRole
+from slivin_harness.git_integrity import (
+    GitControlIntegrityError,
+    GitControlIntegrityManager,
+)
 from slivin_harness.run_state import (
     DEFAULT_CANDIDATE_EXCLUDES,
     CandidateIdentity,
@@ -44,6 +50,10 @@ STATIC_CHECK_INPUT_NOT_FOUND = "STATIC_CHECK_INPUT_NOT_FOUND"
 STATIC_COMMAND_TEMPLATE_INVALID = "STATIC_COMMAND_TEMPLATE_INVALID"
 STATIC_RUNTIME_INTEGRITY_FAILED = "STATIC_RUNTIME_INTEGRITY_FAILED"
 STATIC_PREFLIGHT_MUTATED_CANDIDATE = "STATIC_PREFLIGHT_MUTATED_CANDIDATE"
+STATIC_GIT_CONTROL_INTEGRITY_FAILED = "STATIC_GIT_CONTROL_INTEGRITY_FAILED"
+STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT = "STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT"
+MAX_PRIVATE_PROBE_LOG_BYTES = 1_048_576
+_POPEN = subprocess.Popen
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _FORMATTER = string.Formatter()
@@ -246,6 +256,7 @@ class ToolProbeRecord:
     safe_summary: str = ""
     returncode: int | None = None
     timed_out: bool = False
+    output_truncated: bool = False
 
     def public_dict(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -257,6 +268,7 @@ class ToolProbeRecord:
             value["reason_code"] = self.reason_code
         value["returncode"] = self.returncode
         value["timed_out"] = self.timed_out
+        value["output_truncated"] = self.output_truncated
         if self.safe_summary:
             value["summary"] = self.safe_summary
         return value
@@ -352,10 +364,12 @@ class ToolProbeRegistry:
         execution_broker: ExecutionBroker,
         control_plane: ControllerPlane,
         runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
+        git_integrity_manager: GitControlIntegrityManager | None = None,
         historical: bool = False,
         rebound_to_workspace: Mapping[str, str] | None = None,
         probe_timeout_seconds: int = 30,
         output_limit: int = 2_000,
+        private_log_limit: int = MAX_PRIVATE_PROBE_LOG_BYTES,
     ) -> None:
         workspace_input = Path(workspace).expanduser()
         harness_input = Path(harness_root).expanduser()
@@ -381,6 +395,7 @@ class ToolProbeRegistry:
         self.execution_broker = execution_broker
         self.control_plane = control_plane
         self.runtime_integrity_manager = runtime_integrity_manager
+        self.git_integrity_manager = git_integrity_manager
         self.historical = historical
         self.rebound_to_workspace = {
             str(key): str(value).replace("\\", "/")
@@ -388,6 +403,7 @@ class ToolProbeRegistry:
         }
         self.probe_timeout_seconds = max(1, int(probe_timeout_seconds))
         self.output_limit = max(128, int(output_limit))
+        self.private_log_limit = max(1024, int(private_log_limit))
         self._verified_capabilities: set[str] = set()
         self._verified_python_bindings: set[tuple[str, str]] = set()
         self._verified_jest_configs: set[str] = set()
@@ -486,6 +502,36 @@ class ToolProbeRegistry:
         relative = _safe_relative_path(value)
         return canonical_path(self.workspace / relative)
 
+    def _resolve_project_python_execution_path(self, value: str) -> Path:
+        """Preserve the lexical POSIX venv leaf while validating its parent."""
+
+        if _looks_absolute(value):
+            path = Path(value).expanduser().absolute()
+        else:
+            path = (self.workspace / _safe_relative_path(value)).absolute()
+        assert_safe_runtime_path(self.workspace, path.parent, include_leaf=True)
+        if not is_within(self.workspace, canonical_path(path.parent)):
+            raise StaticPreflightError(
+                STATIC_TOOLCHAIN_PATH_NOT_FOUND,
+                "Project Python entrypoint parent escapes the managed workspace",
+            )
+        if path.is_symlink() and os.name == "nt":
+            raise StaticPreflightError(
+                STATIC_TOOLCHAIN_PATH_NOT_FOUND,
+                "Windows project Python entrypoint cannot be a filesystem alias",
+            )
+        if not path.is_file():
+            raise StaticPreflightError(
+                STATIC_TOOLCHAIN_PATH_NOT_FOUND,
+                "Required project Python entrypoint does not exist",
+            )
+        if os.name != "nt" and not os.access(path, os.X_OK):
+            raise StaticPreflightError(
+                STATIC_TOOLCHAIN_PATH_NOT_FOUND,
+                "Required project Python entrypoint is not executable",
+            )
+        return path
+
     def _reject_historical_source_path(self, path: Path) -> None:
         if self.historical and self.source_repo is not None and is_within(self.source_repo, path):
             raise StaticPreflightError(
@@ -500,7 +546,9 @@ class ToolProbeRegistry:
                 STATIC_TOOLCHAIN_MISSING_ENTRY,
                 f"Required toolchain entry is missing: {key}",
             )
-        if _looks_path_like(raw):
+        if key == "project_python":
+            path = self._resolve_project_python_execution_path(raw)
+        elif _looks_path_like(raw):
             path = self._resolve_path(raw)
         else:
             found = shutil.which(raw, path=self._environment().get("PATH"))
@@ -571,6 +619,27 @@ class ToolProbeRegistry:
             },
         )
 
+    @staticmethod
+    def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    shell=False,
+                    timeout=5,
+                )
+            else:
+                os.killpg(process.pid, 9)
+        except (OSError, subprocess.SubprocessError):
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+
     def _run_probe(
         self,
         *,
@@ -594,38 +663,112 @@ class ToolProbeRegistry:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         returncode: int | None = None
         timed_out = False
+        output_truncated = False
         error_text = ""
+        prefix = bytearray()
+        process: subprocess.Popen[bytes] | None = None
+        overflow = threading.Event()
+        reader_error: list[BaseException] = []
+        marker = b"\n[CONTROLLER PROBE OUTPUT LIMIT REACHED]\n"
+        payload_limit = max(0, self.private_log_limit - len(marker))
         try:
             with log_path.open("wb") as output:
-                completed = subprocess.run(
+                popen_kwargs: dict[str, Any] = {}
+                if os.name == "nt":
+                    popen_kwargs["creationflags"] = getattr(
+                        subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+                    )
+                else:
+                    popen_kwargs["start_new_session"] = True
+                process = _POPEN(
                     [str(part) for part in command],
                     cwd=self.workspace,
-                    stdout=output,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     shell=False,
-                    timeout=self.probe_timeout_seconds,
                     env=self._environment(),
+                    **popen_kwargs,
                 )
-                returncode = completed.returncode
-        except subprocess.TimeoutExpired:
-            timed_out = True
+                written = 0
+
+                def drain() -> None:
+                    nonlocal written
+                    assert process is not None and process.stdout is not None
+                    try:
+                        while True:
+                            chunk = process.stdout.read(64 * 1024)
+                            if not chunk:
+                                break
+                            if len(prefix) < 256:
+                                prefix.extend(chunk[: 256 - len(prefix)])
+                            remaining = payload_limit - written
+                            if remaining > 0:
+                                accepted = chunk[:remaining]
+                                output.write(accepted)
+                                written += len(accepted)
+                            if len(chunk) > max(0, remaining):
+                                overflow.set()
+                    except BaseException as exc:
+                        reader_error.append(exc)
+
+                reader = threading.Thread(target=drain, name="preflight-probe-drain", daemon=True)
+                reader.start()
+                deadline = time.monotonic() + self.probe_timeout_seconds
+                while process.poll() is None:
+                    if overflow.is_set():
+                        output_truncated = True
+                        self._terminate_process_tree(process)
+                        break
+                    if time.monotonic() >= deadline:
+                        timed_out = True
+                        self._terminate_process_tree(process)
+                        break
+                    time.sleep(0.01)
+                try:
+                    returncode = process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._terminate_process_tree(process)
+                    returncode = process.wait(timeout=5)
+                reader.join(timeout=5)
+                if reader.is_alive():
+                    self._terminate_process_tree(process)
+                    reader.join(timeout=1)
+                if process.stdout is not None:
+                    process.stdout.close()
+                if overflow.is_set():
+                    output_truncated = True
+                    output.write(marker)
+                output.flush()
         except (FileNotFoundError, PermissionError, OSError) as exc:
             error_text = f"{type(exc).__name__}: {exc}"
             try:
+                encoded_error = (error_text + "\n").encode("utf-8", errors="replace")
+                remaining = max(
+                    0,
+                    self.private_log_limit
+                    - (log_path.stat().st_size if log_path.exists() else 0),
+                )
                 with log_path.open("ab") as output:
-                    output.write((error_text + "\n").encode("utf-8", errors="replace"))
+                    output.write(encoded_error[:remaining])
             except OSError:
                 pass
         try:
-            with log_path.open("r", encoding="utf-8", errors="replace") as output:
-                output_text = output.read(min(self.output_limit, 256))
+            output_text = bytes(prefix).decode("utf-8", errors="replace")
         except OSError:
             output_text = ""
-        passed = returncode == 0 and not timed_out and not error_text
+        passed = (
+            returncode == 0
+            and not timed_out
+            and not output_truncated
+            and not error_text
+            and not reader_error
+        )
         if passed and probe_id.endswith(".version"):
             summary = self._safe_version_summary(probe_id, output_text)
         elif passed:
             summary = ""
+        elif output_truncated:
+            summary = "Probe output exceeded the Controller limit"
         else:
             summary = "Probe failed; see Controller-private diagnostics"
         self._private_probe_commands.append(
@@ -635,6 +778,7 @@ class ToolProbeRegistry:
                 "argv": [str(part) for part in command],
                 "returncode": returncode,
                 "timed_out": timed_out,
+                "output_truncated": output_truncated,
                 "launcher_error": bool(error_text),
                 "log_artifact": private_log_name,
             }
@@ -643,10 +787,17 @@ class ToolProbeRegistry:
             probe_id=probe_id,
             capability=capability,
             status="PASS" if passed else "FAIL",
-            reason_code=None if passed else failure_reason,
+            reason_code=(
+                None
+                if passed
+                else STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT
+                if output_truncated
+                else failure_reason
+            ),
             safe_summary=summary,
             returncode=returncode,
             timed_out=timed_out,
+            output_truncated=output_truncated,
         )
 
     def ensure_capabilities(
@@ -799,7 +950,7 @@ class ToolProbeRegistry:
                 except StaticPreflightError as exc:
                     reasons.append(exc.reason_code)
                 else:
-                    if record(
+                    version_ok = record(
                         self._run_probe(
                             batch_id=batch_id,
                             probe_id="project-python.version",
@@ -807,7 +958,28 @@ class ToolProbeRegistry:
                             command=[str(project_python), "--version"],
                             failure_reason=STATIC_TOOLCHAIN_PROBE_FAILED,
                         )
-                    ):
+                    )
+                    venv_root = project_python.parent.parent
+                    binding_ok = version_ok and record(
+                        self._run_probe(
+                            batch_id=batch_id,
+                            probe_id="project-python.venv-binding",
+                            capability=Capability.PROJECT_PYTHON.value,
+                            command=[
+                                str(project_python),
+                                "-c",
+                                (
+                                    "import os,sys; expected=os.path.normcase(os.path.realpath(sys.argv[1])); "
+                                    "actual=os.path.normcase(os.path.realpath(sys.prefix)); "
+                                    "raise SystemExit(0 if actual==expected and "
+                                    "os.path.normcase(os.path.realpath(sys.base_prefix))!=actual else 3)"
+                                ),
+                                str(venv_root),
+                            ],
+                            failure_reason=STATIC_TOOLCHAIN_PROBE_FAILED,
+                        )
+                    )
+                    if binding_ok:
                         new_verified.add(Capability.PROJECT_PYTHON.value)
 
             if Capability.JEST.value in requested:
@@ -873,10 +1045,15 @@ class ToolProbeRegistry:
 
         try:
             manager = self.runtime_integrity_manager
-            if manager is not None:
-                manager.run_batch(batch_id, operation)
+            guarded_operation = (
+                (lambda: manager.run_batch(batch_id, operation))
+                if manager is not None
+                else operation
+            )
+            if self.git_integrity_manager is not None:
+                self.git_integrity_manager.run_batch(batch_id, guarded_operation)
             else:
-                operation()
+                guarded_operation()
         except RuntimeProjectionIntegrityError as exc:
             return ToolProbeBatchResult(
                 requested_capabilities=tuple(sorted(requested)),
@@ -884,6 +1061,15 @@ class ToolProbeRegistry:
                 reused_capabilities=tuple(sorted(reused)),
                 probes=(),
                 reason_codes=(STATIC_RUNTIME_INTEGRITY_FAILED,),
+                integrity_reason_code=exc.reason_code,
+            )
+        except GitControlIntegrityError as exc:
+            return ToolProbeBatchResult(
+                requested_capabilities=tuple(sorted(requested)),
+                verified_capabilities=tuple(sorted(requested & self._verified_capabilities)),
+                reused_capabilities=tuple(sorted(reused)),
+                probes=(),
+                reason_codes=(STATIC_GIT_CONTROL_INTEGRITY_FAILED,),
                 integrity_reason_code=exc.reason_code,
             )
 

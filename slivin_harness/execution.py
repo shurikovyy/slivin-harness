@@ -232,6 +232,8 @@ class ExecutionBroker:
                 "TMPDIR": str(scratch),
                 "XDG_CACHE_HOME": str(scratch / "cache"),
                 "NPM_CONFIG_CACHE": str(scratch / "npm"),
+                # Read-only Git commands must not refresh/write the real index.
+                "GIT_OPTIONAL_LOCKS": "0",
                 "SLIVIN_HARNESS_WORKSPACE": str(self.workspace),
                 "SLIVIN_HARNESS_EXECUTION_ROLE": role.value,
             }

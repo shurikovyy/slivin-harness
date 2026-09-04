@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a13 — Phase 7
+# Slivin Harness 0.8.0a14 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Текущий `0.8.0a13` quality-core сохраняет protocol/workflow versions и добавляет
+Текущий `0.8.0a14` quality-core сохраняет protocol/workflow versions и добавляет
 Stage 0 static toolchain gate до semantic baseline и agent stages:
 
 ```text
@@ -63,8 +63,17 @@ canonical candidate identity до/после probe batch. Любое измен�
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a13`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a14`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
+
+Candidate определяется Controller-private physical baseline, а не mutable Git
+index/ignore state. Поэтому `.gitignore`, `.git/info/exclude`, local
+`core.excludesFile`, `assume-unchanged` и `skip-worktree` не скрывают новый или
+изменённый project file. Отдельный `GitControlIntegrityManager` замораживает
+HEAD/ref, index, local/worktree config и repository control files вокруг
+trusted batches; mutation инвалидирует текущий batch даже при exit code 0.
+Runtime projection, physical candidate и Git control state остаются тремя
+раздельными integrity boundaries.
 
 Gate завершается до baseline semantic command, запуска Codex app-server,
 Task Contract и Planner. Неиспользуемая optional toolchain entry не блокирует
@@ -237,6 +246,11 @@ Controller принимает результат только если Step 3–
 
 `candidate.patch` применяется в отдельной чистой verification-копии recorded baseline. Полученный `candidate_id` обязан побайтово совпасть с уже проверенным candidate. Только после этого создаётся immutable `final-acceptance.v2`.
 
+Patch строится из того же physical changed-set через Controller-private
+disposable `GIT_INDEX_FILE`, с `git add -f` для ignored additions и отключёнными
+hooks. Persistent worktree index не меняется; ignored candidate file обязан
+войти в patch и reconstruction либо привести к controlled failure.
+
 Private reconstruction repository зеркалирует только effective Git settings, которые определяют worktree bytes/mode (`core.autocrlf`, `core.eol`, `core.safecrlf`, `core.filemode`, `core.symlinks`). Это сохраняет строгий CRLF/LF byte-level proof на native Windows, не перенося arbitrary hooks, aliases, transports или credentials.
 
 ### Безопасная доставка
@@ -273,7 +287,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a13 ...
+DOCS_SYNC_PASS harness=0.8.0a14 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -287,7 +301,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a13` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a14` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

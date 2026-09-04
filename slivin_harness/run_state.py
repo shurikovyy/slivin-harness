@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from slivin_harness.git_integrity import candidate_baseline_for
 from slivin_harness.protocol import stable_fingerprint
 from slivin_harness.workflow import (
     INVALIDATION_RULES,
@@ -50,6 +51,7 @@ def _git(workspace: Path, *args: str) -> str:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"git {' '.join(args)} failed")
@@ -70,6 +72,9 @@ def collect_candidate_paths(
     *,
     excluded_prefixes: Iterable[str] = DEFAULT_CANDIDATE_EXCLUDES,
 ) -> list[str]:
+    baseline = candidate_baseline_for(workspace)
+    if baseline is not None:
+        return [item["path"] for item in baseline.changed_entries()]
     paths = {
         item.replace("\\", "/")
         for item in _git(
@@ -160,6 +165,26 @@ def build_candidate_identity(
     root = workspace.resolve()
     workspace_head = _git(root, "rev-parse", "HEAD").strip()
     baseline = baseline_sha or workspace_head
+    physical_baseline = candidate_baseline_for(root)
+    if physical_baseline is not None:
+        if baseline_sha is not None and physical_baseline.baseline_sha != baseline_sha:
+            raise RuntimeError("Candidate baseline SHA does not match the requested baseline")
+        entries = list(physical_baseline.changed_entries())
+        payload = {
+            "schema_version": CANDIDATE_IDENTITY_VERSION,
+            "baseline_sha": baseline,
+            "workspace_head": workspace_head,
+            "entries": entries,
+        }
+        candidate_id = stable_fingerprint(payload, length=64)
+        return CandidateIdentity(
+            schema_version=CANDIDATE_IDENTITY_VERSION,
+            baseline_sha=baseline,
+            workspace_head=workspace_head,
+            candidate_id=candidate_id,
+            changed_paths=tuple(item["path"] for item in entries),
+            entries=tuple(entries),
+        )
     entries: list[dict[str, Any]] = []
     changed_paths = collect_candidate_paths(root, excluded_prefixes=excluded_prefixes)
     for rel in changed_paths:

@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a13 — Phase 7
+# Архитектура Slivin Harness 0.8.0a14 — Phase 7
 
 ## Назначение
 
-`0.8.0a13` сохраняет согласованный Step 0–7 quality-core и укрепляет trust boundary static preflight без изменения protocol/workflow versions.
+`0.8.0a14` сохраняет согласованный Step 0–7 quality-core и укрепляет Git/candidate trust boundary без изменения protocol/workflow versions.
 
 Machine phase id:
 
@@ -35,7 +35,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a13
+Harness                     0.8.0a14
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -114,19 +114,35 @@ runtime_environment_rev
 attempt_id
 ```
 
-`candidate.v1` включает:
+`candidate.v1` строится из Controller-private physical workspace baseline и
+включает:
 
 ```text
 recorded baseline SHA
 workspace HEAD
 changed/new/deleted paths
-Git-visible mode
+physical executable/Git-compatible mode
 SHA-256 фактических bytes или symlink target
 ```
 
-`.venv`, `.harness_tmp` и Controller-excluded runtime projections не входят в
-candidate. Они не попадают в `candidate.patch`, delivery или Phase 7 patch
-reconstruction.
+Inventory не читает `.gitignore`, `.git/info/exclude`, `core.excludesFile` и не
+доверяет real index. Поэтому ignored addition, tracked file с
+`assume-unchanged`/`skip-worktree`, deletion, rename или type change остаются
+candidate-visible. Исключаются только Controller-authorized roots: `.git`,
+`.harness_tmp`, worktree `.venv`/configured project runtime, registered runtime
+projections, `session.exposed_paths`, `.harness_git_excludes` и узкие
+Controller cache patterns. Эти roots не попадают в `candidate.patch`, delivery
+или Phase 7 patch reconstruction.
+
+Отдельный private `GitControlStateBaseline` фиксирует repository identity,
+worktree/common Git directories, `.git` pointer, HEAD/symbolic ref, raw index и
+`ls-files` stage/flags/debug semantics, local/worktree config, split-index
+objects, info exclude/attributes/sparse definitions, local exclude/attribute
+targets, hooks и `.harness_git_excludes`. `GitControlIntegrityManager` проверяет
+baseline до/после authoritative batch и best-effort восстанавливает control
+state, но mutation всегда инвалидирует текущий result. Public
+`git-control-integrity.v1` содержит только batch/event codes; private paths,
+bytes и fingerprints остаются в Controller plane.
 
 Изменение candidate, Contract, Verification Plan или runtime environment инвалидирует downstream evidence согласно `workflow.v6`.
 
@@ -145,8 +161,11 @@ Controller:
 фиксирует source baseline
 создаёт managed worktree
 копирует разрешённые .worktreeinclude files и local runtime projections
+регистрирует Controller-only candidate exclusions
+фиксирует private physical candidate baseline
+фиксирует private Git control-state baseline
 фиксирует private full-tree runtime projection baseline
-создаёт worktree-local project runtime
+создаёт worktree-local project runtime под read-only candidate/Git guard
 resolve + historical sanitize/rebind toolchain
 выполняет static-toolchain-preflight.v1 для всех manifest checks
 только затем запускает semantic baseline command и Codex app-server
@@ -170,6 +189,9 @@ project Python. Jest требует успешных Node/Jest version probes и
 загружает executable project-owned config/test environment, но не запускает
 test suite или hidden oracle. Probes проходят через тот же
 `RuntimeProjectionIntegrityManager` с batch id `static-toolchain-preflight`.
+Combined stdout/stderr читается потоково и ограничен 1 MiB; overflow завершает
+process group и даёт `STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT`. Raw bytes остаются
+только в Controller-private log.
 Failure маршрутизирует Step 0 в `BLOCKED`; Task Contract/Planner artifacts ещё
 не существуют.
 
@@ -190,7 +212,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a13`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a14`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -441,7 +463,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a13` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a14` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 

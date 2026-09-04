@@ -5,10 +5,17 @@ import os
 import shutil
 import stat
 import subprocess
+import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
+
+from slivin_harness.git_integrity import (
+    CandidateWorkspaceBaseline,
+    candidate_baseline_for,
+    clear_candidate_baseline,
+)
 
 WORKTREE_EXCLUDES = [
     ".harness_tmp/",
@@ -748,7 +755,7 @@ def prepare_workspace_session(
             _remove_worktree(source_repo, workspace)
         raise
 
-    return WorkspaceSession(
+    session = WorkspaceSession(
         workspace=workspace,
         mode="benchmark_isolated" if benchmark_isolated else "git_worktree",
         managed=True,
@@ -762,11 +769,38 @@ def prepare_workspace_session(
         runtime_projections=runtime_projections,
         benchmark_isolated=benchmark_isolated,
     )
+    try:
+        CandidateWorkspaceBaseline.capture(
+            workspace,
+            baseline_sha=workspace_base_sha,
+            excluded_prefixes=(
+                ".git",
+                ".harness_tmp",
+                ".venv",
+                ".harness_git_excludes",
+                "__pycache__",
+                "**/__pycache__",
+                "*.py[cod]",
+                "**/*.py[cod]",
+                ".pytest_cache",
+                "**/.pytest_cache",
+                *copied,
+                *(item.relative_path for item in runtime_projections),
+            ),
+        )
+    except Exception:
+        if benchmark_isolated:
+            shutil.rmtree(workspace, ignore_errors=True)
+        else:
+            _remove_worktree(source_repo, workspace)
+        raise
+    return session
 
 
 def remove_managed_workspace(session: WorkspaceSession) -> None:
     if not session.managed:
         return
+    clear_candidate_baseline(session.workspace)
     if session.benchmark_isolated:
         shutil.rmtree(session.workspace, ignore_errors=True)
     elif session.source_repo is not None:
@@ -780,39 +814,121 @@ def _collect_untracked(repo: Path) -> list[str]:
     return [item for item in output.split("\0") if item]
 
 
-def _build_patch(repo: Path) -> bytes:
-    untracked = _collect_untracked(repo)
-    try:
-        if untracked:
-            _run_git(repo, "add", "-N", "--", *untracked)
-        result = subprocess.run(
-            ["git", "diff", "--binary", "--full-index", "HEAD", "--"],
+def _build_patch(repo: Path, *, scratch_root: Path | None = None) -> bytes:
+    baseline = candidate_baseline_for(repo)
+    if baseline is None:
+        head = str(_run_git(repo, "rev-parse", "HEAD").stdout).strip()
+        baseline = CandidateWorkspaceBaseline.from_git_tree(
+            repo,
+            baseline_sha=head,
+            excluded_prefixes=(
+                ".git",
+                ".harness_tmp",
+                ".venv",
+                ".harness_git_excludes",
+                "__pycache__",
+                "**/__pycache__",
+                "*.py[cod]",
+                "**/*.py[cod]",
+                ".pytest_cache",
+                "**/.pytest_cache",
+            ),
+        )
+
+    parent = Path(scratch_root) if scratch_root is not None else None
+    # Keep the Controller-private temporary components short.  The scratch root
+    # can already be deeply nested (notably in a gitless release archive), and
+    # verbose UUID-bearing components can otherwise cross the legacy Windows
+    # MAX_PATH boundary before Git sees the isolated index.
+    temp_name = f"i-{uuid.uuid4().hex[:12]}"
+    default_parent = Path(tempfile.gettempdir()) / "sh-idx"
+    temp_parent = parent or default_parent
+    if os.name == "nt" and len(str(temp_parent / temp_name / "index.lock")) >= 220:
+        temp_parent = default_parent
+    temp_parent.mkdir(parents=True, exist_ok=True)
+    temp_root = temp_parent / temp_name
+    temp_root.mkdir()
+    index_path = temp_root / "index"
+    hooks_path = temp_root / "h"
+    hooks_path.mkdir()
+    environment = dict(os.environ)
+    environment["GIT_INDEX_FILE"] = str(index_path)
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+
+    def run(*args: str) -> subprocess.CompletedProcess[bytes]:
+        completed = subprocess.run(
+            ["git", "-c", f"core.hooksPath={hooks_path}", *args],
             cwd=repo,
+            env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            shell=False,
         )
-        if result.returncode != 0:
+        if completed.returncode != 0:
             raise RuntimeError(
-                "Failed to build candidate patch:\n"
-                + result.stderr.decode("utf-8", errors="replace")
+                "Failed to build candidate patch with isolated index:\n"
+                + completed.stderr.decode("utf-8", errors="replace")
             )
-        return result.stdout
+        return completed
+
+    try:
+        run("read-tree", baseline.baseline_sha)
+        for entry in baseline.changed_entries():
+            rel = str(entry["path"])
+            if entry["state"] == "deleted":
+                run("update-index", "--force-remove", "--", rel)
+            else:
+                run("add", "-f", "--", rel)
+        return run(
+            "diff", "--cached", "--binary", "--full-index", baseline.baseline_sha, "--"
+        ).stdout
     finally:
-        if untracked:
-            _run_git(repo, "reset", "--", *untracked)
+        shutil.rmtree(temp_root, ignore_errors=True)
 
 
-def build_repository_patch(repo: Path) -> bytes:
-    return _build_patch(repo)
+def build_repository_patch(repo: Path, *, scratch_root: Path | None = None) -> bytes:
+    return _build_patch(repo, scratch_root=scratch_root)
 
 
-def build_candidate_patch(session: WorkspaceSession) -> bytes:
-    return build_repository_patch(session.workspace)
+def build_candidate_patch(
+    session: WorkspaceSession, *, scratch_root: Path | None = None
+) -> bytes:
+    if candidate_baseline_for(session.workspace) is None:
+        head = session.base_sha or str(
+            _run_git(session.workspace, "rev-parse", "HEAD").stdout
+        ).strip()
+        CandidateWorkspaceBaseline.from_git_tree(
+            session.workspace,
+            baseline_sha=head,
+            excluded_prefixes=(
+                ".git",
+                ".harness_tmp",
+                ".venv",
+                ".harness_git_excludes",
+                "__pycache__",
+                "**/__pycache__",
+                "*.py[cod]",
+                "**/*.py[cod]",
+                ".pytest_cache",
+                "**/.pytest_cache",
+                *session.exposed_paths,
+                *(item.relative_path for item in session.runtime_projections),
+            ),
+        )
+    return build_repository_patch(session.workspace, scratch_root=scratch_root)
 
 
-def _remove_new_untracked(repo: Path, before: set[str]) -> None:
-    after = set(_collect_untracked(repo))
-    for raw in sorted(after - before, key=lambda item: len(Path(item).parts), reverse=True):
+def _remove_new_candidate_files(repo: Path) -> None:
+    baseline = candidate_baseline_for(repo)
+    if baseline is None:
+        raise RuntimeError("Source candidate baseline is missing during rollback")
+    baseline_paths = {item.path for item in baseline.entries}
+    added = {
+        str(item["path"])
+        for item in baseline.changed_entries()
+        if item["state"] != "deleted" and str(item["path"]) not in baseline_paths
+    }
+    for raw in sorted(added, key=lambda item: len(Path(item).parts), reverse=True):
         path = repo / raw
         if path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
@@ -843,6 +959,18 @@ def apply_candidate_to_source(session: WorkspaceSession, *, patch: bytes) -> Non
         print("RESULT_APPLY: no candidate diff")
         return
 
+    CandidateWorkspaceBaseline.capture(
+        source,
+        baseline_sha=session.source_head,
+        excluded_prefixes=(
+            ".git",
+            ".harness_tmp",
+            ".venv",
+            ".harness_git_excludes",
+            *session.exposed_paths,
+        ),
+    )
+
     check = subprocess.run(
         ["git", "apply", "--check", "--binary", "--whitespace=nowarn", "-"],
         cwd=source,
@@ -856,7 +984,6 @@ def apply_candidate_to_source(session: WorkspaceSession, *, patch: bytes) -> Non
             + check.stderr.decode("utf-8", errors="replace")
         )
 
-    before_untracked = set(_collect_untracked(source))
     apply_result = subprocess.run(
         ["git", "apply", "--binary", "--whitespace=nowarn", "-"],
         cwd=source,
@@ -873,7 +1000,7 @@ def apply_candidate_to_source(session: WorkspaceSession, *, patch: bytes) -> Non
     applied_patch = _build_patch(source)
     if applied_patch != patch:
         _run_git(source, "reset", "--hard", "HEAD")
-        _remove_new_untracked(source, before_untracked)
+        _remove_new_candidate_files(source)
         raise RuntimeError(
             "Applied source diff does not exactly match the accepted candidate. "
             "Source was rolled back."

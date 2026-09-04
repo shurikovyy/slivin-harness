@@ -390,7 +390,10 @@ timeout_seconds = 30
                     "base_ref": "HEAD",
                     "result_mode": "keep_worktree",
                     "require_clean_source": True,
-                    "toolchain": {"project_python": sys.executable},
+                    # This fixture does not build a worktree-local project runtime;
+                    # use the explicit generic Python entry rather than falsely
+                    # declaring the Harness interpreter as PROJECT_PYTHON.
+                    "toolchain": {"python": sys.executable},
                     "runtime_verification": {
                         "enabled": True,
                         "scenarios": [

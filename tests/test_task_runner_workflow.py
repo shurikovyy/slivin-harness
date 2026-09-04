@@ -332,8 +332,14 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a13")
-        self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
+        self.assertEqual(build_identity["version"], "0.8.0a14")
+        if build_identity["source_kind"] == "GIT_CHECKOUT":
+            self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
+            self.assertIsInstance(build_identity["git_dirty"], bool)
+        else:
+            self.assertEqual(build_identity["source_kind"], "ARCHIVE_OR_UNKNOWN")
+            self.assertIsNone(build_identity["git_commit"])
+            self.assertIsNone(build_identity["git_dirty"])
         self.assertNotIn(str(task_runner.HARNESS_ROOT), json.dumps(build_identity))
         self.assertIn("HARNESS_GIT_COMMIT:", output)
         private_state = json.loads(

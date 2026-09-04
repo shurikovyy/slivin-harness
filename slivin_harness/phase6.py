@@ -11,6 +11,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from slivin_harness.control_plane import canonical_path, is_within
 from slivin_harness.execution import ExecutionBroker, ExecutionRole
+from slivin_harness.git_integrity import GitControlIntegrityError, GitControlIntegrityManager
 from slivin_harness.preflight import (
     CommandTemplateError,
     expand_command_template,
@@ -736,12 +737,14 @@ class RuntimeExecutor:
         toolchain: Mapping[str, str],
         execution_broker: ExecutionBroker,
         runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
+        git_integrity_manager: GitControlIntegrityManager | None = None,
     ) -> None:
         self.workspace = canonical_path(workspace)
         self.source_repo = canonical_path(source_repo) if source_repo else None
         self.toolchain = {str(key): str(value) for key, value in toolchain.items()}
         self.execution_broker = execution_broker
         self.runtime_integrity_manager = runtime_integrity_manager
+        self.git_integrity_manager = git_integrity_manager
 
     def _source_head(self) -> str | None:
         if self.source_repo is None:
@@ -1133,15 +1136,24 @@ class RuntimeExecutor:
                 )
 
             try:
-                result = (
-                    self.runtime_integrity_manager.run_batch(
-                        f"RUNTIME_VERIFICATION:{scenario.scenario_id}",
-                        execute_scenario,
+                scenario_batch_id = f"RUNTIME_VERIFICATION:{scenario.scenario_id}"
+                runtime_operation = (
+                    (
+                        lambda: self.runtime_integrity_manager.run_batch(
+                            scenario_batch_id, execute_scenario
+                        )
                     )
                     if self.runtime_integrity_manager is not None
-                    else execute_scenario()
+                    else execute_scenario
                 )
-            except RuntimeProjectionIntegrityError as exc:
+                result = (
+                    self.git_integrity_manager.run_batch(
+                        scenario_batch_id, runtime_operation
+                    )
+                    if self.git_integrity_manager is not None
+                    else runtime_operation()
+                )
+            except (RuntimeProjectionIntegrityError, GitControlIntegrityError) as exc:
                 candidate_now = build_candidate_identity(self.workspace).candidate_id
                 result = RuntimeScenarioExecution(
                     scenario.scenario_id,

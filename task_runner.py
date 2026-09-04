@@ -25,6 +25,14 @@ from slivin_harness.control_plane import (
     SelfVerifyBinding,
 )
 from slivin_harness.execution import ExecutionBroker, ExecutionRole
+from slivin_harness.git_integrity import (
+    CandidateWorkspaceBaseline,
+    GitControlIntegrityError,
+    GitControlIntegrityManager,
+    TrustedBatchIntegrityCoordinator,
+    TrustedBatchIntegrityError,
+    candidate_baseline_for,
+)
 from slivin_harness.evaluator import (
     run_evaluator,
     validate_blind_audit,
@@ -96,7 +104,11 @@ from slivin_harness.protocol import (
     safe_repo_relative,
     stable_fingerprint,
 )
-from slivin_harness.run_state import RunState, build_candidate_identity
+from slivin_harness.run_state import (
+    RunState,
+    build_candidate_identity,
+    collect_candidate_paths as collect_physical_candidate_paths,
+)
 from slivin_harness.runtime_projection import (
     RuntimeProjectionIntegrityError,
     RuntimeProjectionIntegrityManager,
@@ -136,6 +148,7 @@ from slivin_harness.workspace import (
     add_worktree_excludes,
     assert_safe_runtime_path,
     build_candidate_patch,
+    build_repository_patch,
     prepare_workspace_session,
     remove_managed_workspace,
 )
@@ -206,6 +219,7 @@ class CheckResult:
     candidate_after: str | None = None
     execution_enforcement: str = "ADVISORY"
     runtime_integrity_reason_code: str | None = None
+    git_integrity_reason_code: str | None = None
 
     @property
     def classification(self) -> CheckClassification:
@@ -653,6 +667,7 @@ def _run_git(workspace: Path, *args: str) -> str:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
     )
     if result.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed:\n{result.stderr.strip()}")
@@ -688,22 +703,7 @@ def capture_preflight(workspace: Path) -> dict:
 
 
 def collect_changed_paths(workspace: Path) -> list[str]:
-    changed = set(
-        line
-        for line in _run_git(workspace, "diff", "--name-only", "HEAD", "--").splitlines()
-        if line
-    )
-    changed.update(
-        item
-        for item in _run_git(
-            workspace,
-            "ls-files",
-            "--others",
-            "--exclude-standard",
-        ).splitlines()
-        if item
-    )
-    return sorted(path.replace("\\", "/") for path in changed)
+    return collect_physical_candidate_paths(workspace)
 
 
 def enforce_allowed_paths(changed_paths: list[str], allowed_paths: list[str]) -> None:
@@ -724,20 +724,7 @@ def enforce_allowed_paths(changed_paths: list[str], allowed_paths: list[str]) ->
 
 def current_diff_text(workspace: Path, *, limit: int = 240_000) -> str:
     """Return the complete candidate diff, including new untracked files."""
-    untracked = [
-        item
-        for item in _run_git(
-            workspace, "ls-files", "--others", "--exclude-standard"
-        ).splitlines()
-        if item
-    ]
-    try:
-        if untracked:
-            _run_git(workspace, "add", "-N", "--", *untracked)
-        text = _run_git(workspace, "diff", "--binary", "--full-index", "HEAD", "--")
-    finally:
-        if untracked:
-            _run_git(workspace, "reset", "--", *untracked)
+    text = build_repository_patch(workspace).decode("utf-8", errors="replace")
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n... DIFF TRUNCATED, total characters={len(text)} ...\n"
@@ -826,6 +813,17 @@ def prepare_self_verify_runner(
         }
         for spec in specs
     ]
+    candidate_baseline = candidate_baseline_for(workspace)
+    baseline_entries = (
+        [item.to_dict() for item in candidate_baseline.entries]
+        if candidate_baseline is not None
+        else None
+    )
+    baseline_excludes = (
+        list(candidate_baseline.excluded_prefixes)
+        if candidate_baseline is not None
+        else [".harness_tmp", ".venv"]
+    )
     template = r'''from __future__ import annotations
 import hashlib
 import json
@@ -838,6 +836,8 @@ WORKSPACE = Path(__WORKSPACE__)
 RUNTIME = Path(__RUNTIME__)
 STAMP = Path(__STAMP__)
 CHECKS = json.loads(__CHECKS__)
+BASELINE_ENTRIES = json.loads(__BASELINE_ENTRIES__)
+BASELINE_EXCLUDES = json.loads(__BASELINE_EXCLUDES__)
 
 
 def _git(*args):
@@ -909,6 +909,59 @@ def _mode(rel, path):
 
 def current_candidate_id():
     head = _git("rev-parse", "HEAD").strip()
+    if BASELINE_ENTRIES is not None:
+        import fnmatch
+        baseline = {item["path"]: item for item in BASELINE_ENTRIES}
+        current = {}
+        for directory, names, files in os.walk(WORKSPACE, topdown=True, followlinks=False):
+            relative_dir = Path(directory).relative_to(WORKSPACE).as_posix()
+            def excluded(rel):
+                rel = rel.replace("\\", "/").strip("/")
+                for raw in BASELINE_EXCLUDES:
+                    prefix = raw.replace("\\", "/").strip("/")
+                    if any(ch in prefix for ch in "*?["):
+                        if fnmatch.fnmatchcase(rel, prefix) or fnmatch.fnmatchcase(rel.casefold(), prefix.casefold()):
+                            return True
+                    elif rel == prefix or rel.startswith(prefix + "/"):
+                        return True
+                return False
+            names[:] = [name for name in names if not excluded(f"{relative_dir}/{name}" if relative_dir != "." else name)]
+            for name in files:
+                rel = f"{relative_dir}/{name}" if relative_dir != "." else name
+                rel = rel.replace("\\", "/")
+                if excluded(rel):
+                    continue
+                path = WORKSPACE / rel
+                if path.is_symlink():
+                    raw = os.readlink(path).encode("utf-8", errors="surrogateescape")
+                    current[rel] = {"path": rel, "state": "symlink", "mode": "120000", "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
+                elif path.is_file():
+                    digest = hashlib.sha256()
+                    size = 0
+                    with path.open("rb") as stream:
+                        while True:
+                            chunk = stream.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            digest.update(chunk)
+                            size += len(chunk)
+                    mode = "100755" if bool(path.stat().st_mode & stat.S_IXUSR) else "100644"
+                    current[rel] = {"path": rel, "state": "file", "mode": mode, "sha256": digest.hexdigest(), "size": size}
+        entries = []
+        for rel in sorted(set(baseline) | set(current)):
+            before = baseline.get(rel)
+            after = current.get(rel)
+            if before == after:
+                continue
+            entries.append(after if after is not None else {"path": rel, "state": "deleted", "mode": before.get("mode")})
+        payload = {
+            "schema_version": "candidate.v1",
+            "baseline_sha": head,
+            "workspace_head": head,
+            "entries": entries,
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
     entries = []
     for rel in _candidate_paths():
         path = WORKSPACE / rel
@@ -1006,6 +1059,8 @@ raise SystemExit(1)
         .replace("__RUNTIME__", repr(str((runtime_dir / "self_verify").resolve())))
         .replace("__STAMP__", repr(str(stamp_path.resolve())))
         .replace("__CHECKS__", repr(json.dumps(checks, ensure_ascii=False)))
+        .replace("__BASELINE_ENTRIES__", repr(json.dumps(baseline_entries, ensure_ascii=False)))
+        .replace("__BASELINE_EXCLUDES__", repr(json.dumps(baseline_excludes, ensure_ascii=False)))
     )
     script_path.write_text(script, encoding="utf-8")
     command = SelfVerifyCommand(
@@ -1268,6 +1323,7 @@ def run_checks(
     execution_broker: ExecutionBroker | None = None,
     execution_role: ExecutionRole = ExecutionRole.CONTROLLER_CHECK,
     runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
+    git_integrity_manager: GitControlIntegrityManager | None = None,
     batch_id: str | None = None,
 ) -> list[CheckResult]:
     print(f"=== {label} ===")
@@ -1288,10 +1344,15 @@ def run_checks(
         return results
 
     try:
-        results = (
-            runtime_integrity_manager.run_batch(batch_id or label, execute)
+        runtime_operation = (
+            (lambda: runtime_integrity_manager.run_batch(batch_id or label, execute))
             if runtime_integrity_manager is not None
-            else execute()
+            else execute
+        )
+        results = (
+            git_integrity_manager.run_batch(batch_id or label, runtime_operation)
+            if git_integrity_manager is not None
+            else runtime_operation()
         )
     except RuntimeProjectionIntegrityError as exc:
         # Discard command output from an invalidated batch. In particular, a
@@ -1310,6 +1371,22 @@ def run_checks(
                 candidate_before=fingerprint,
                 candidate_after=fingerprint,
                 runtime_integrity_reason_code=exc.reason_code,
+            )
+        ]
+    except GitControlIntegrityError as exc:
+        print("GIT_CONTROL_INTEGRITY_FAILURE:", exc.reason_code)
+        fingerprint = controller_check_fingerprint(workspace)
+        results = [
+            CheckResult(
+                name=f"{label} Git control integrity",
+                command=[],
+                returncode=None,
+                output="",
+                infra_error=True,
+                duration_seconds=time.monotonic() - started,
+                candidate_before=fingerprint,
+                candidate_after=fingerprint,
+                git_integrity_reason_code=exc.reason_code,
             )
         ]
     else:
@@ -1365,6 +1442,7 @@ def check_records(results: list[CheckResult]) -> list[dict]:
             "candidate_after": item.candidate_after,
             "execution_enforcement": item.execution_enforcement,
             "runtime_integrity_reason_code": item.runtime_integrity_reason_code,
+            "git_integrity_reason_code": getattr(item, "git_integrity_reason_code", None),
         }
         for item in results
     ]
@@ -1654,6 +1732,7 @@ def run_benchmark_baseline_gate(
     failure_marker: str,
     execution_broker: ExecutionBroker | None = None,
     runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
+    git_integrity_manager: GitControlIntegrityManager | None = None,
 ) -> dict:
     if not specs:
         raise RuntimeError("Baseline gate requires at least one held-out check")
@@ -1666,10 +1745,15 @@ def run_benchmark_baseline_gate(
         execution_broker=execution_broker,
         execution_role=ExecutionRole.HELDOUT,
         runtime_integrity_manager=runtime_integrity_manager,
+        git_integrity_manager=git_integrity_manager,
         batch_id="HISTORICAL_BENCHMARK_BASELINE_GATE",
     )
     integrity_failure = next(
-        (item.runtime_integrity_reason_code for item in results if item.runtime_integrity_reason_code),
+        (
+            item.runtime_integrity_reason_code or item.git_integrity_reason_code
+            for item in results
+            if item.runtime_integrity_reason_code or item.git_integrity_reason_code
+        ),
         None,
     )
     if integrity_failure is not None:
@@ -1793,6 +1877,7 @@ def run_implementer_report(
     run_state: RunState | None = None,
     check_registry_digest: str | None = None,
     runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
+    git_integrity_manager: GitControlIntegrityManager | None = None,
     execution_broker: ExecutionBroker | None = None,
 ) -> dict:
     def stop_for_integrity(
@@ -1806,7 +1891,10 @@ def run_implementer_report(
                 outcome=WorkflowOutcome.BLOCKED,
                 result_code=StageResultCode.BLOCKED,
                 reason_code=reason_code,
-                artifacts=("runtime_projection_integrity.json",),
+                artifacts=(
+                    "runtime_projection_integrity.json",
+                    "git_control_integrity.json",
+                ),
             )
         if cause is not None:
             raise HarnessControlledStop(reason_code) from cause
@@ -1824,15 +1912,30 @@ def run_implementer_report(
             stop_for_integrity(exc.reason_code, cause=exc)
     while True:
         try:
-            raw = run_agent_turn(
-                codex,
-                thread_id=thread_id,
-                prompt=current_prompt,
-                timeout=timeout if timeout_continuations == 0 else min(timeout, 300),
-                label=current_label,
-                output_schema=IMPLEMENTER_REPORT_SCHEMA,
+            operation = lambda: run_agent_turn(
+                    codex,
+                    thread_id=thread_id,
+                    prompt=current_prompt,
+                    timeout=timeout if timeout_continuations == 0 else min(timeout, 300),
+                    label=current_label,
+                    output_schema=IMPLEMENTER_REPORT_SCHEMA,
+                )
+            agent_batch_id = f"IMPLEMENTER_AGENT_TURN:{current_label}"
+            runtime_operation = (
+                (lambda: runtime_integrity_manager.run_batch(agent_batch_id, operation))
+                if runtime_integrity_manager is not None
+                else operation
+            )
+            raw = (
+                git_integrity_manager.run_batch(agent_batch_id, runtime_operation)
+                if git_integrity_manager is not None
+                else runtime_operation()
             )
             break
+        except GitControlIntegrityError as exc:
+            stop_for_integrity(exc.reason_code, cause=exc)
+        except RuntimeProjectionIntegrityError as exc:
+            stop_for_integrity(exc.reason_code, cause=exc)
         except TurnTimeoutError:
             if timeout_continuations >= 1:
                 raise
@@ -1881,13 +1984,16 @@ def run_implementer_report(
                 execution_broker=execution_broker,
                 execution_role=ExecutionRole.CONTROLLER_CHECK,
                 runtime_integrity_manager=runtime_integrity_manager,
+                git_integrity_manager=git_integrity_manager,
                 batch_id=f"IMPLEMENTER_SELF_VERIFY:{label}",
             )
             integrity_failure = next(
                 (
                     item.runtime_integrity_reason_code
+                    or item.git_integrity_reason_code
                     for item in confirmation
                     if item.runtime_integrity_reason_code
+                    or item.git_integrity_reason_code
                 ),
                 None,
             )
@@ -2002,7 +2108,9 @@ def package_candidate(
     recorder: RunRecorder,
 ) -> tuple[bytes, dict[str, str]]:
     """Build the accepted patch without mutating the source checkout."""
-    patch = build_candidate_patch(session)
+    patch = build_candidate_patch(
+        session, scratch_root=recorder.private_root / "candidate_indexes"
+    )
     patch_path = recorder.write_bytes("candidate.patch", patch)
     metadata = {
         "path": str(patch_path),
@@ -2111,6 +2219,50 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
 
+        runtime_config = resolve_project_runtime_config(
+            local_config,
+            project_name=session.project_name,
+            source_repo=session.source_repo,
+        )
+        if runtime_config is not None:
+            add_worktree_excludes(workspace, [runtime_config.venv_relative])
+
+        candidate_excludes = {
+            ".git",
+            ".harness_tmp",
+            ".harness_git_excludes",
+            ".venv",
+            "__pycache__",
+            "**/__pycache__",
+            "*.py[cod]",
+            "**/*.py[cod]",
+            ".pytest_cache",
+            "**/.pytest_cache",
+            ".mypy_cache",
+            "**/.mypy_cache",
+            ".ruff_cache",
+            "**/.ruff_cache",
+            ".jest-cache*",
+            "**/.jest-cache*",
+            "coverage",
+            "**/coverage",
+        }
+        if runtime_config is not None:
+            candidate_excludes.add(runtime_config.venv_relative)
+        candidate_excludes.update(session.exposed_paths)
+        candidate_excludes.update(item.relative_path for item in session.runtime_projections)
+        candidate_baseline = CandidateWorkspaceBaseline.capture(
+            workspace,
+            baseline_sha=session.base_sha or _run_git(workspace, "rev-parse", "HEAD").strip(),
+            excluded_prefixes=candidate_excludes,
+            control_plane=recorder.control_plane,
+        )
+        git_integrity_manager = GitControlIntegrityManager(
+            workspace=workspace,
+            control_plane=recorder.control_plane,
+        )
+        git_integrity_manager.establish_baseline()
+
         runtime_integrity_manager = RuntimeProjectionIntegrityManager(
             session=session,
             control_plane=recorder.control_plane,
@@ -2136,23 +2288,28 @@ def main(argv: list[str] | None = None) -> int:
             session = None
             raise
 
+        integrity_coordinator = TrustedBatchIntegrityCoordinator(
+            git_manager=git_integrity_manager,
+            runtime_manager=runtime_integrity_manager,
+            candidate_identity=lambda: build_candidate_identity(
+                workspace, baseline_sha=candidate_baseline.baseline_sha
+            ),
+        )
+
         runtime_manager: ProjectRuntimeManager | None = None
         runtime_state: ProjectRuntimeState | None = None
         try:
-            runtime_config = resolve_project_runtime_config(
-                local_config,
-                project_name=session.project_name,
-                source_repo=session.source_repo,
-            )
             if runtime_config is not None:
-                add_worktree_excludes(workspace, [runtime_config.venv_relative])
                 runtime_manager = ProjectRuntimeManager(
                     workspace=workspace,
                     config=runtime_config,
                     environment=execution_broker.environment_for(ExecutionRole.RUNTIME),
                 )
                 print("=== PROJECT RUNTIME BOOTSTRAP ===")
-                runtime_state = runtime_manager.build(clean=True)
+                runtime_state = integrity_coordinator.run_read_only(
+                    "PROJECT_RUNTIME_BOOTSTRAP",
+                    lambda: runtime_manager.build(clean=True),
+                )
                 recorder.write_authoritative_json(
                     "project_runtime_01.json", runtime_state.to_dict()
                 )
@@ -2165,7 +2322,12 @@ def main(argv: list[str] | None = None) -> int:
                     RevisionKind.RUNTIME_ENVIRONMENT,
                     artifact="preflight.json",
                 )
-        except (Phase5ContractError, RuntimeError) as exc:
+        except (
+            Phase5ContractError,
+            GitControlIntegrityError,
+            TrustedBatchIntegrityError,
+            RuntimeError,
+        ) as exc:
             recorder.write_authoritative_json(
                 "project_runtime_error.json",
                 {
@@ -2248,6 +2410,7 @@ def main(argv: list[str] | None = None) -> int:
             execution_broker=execution_broker,
             control_plane=recorder.control_plane,
             runtime_integrity_manager=runtime_integrity_manager,
+            git_integrity_manager=git_integrity_manager,
             historical=workflow_mode == WorkflowMode.HISTORICAL_BENCHMARK,
             rebound_to_workspace=benchmark_toolchain_rebound,
         )
@@ -2294,6 +2457,7 @@ def main(argv: list[str] | None = None) -> int:
             toolchain=toolchain,
             execution_broker=execution_broker,
             runtime_integrity_manager=runtime_integrity_manager,
+            git_integrity_manager=git_integrity_manager,
         )
         recorder.write_authoritative_json(
             "runtime_scenarios.json",
@@ -2359,6 +2523,7 @@ def main(argv: list[str] | None = None) -> int:
                     failure_marker=str(benchmark["baseline_failure_marker"]),
                     execution_broker=execution_broker,
                     runtime_integrity_manager=runtime_integrity_manager,
+                    git_integrity_manager=git_integrity_manager,
                 )
             except HarnessControlledStop as exc:
                 run_state.route_stage(
@@ -2429,13 +2594,16 @@ def main(argv: list[str] | None = None) -> int:
             execution_policy=app_server_policy.to_dict(),
         ) as codex:
             print("=== USER TASK CONTRACT ===")
-            task_contract = run_task_contract_normalizer(
-                codex,
-                cwd=execution_broker.scratch_root(ExecutionRole.INTAKE),
-                raw_request=manifest["prompt"],
-                on_heartbeat=make_heartbeat("INTAKE"),
-                on_thread_started=_thread_recorder(recorder, "task_contract_1"),
-                timeout=min(timeout, 300),
+            task_contract = integrity_coordinator.run_read_only(
+                "TASK_CONTRACT_NORMALIZER",
+                lambda: run_task_contract_normalizer(
+                    codex,
+                    cwd=execution_broker.scratch_root(ExecutionRole.INTAKE),
+                    raw_request=manifest["prompt"],
+                    on_heartbeat=make_heartbeat("INTAKE"),
+                    on_thread_started=_thread_recorder(recorder, "task_contract_1"),
+                    timeout=min(timeout, 300),
+                ),
             )
             validate_task_contract(task_contract)
             recorder.write_authoritative_json("task_contract_01.json", task_contract)
@@ -2477,17 +2645,20 @@ def main(argv: list[str] | None = None) -> int:
             run_state.begin_stage(StageId.PLANNER)
             if pipeline_profile == PipelineProfile.FULL:
                 print("=== PLAN ===")
-                plan = run_planner(
-                    codex,
-                    workspace=workspace,
-                    task_prompt=manifest["prompt"],
-                    task_contract=task_contract,
-                    preflight=preflight,
-                    owner_allowed_paths=allowed_paths,
-                    replan_context=planner_benchmark_context(benchmark_evidence),
-                    on_heartbeat=make_heartbeat("PLAN"),
-                    on_thread_started=_thread_recorder(recorder, "planner_1"),
-                    timeout=timeout,
+                plan = integrity_coordinator.run_read_only(
+                    "PLANNER_TURN:1",
+                    lambda: run_planner(
+                        codex,
+                        workspace=workspace,
+                        task_prompt=manifest["prompt"],
+                        task_contract=task_contract,
+                        preflight=preflight,
+                        owner_allowed_paths=allowed_paths,
+                        replan_context=planner_benchmark_context(benchmark_evidence),
+                        on_heartbeat=make_heartbeat("PLAN"),
+                        on_thread_started=_thread_recorder(recorder, "planner_1"),
+                        timeout=timeout,
+                    ),
                 )
                 validate_plan_artifact(plan, workspace=workspace, task_contract=task_contract)
                 recorder.write_authoritative_json("plan_01.json", plan)
@@ -2963,6 +3134,7 @@ def main(argv: list[str] | None = None) -> int:
                     run_state=run_state,
                     check_registry_digest=check_registry.digest(),
                     runtime_integrity_manager=runtime_integrity_manager,
+                    git_integrity_manager=git_integrity_manager,
                     execution_broker=execution_broker,
                 )
                 next_artifact = (
@@ -2977,7 +3149,10 @@ def main(argv: list[str] | None = None) -> int:
                 nonlocal project_runtime_index
                 if runtime_manager is None or runtime_state is None:
                     return False, ""
-                reconciliation = runtime_manager.reconcile(runtime_state)
+                reconciliation = integrity_coordinator.run_read_only(
+                    "PROJECT_RUNTIME_RECONCILIATION",
+                    lambda: runtime_manager.reconcile(runtime_state),
+                )
                 runtime_state = reconciliation.state
                 toolchain["project_python"] = runtime_state.project_python
                 tool_probe_registry.toolchain["project_python"] = (
@@ -3109,6 +3284,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_state=run_state,
                 check_registry_digest=check_registry.digest(),
                 runtime_integrity_manager=runtime_integrity_manager,
+                git_integrity_manager=git_integrity_manager,
                 execution_broker=execution_broker,
             )
             report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
@@ -3183,6 +3359,7 @@ def main(argv: list[str] | None = None) -> int:
                     execution_broker=execution_broker,
                     execution_role=ExecutionRole.CONTROLLER_CHECK,
                     runtime_integrity_manager=runtime_integrity_manager,
+                    git_integrity_manager=git_integrity_manager,
                     batch_id=f"DETERMINISTIC_CHECKS:{check_index:02d}",
                 )
                 checks_artifact = f"checks_{check_index:02d}.json"
@@ -3207,8 +3384,10 @@ def main(argv: list[str] | None = None) -> int:
                     integrity_reason = next(
                         (
                             result.runtime_integrity_reason_code
+                            or result.git_integrity_reason_code
                             for result in infrastructure_failures
                             if result.runtime_integrity_reason_code
+                            or result.git_integrity_reason_code
                         ),
                         None,
                     )
@@ -3280,6 +3459,7 @@ def main(argv: list[str] | None = None) -> int:
                         run_state=run_state,
                         check_registry_digest=check_registry.digest(),
                         runtime_integrity_manager=runtime_integrity_manager,
+                        git_integrity_manager=git_integrity_manager,
                         execution_broker=execution_broker,
                     )
                     report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
@@ -3412,6 +3592,7 @@ def main(argv: list[str] | None = None) -> int:
                         run_state=run_state,
                         check_registry_digest=check_registry.digest(),
                         runtime_integrity_manager=runtime_integrity_manager,
+                        git_integrity_manager=git_integrity_manager,
                         execution_broker=execution_broker,
                     )
                     report_artifact = (
@@ -3502,26 +3683,29 @@ def main(argv: list[str] | None = None) -> int:
                             f"Evaluator changed the candidate during {phase}"
                         )
 
-                blind_audit, evaluation = run_evaluator(
-                    codex,
-                    workspace=workspace,
-                    task_prompt=manifest["prompt"],
-                    task_contract=task_contract,
-                    preflight=preflight,
-                    owner_allowed_paths=allowed_paths,
-                    changed_paths=changed_paths,
-                    candidate_id=evaluation_candidate_before.candidate_id,
-                    implementation_contract=implementation_contract,
-                    verification_plan=verification_plan,
-                    contract_closure=active_contract_closure,
-                    checks_evidence=deterministic_evidence,
-                    runtime_evidence=active_runtime_evidence,
-                    runtime_probe_guidance=[],
-                    on_heartbeat=make_heartbeat(f"EVALUATE #{evaluation_index}"),
-                    on_thread_started=_thread_recorder(recorder, f"evaluator_{evaluation_index}"),
-                    on_blind_audit=evaluator_blind_audit_recorder,
-                    on_phase_complete=evaluator_phase_guard,
-                    timeout=timeout,
+                blind_audit, evaluation = integrity_coordinator.run_read_only(
+                    f"EVALUATOR_TURN:{evaluation_index}",
+                    lambda: run_evaluator(
+                        codex,
+                        workspace=workspace,
+                        task_prompt=manifest["prompt"],
+                        task_contract=task_contract,
+                        preflight=preflight,
+                        owner_allowed_paths=allowed_paths,
+                        changed_paths=changed_paths,
+                        candidate_id=evaluation_candidate_before.candidate_id,
+                        implementation_contract=implementation_contract,
+                        verification_plan=verification_plan,
+                        contract_closure=active_contract_closure,
+                        checks_evidence=deterministic_evidence,
+                        runtime_evidence=active_runtime_evidence,
+                        runtime_probe_guidance=[],
+                        on_heartbeat=make_heartbeat(f"EVALUATE #{evaluation_index}"),
+                        on_thread_started=_thread_recorder(recorder, f"evaluator_{evaluation_index}"),
+                        on_blind_audit=evaluator_blind_audit_recorder,
+                        on_phase_complete=evaluator_phase_guard,
+                        timeout=timeout,
+                    ),
                 )
                 validate_evaluation_artifact(
                     evaluation, blind_audit=blind_audit
@@ -3641,6 +3825,7 @@ def main(argv: list[str] | None = None) -> int:
                         run_state=run_state,
                         check_registry_digest=check_registry.digest(),
                         runtime_integrity_manager=runtime_integrity_manager,
+                        git_integrity_manager=git_integrity_manager,
                         execution_broker=execution_broker,
                     )
                     report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
@@ -3700,7 +3885,10 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     recorder.write_bytes(
                         rejected_patch_artifact,
-                        build_candidate_patch(session),
+                        build_candidate_patch(
+                            session,
+                            scratch_root=recorder.private_root / "candidate_indexes",
+                        ),
                     )
                     replan_reset = reset_workspace_for_semantic_replan(
                         workspace=workspace,
@@ -3752,7 +3940,10 @@ def main(argv: list[str] | None = None) -> int:
                     # rare; reproducibility is more important than reusing a venv
                     # potentially mutated under the rejected implementation.
                     if runtime_manager is not None:
-                        runtime_state = runtime_manager.build(clean=True)
+                        runtime_state = integrity_coordinator.run_read_only(
+                            f"PROJECT_RUNTIME_REBUILD:{replan_cycles}",
+                            lambda: runtime_manager.build(clean=True),
+                        )
                         project_runtime_index += 1
                         runtime_artifact = (
                             f"project_runtime_replan_{replan_cycles:02d}.json"
@@ -3772,21 +3963,24 @@ def main(argv: list[str] | None = None) -> int:
                         tool_probe_registry.invalidate_runtime_environment_evidence()
 
                     run_state.begin_stage(StageId.PLANNER)
-                    plan = run_planner(
-                        codex,
-                        workspace=workspace,
-                        task_prompt=manifest["prompt"],
-                        task_contract=task_contract,
-                        preflight=preflight,
-                        owner_allowed_paths=allowed_paths,
-                        replan_context=(
-                            "Current candidate was rejected by a blind Evaluator. "
-                            "Observed reason (not a reference implementation):\n"
-                            + evaluation["reason"]
+                    plan = integrity_coordinator.run_read_only(
+                        f"PLANNER_REPLAN:{replan_cycles}",
+                        lambda: run_planner(
+                            codex,
+                            workspace=workspace,
+                            task_prompt=manifest["prompt"],
+                            task_contract=task_contract,
+                            preflight=preflight,
+                            owner_allowed_paths=allowed_paths,
+                            replan_context=(
+                                "Current candidate was rejected by a blind Evaluator. "
+                                "Observed reason (not a reference implementation):\n"
+                                + evaluation["reason"]
+                            ),
+                            on_heartbeat=make_heartbeat(f"REPLAN #{replan_cycles}"),
+                            on_thread_started=_thread_recorder(recorder, f"planner_replan_{replan_cycles}"),
+                            timeout=timeout,
                         ),
-                        on_heartbeat=make_heartbeat(f"REPLAN #{replan_cycles}"),
-                        on_thread_started=_thread_recorder(recorder, f"planner_replan_{replan_cycles}"),
-                        timeout=timeout,
                     )
                     validate_plan_artifact(plan, workspace=workspace, task_contract=task_contract)
                     replan_artifact = f"replan_{replan_cycles:02d}.json"
@@ -3993,6 +4187,7 @@ def main(argv: list[str] | None = None) -> int:
                         run_state=run_state,
                         check_registry_digest=check_registry.digest(),
                         runtime_integrity_manager=runtime_integrity_manager,
+                        git_integrity_manager=git_integrity_manager,
                         execution_broker=execution_broker,
                     )
                     report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
@@ -4092,6 +4287,7 @@ def main(argv: list[str] | None = None) -> int:
                 execution_broker=execution_broker,
                 execution_role=ExecutionRole.HELDOUT,
                 runtime_integrity_manager=runtime_integrity_manager,
+                git_integrity_manager=git_integrity_manager,
                 batch_id="FINAL_HELDOUT_CHECKS",
             )
             heldout_results_artifact = "heldout_results.json"
@@ -4147,21 +4343,27 @@ def main(argv: list[str] | None = None) -> int:
         final_candidate = observe_candidate("FINAL_GATE_PACKAGE")
         if final_candidate.candidate_id != final_candidate_before.candidate_id:
             raise RuntimeError("Candidate changed during Final Gate")
-        patch, patch_metadata = package_candidate(session=session, recorder=recorder)
+        patch, patch_metadata = integrity_coordinator.run_read_only(
+            "CANDIDATE_PATCH_CONSTRUCTION",
+            lambda: package_candidate(session=session, recorder=recorder),
+        )
         packaged_candidate = observe_candidate("FINAL_GATE_AFTER_PACKAGE")
         if packaged_candidate.candidate_id != final_candidate.candidate_id:
             raise RuntimeError("Candidate packaging mutated the candidate")
 
-        patch_proof = build_patch_reconstruction_proof(
-            repository=(
-                session.workspace
-                if session.benchmark_isolated or session.source_repo is None
-                else session.source_repo
+        patch_proof = integrity_coordinator.run_read_only(
+            "PHASE7_PATCH_RECONSTRUCTION",
+            lambda: build_patch_reconstruction_proof(
+                repository=(
+                    session.workspace
+                    if session.benchmark_isolated or session.source_repo is None
+                    else session.source_repo
+                ),
+                baseline_sha=final_candidate.baseline_sha,
+                patch=patch,
+                expected_candidate=final_candidate,
+                private_root=recorder.private_root,
             ),
-            baseline_sha=final_candidate.baseline_sha,
-            patch=patch,
-            expected_candidate=final_candidate,
-            private_root=recorder.private_root,
         )
         patch_proof_artifact = "patch_proof.json"
         recorder.write_authoritative_json(patch_proof_artifact, patch_proof)
@@ -4207,10 +4409,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(StageResultCode.FINAL_ACCEPTANCE_PASS.value)
 
-        delivery_result = deliver_candidate_transaction(
-            session=session,
-            patch=patch,
-            final_candidate=final_candidate,
+        delivery_result = integrity_coordinator.run_read_only(
+            "DELIVERY_PREPARATION",
+            lambda: deliver_candidate_transaction(
+                session=session,
+                patch=patch,
+                final_candidate=final_candidate,
+            ),
         )
         delivery_record = delivery_result.to_dict()
         delivery_record_artifact = "delivery_record.json"
@@ -4276,6 +4481,19 @@ def main(argv: list[str] | None = None) -> int:
         if recorder is not None:
             print("RUN_DIR:", recorder.root, file=sys.stderr)
         print(f"TOTAL_ELAPSED: {time.monotonic() - started:.2f}s", file=sys.stderr)
+        return 2
+    except (GitControlIntegrityError, TrustedBatchIntegrityError) as exc:
+        reason_code = exc.reason_code
+        if run_state is not None:
+            try:
+                run_state.fail_active_stage(reason_code=reason_code, detail="integrity boundary failed")
+            except Exception:
+                pass
+        print("HARNESS_TASK_STOPPED: INTEGRITY_PREFLIGHT_FAILED", reason_code, file=sys.stderr)
+        if session is not None:
+            print("MANAGED_WORKTREE_ON_EXIT:", session.workspace, file=sys.stderr)
+        if recorder is not None:
+            print("RUN_DIR:", recorder.root, file=sys.stderr)
         return 2
     except (RuntimeError, ArtifactContractError, OSError, ValueError) as exc:
         if run_state is not None:

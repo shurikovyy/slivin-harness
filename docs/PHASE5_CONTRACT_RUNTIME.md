@@ -177,9 +177,13 @@ canonical parent(project_python)
 → belongs to Controller-owned worktree venv
 ```
 
-This also preserves the POSIX requirement not to resolve a venv Python symlink back to the
-global bootstrap interpreter: checks execute the worktree entry point and its isolated
-site-packages.
+On POSIX the leaf `<worktree>/.venv/bin/python` is normally a symlink. Controller
+therefore separates its lexical `execution_path` from the canonical validation
+target: symlink ancestors remain forbidden, but the venv leaf is executed
+exactly as declared rather than replaced by `/usr/bin/python`. A bounded binding
+probe requires `sys.prefix` to resolve to the worktree venv and differ from
+`sys.base_prefix`; actual checks reuse the same lexical entrypoint. Windows
+`Scripts/python.exe` remains a regular-file path.
 
 ## Runtime reconciliation before COMPLETE
 

@@ -97,6 +97,13 @@ attempt_id
 
 `candidate.patch` не считается правильным только потому, что `git diff` был успешно записан.
 
+Controller получает canonical changed-set из physical inventory и помещает его
+в одноразовый private index через `GIT_INDEX_FILE`: `read-tree` загружает
+recorded baseline, additions добавляются с `-f`, deletions удаляются только из
+temp index, hooks направлены в пустой Controller-owned directory. Real worktree
+index до/после не меняется. Поэтому ignored candidate files не теряются между
+identity, evaluator diff, patch и reconstruction.
+
 Controller создаёт новую временную repository-копию, получает recorded baseline, применяет patch и снова вычисляет `candidate.v1`:
 
 ```text
@@ -348,7 +355,7 @@ Execution Broker продолжает честно различать `ENFORCED`
 
 ## 9. Следующий checkpoint
 
-После Windows `HARNESS_SELF_CHECK_PASS` версии `0.8.0a13` новых архитектурных фаз quality-core не требуется.
+После Windows `HARNESS_SELF_CHECK_PASS` версии `0.8.0a14` новых архитектурных фаз quality-core не требуется.
 
 Следующий шаг:
 

@@ -1,4 +1,4 @@
-# Windows setup для Slivin Harness 0.8.0a13
+# Windows setup для Slivin Harness 0.8.0a14
 
 ## Целевая среда
 
@@ -23,8 +23,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемо:
 
 ```text
-0.8.0a13
-DOCS_SYNC_PASS harness=0.8.0a13 ...
+0.8.0a14
+DOCS_SYNC_PASS harness=0.8.0a14 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -51,6 +51,10 @@ Harness использует абсолютный entry point:
 Activation через `source` не требуется. Ownership проверяется канонически: entry point обязан
 принадлежать Controller-owned worktree `.venv`, а не совпадать с workspace по строковому
 `startswith()`.
+
+На POSIX/WSL `.venv/bin/python` может быть symlink на bootstrap interpreter.
+Проверяется canonical parent/target, но probe и project checks запускают именно
+lexical worktree entrypoint; `sys.prefix` должен указывать на этот venv.
 
 ## Runtime Verification scenarios
 
@@ -143,7 +147,9 @@ explicit config or normal workspace-cwd discovery. The last command loads the
 configured test environment but does not run tests. Projected probes use the
 full-tree pre/post guard above; canonical candidate identity separately rejects
 tracked/untracked/deleted project mutations. Complete stdout/stderr is stored
-only under the Controller-private run plane, outside the managed workspace.
+only under the Controller-private run plane, outside the managed workspace, and
+combined output is hard-capped at 1 MiB. Overflow terminates the process group
+and is reported as `STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT` without raw output.
 Only toolchain entries referenced by manifest commands are required at this
 point; an unused configured `project_python` is not probed. New tool-backed
 requirements can still be probed by the post-plan capability gate.
@@ -172,6 +178,13 @@ phase boundaries re-check candidate identity. Evaluator scratch is writable; can
 must remain unchanged.
 
 ## Final Gate и delivery
+
+Git ignore rules и persistent index не являются candidate authority. Physical
+inventory видит ignored additions и tracked bytes независимо от index flags;
+HEAD/index/local/worktree config/info controls/hooks проверяются отдельным
+Git-control guard. Patch staging использует disposable private
+`GIT_INDEX_FILE`, `git add -f` и empty hooks directory, поэтому real workspace
+index остаётся неизменным.
 
 После Evaluator PASS Controller строит patch proof и `final-acceptance.v2`. Для `apply_to_source` используется короткий cross-platform delivery lock в Git common-dir. Controller повторно проверяет source HEAD, clean state и preimages до apply, а затем exact patch/postimages.
 
@@ -213,4 +226,4 @@ benchmark сразу. Ожидаема строка `INTAKE_ARTIFACT_REPAIR`; п
 
 ## Следующий checkpoint
 
-После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a13` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.
+После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a14` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.

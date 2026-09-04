@@ -3,12 +3,13 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -17,10 +18,15 @@ import task_runner
 import slivin_harness.preflight as preflight_module
 from slivin_harness.control_plane import ArtifactVisibility, ControllerPlane
 from slivin_harness.execution import ExecutionBroker
+from slivin_harness.git_integrity import (
+    CandidateWorkspaceBaseline,
+    GitControlIntegrityManager,
+)
 from slivin_harness.preflight import (
     STATIC_CHECK_INPUT_NOT_FOUND,
     STATIC_COMMAND_TEMPLATE_INVALID,
     STATIC_EXECUTABLE_NOT_FOUND,
+    STATIC_GIT_CONTROL_INTEGRITY_FAILED,
     STATIC_JEST_CONFIG_NOT_FOUND,
     STATIC_JEST_CONFIG_PROBE_FAILED,
     STATIC_PREFLIGHT_MUTATED_CANDIDATE,
@@ -28,6 +34,7 @@ from slivin_harness.preflight import (
     STATIC_TOOLCHAIN_MISSING_ENTRY,
     STATIC_TOOLCHAIN_PATH_NOT_FOUND,
     STATIC_TOOLCHAIN_PROBE_FAILED,
+    STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT,
     STATIC_TOOLCHAIN_UNKNOWN_PLACEHOLDER,
     CommandTemplateError,
     ToolProbeRegistry,
@@ -36,6 +43,7 @@ from slivin_harness.preflight import (
     resolve_python_command,
     run_static_toolchain_preflight,
 )
+from slivin_harness.run_state import build_candidate_identity
 from slivin_harness.runtime_projection import RuntimeProjectionIntegrityManager
 from slivin_harness.verification import Capability, available_capabilities
 from slivin_harness.workspace import RuntimeProjection, WorkspaceSession
@@ -77,6 +85,7 @@ class StaticToolchainPreflightTests(unittest.TestCase):
         *,
         source_repo: Path | None = None,
         manager: RuntimeProjectionIntegrityManager | None = None,
+        git_manager: GitControlIntegrityManager | None = None,
         historical: bool = False,
         rebound: dict[str, str] | None = None,
         probe_timeout_seconds: int = 30,
@@ -89,6 +98,7 @@ class StaticToolchainPreflightTests(unittest.TestCase):
             execution_broker=self.broker,
             control_plane=self.control_plane,
             runtime_integrity_manager=manager,
+            git_integrity_manager=git_manager,
             historical=historical,
             rebound_to_workspace=rebound or {},
             probe_timeout_seconds=probe_timeout_seconds,
@@ -163,7 +173,13 @@ raise SystemExit(9)
         git(self.workspace, "config", "user.email", "static-preflight@example.invalid")
         git(self.workspace, "add", ".")
         git(self.workspace, "commit", "-m", "candidate baseline")
-        return git(self.workspace, "rev-parse", "HEAD")
+        baseline = git(self.workspace, "rev-parse", "HEAD")
+        CandidateWorkspaceBaseline.capture(
+            self.workspace,
+            baseline_sha=baseline,
+            excluded_prefixes=(".git", ".harness_tmp", ".venv", ".harness_git_excludes"),
+        )
+        return baseline
 
     def candidate_mutating_jest(
         self,
@@ -178,6 +194,7 @@ raise SystemExit(9)
             "untracked": "Path('created-by-config.txt').write_text('created', encoding='utf-8')",
             "deleted": "Path('candidate.txt').unlink()",
             "scratch": "(Path('.harness_tmp') / 'config.marker').write_text('runtime', encoding='utf-8')",
+            "git-exclude": "Path('.git/info/exclude').open('a', encoding='utf-8').write('stealth.js\\n'); Path('stealth.js').write_text('hidden candidate', encoding='utf-8')",
         }
         script.write_text(
             f"""from pathlib import Path
@@ -272,7 +289,14 @@ raise SystemExit(9)
         )
 
     def test_python_project_binding_requires_probe_evidence(self) -> None:
-        registry = self.registry({"project_python": sys.executable})
+        venv = self.workspace / ".venv"
+        subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
+        project_python = (
+            venv / "Scripts" / "python.exe"
+            if os.name == "nt"
+            else venv / "bin" / "python"
+        )
+        registry = self.registry({"project_python": str(project_python)})
         result = run_static_toolchain_preflight(
             [self.check(["{python}", "-c", "print('not executed')"])],
             workspace=self.workspace,
@@ -284,6 +308,30 @@ raise SystemExit(9)
         self.assertIn(Capability.PROJECT_PYTHON.value, result.verified_capabilities)
         self.assertIn("project_python", result.required_toolchain_entries)
         self.assertIn("project-python.version", [item.probe_id for item in result.probes])
+
+    def test_project_python_resolver_returns_lexical_entrypoint_not_leaf_canonical_target(self) -> None:
+        entrypoint = self.workspace / ".venv" / "Scripts" / "python.exe"
+        entrypoint.parent.mkdir(parents=True)
+        entrypoint.write_bytes(b"test executable entrypoint")
+        registry = self.registry({"project_python": str(entrypoint)})
+        real_canonical = preflight_module.canonical_path
+        external_target = self.root / "bootstrap-python"
+
+        def canonical_without_leaf(value):
+            candidate = Path(value)
+            if candidate == entrypoint:
+                return external_target
+            return real_canonical(candidate)
+
+        with mock.patch.object(
+            preflight_module,
+            "canonical_path",
+            side_effect=canonical_without_leaf,
+        ):
+            resolved = registry._resolve_project_python_execution_path(str(entrypoint))
+
+        self.assertEqual(resolved, entrypoint.absolute())
+        self.assertNotEqual(resolved, external_target)
 
     def test_configured_python_binding_is_probed_without_project_capability(self) -> None:
         registry = self.registry({"python": sys.executable})
@@ -702,12 +750,7 @@ raise SystemExit(9)
             (self.workspace / "candidate.txt").write_text("mutated", encoding="utf-8")
             raise OSError("synthetic launcher failure")
 
-        fake_subprocess = types.SimpleNamespace(
-            run=fail_launch,
-            STDOUT=subprocess.STDOUT,
-            TimeoutExpired=subprocess.TimeoutExpired,
-        )
-        with mock.patch.object(preflight_module, "subprocess", fake_subprocess):
+        with mock.patch.object(preflight_module, "_POPEN", side_effect=fail_launch):
             result = run_static_toolchain_preflight(
                 [self.check(["{node}", "--version"])],
                 workspace=self.workspace,
@@ -720,6 +763,46 @@ raise SystemExit(9)
         self.assertIn(STATIC_PREFLIGHT_MUTATED_CANDIDATE, result.reason_codes)
         self.assertFalse(registry.verified_capabilities)
 
+    def test_git_exclude_bypass_invalidates_probe_and_physical_candidate(self) -> None:
+        sentinel = "GIT_CONTROL_SECRET_SENTINEL"
+        (self.workspace / "candidate.txt").write_text("baseline\n", encoding="utf-8")
+        spec = self.jest_check()
+        jest = self.candidate_mutating_jest("git-exclude", sentinel=sentinel)
+        baseline = self.commit_candidate()
+        git_manager = GitControlIntegrityManager(
+            workspace=self.workspace,
+            control_plane=self.control_plane,
+        )
+        git_manager.establish_baseline()
+        registry = self.registry(
+            {"node": sys.executable, "jest": str(jest)},
+            git_manager=git_manager,
+        )
+
+        result = run_static_toolchain_preflight(
+            [spec],
+            workspace=self.workspace,
+            harness_root=self.harness_root,
+            toolchain=registry.toolchain,
+            probe_registry=registry,
+            candidate_baseline_sha=baseline,
+        )
+
+        self.assertFalse(result.passed)
+        self.assertIn(STATIC_GIT_CONTROL_INTEGRITY_FAILED, result.reason_codes)
+        self.assertIn(STATIC_PREFLIGHT_MUTATED_CANDIDATE, result.reason_codes)
+        self.assertIn("stealth.js", build_candidate_identity(
+            self.workspace, baseline_sha=baseline
+        ).changed_paths)
+        self.assertNotIn(Capability.JEST.value, registry.verified_capabilities)
+        public = json.dumps(result.public_dict(), sort_keys=True)
+        self.assertNotIn(sentinel, public)
+        private_logs = [
+            self.control_plane.path_for(item["log_artifact"], ArtifactVisibility.PRIVATE)
+            for item in registry.private_probe_commands
+        ]
+        self.assertTrue(any(sentinel in path.read_text(encoding="utf-8") for path in private_logs))
+
     def test_private_probe_log_names_do_not_collide_across_batches(self) -> None:
         registry = self.registry({"node": sys.executable})
         first = registry.ensure_capabilities([Capability.NODE.value], batch_id="first")
@@ -731,20 +814,100 @@ raise SystemExit(9)
         self.assertEqual(len(names), len(set(names)))
         self.assertTrue(all("preflight_logs/" in name for name in names))
 
+    def test_private_probe_output_is_hard_capped(self) -> None:
+        registry = ToolProbeRegistry(
+            workspace=self.workspace,
+            harness_root=self.harness_root,
+            source_repo=None,
+            toolchain={},
+            execution_broker=self.broker,
+            control_plane=self.control_plane,
+            private_log_limit=1024,
+        )
+        record = registry._run_probe(
+            batch_id="output-limit",
+            probe_id="synthetic.output-limit",
+            capability=None,
+            command=[
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.write('PUBLIC_SENTINEL' * 1000); sys.stderr.write('ERR' * 1000)",
+            ],
+            failure_reason=STATIC_TOOLCHAIN_PROBE_FAILED,
+        )
+        self.assertEqual(record.reason_code, STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT)
+        self.assertTrue(record.output_truncated)
+        private = registry.private_probe_commands[-1]["log_artifact"]
+        log = self.control_plane.path_for(private, ArtifactVisibility.PRIVATE)
+        self.assertLessEqual(log.stat().st_size, 1024)
+        self.assertNotIn("PUBLIC_SENTINEL", json.dumps(record.public_dict()))
+
+    def test_output_limit_terminates_probe_child_process_tree(self) -> None:
+        marker = self.workspace / ".harness_tmp" / "probe-child.pid"
+        marker.parent.mkdir(parents=True)
+        registry = ToolProbeRegistry(
+            workspace=self.workspace,
+            harness_root=self.harness_root,
+            source_repo=None,
+            toolchain={},
+            execution_broker=self.broker,
+            control_plane=self.control_plane,
+            private_log_limit=4096,
+        )
+        script = (
+            "import pathlib,subprocess,sys,time; "
+            "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+            "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); "
+            "chunk='X'*65536; "
+            "[(sys.stdout.write(chunk),sys.stdout.flush()) for _ in range(1000)]; "
+            "time.sleep(60)"
+        )
+        record = registry._run_probe(
+            batch_id="process-tree",
+            probe_id="synthetic.process-tree",
+            capability=None,
+            command=[sys.executable, "-c", script, str(marker)],
+            failure_reason=STATIC_TOOLCHAIN_PROBE_FAILED,
+        )
+        self.assertEqual(record.reason_code, STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT)
+        child_pid = int(marker.read_text(encoding="utf-8"))
+
+        def process_exists(pid: int) -> bool:
+            if os.name == "nt":
+                result = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                return str(pid) in result.stdout and "No tasks" not in result.stdout
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return False
+            return True
+
+        deadline = time.monotonic() + 5
+        while process_exists(child_pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(process_exists(child_pid))
+
     def test_failed_probe_output_is_private_and_public_summary_is_fixed(self) -> None:
         sentinel = "FAILED_PROBE_SECRET_SENTINEL"
         registry = self.registry({"node": sys.executable})
 
-        def failed_probe(command, **kwargs):
-            kwargs["stdout"].write((sentinel + "\n").encode("utf-8"))
-            return subprocess.CompletedProcess(command, 7)
+        real_popen = subprocess.Popen
 
-        fake_subprocess = types.SimpleNamespace(
-            run=failed_probe,
-            STDOUT=subprocess.STDOUT,
-            TimeoutExpired=subprocess.TimeoutExpired,
-        )
-        with mock.patch.object(preflight_module, "subprocess", fake_subprocess):
+        def failed_probe(_command, **kwargs):
+            return real_popen(
+                [sys.executable, "-c", f"print({sentinel!r}); raise SystemExit(7)"],
+                **kwargs,
+            )
+
+        with mock.patch.object(preflight_module, "_POPEN", side_effect=failed_probe):
             result = run_static_toolchain_preflight(
                 [self.check(["{node}", "--version"])],
                 workspace=self.workspace,

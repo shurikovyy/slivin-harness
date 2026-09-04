@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a13 — Phase 7
+# Модель качества Slivin Harness 0.8.0a14 — Phase 7
 
 ## Основная формула
 
@@ -34,6 +34,8 @@ SELF VERIFY
 templates однозначно раскрываются, required executables и известные inputs
 доступны, а lightweight tool probes проходят до agent stages. Для projected
 runtime probes действуют full-tree pre/post integrity guard и JIT restore.
+Git metadata защищены независимым pre/post `git-control-integrity.v1`, а raw
+probe stream ограничен 1 MiB до записи в private log.
 Preflight не запускает tests/hidden oracle, не доказывает product correctness и
 не заменяет post-plan capability gate для требований, появившихся из Planner и
 Verification Plan.
@@ -132,15 +134,21 @@ attempt_id
 
 ## Candidate identity
 
-`candidate.v1` учитывает:
+`candidate.v1` сравнивает физическое workspace tree с private baseline и
+учитывает:
 
 ```text
 baseline SHA
 workspace HEAD
 changed/new/deleted paths
-Git-visible mode
+physical executable/Git-compatible mode
 file bytes / symlink target
 ```
+
+Inventory не использует Git ignore/index как authority: ignored additions и
+tracked mutations под `assume-unchanged`/`skip-worktree` остаются видимыми всем
+consumers changed-set. Отдельный Git control-state baseline обнаруживает и
+инвалидирует изменение самих ignore/config/index/HEAD controls.
 
 Не учитывает Harness/runtime artifacts:
 
@@ -193,6 +201,10 @@ baseline + candidate.patch
 → reconstructed candidate.v1
 → exact equality with accepted candidate.v1
 ```
+
+Patch staging использует только disposable Controller-private `GIT_INDEX_FILE`;
+persistent worktree index не меняется, hooks отключены, ignored additions
+добавляются принудительно.
 
 Reconstruction использует тот же effective Git worktree conversion policy, что и source candidate, для ограниченного списка content/mode settings. Поэтому exact equality остаётся строгой и одновременно переносимой между Windows checkout с CRLF и POSIX checkout с LF.
 
@@ -271,7 +283,7 @@ historical benchmark не раскрывает другие refs/objects/held-ou
 успешный CI/deployment/production rollout;
 ```
 
-Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a13` первый такой checkpoint — historical `_90`.
+Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a14` первый такой checkpoint — historical `_90`.
 
 ## Версии
 

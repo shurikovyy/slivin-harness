@@ -1,4 +1,4 @@
-# Практическая работа с Slivin Harness 0.8.0a13
+# Практическая работа с Slivin Harness 0.8.0a14
 
 ## Установка и self-check
 
@@ -11,8 +11,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемый финал:
 
 ```text
-0.8.0a13
-DOCS_SYNC_PASS harness=0.8.0a13 ...
+0.8.0a14
+DOCS_SYNC_PASS harness=0.8.0a14 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -34,6 +34,7 @@ repair-попытки не помогли, run останавливается к
 ```text
 0. Intake / Preflight
    → managed worktree, .worktreeinclude, optional worktree-local .venv
+   → private physical candidate + Git control-state baselines
    → source-owned runtime projection + private integrity baseline
    → strict manifest command parsing + static toolchain/input probes
    → historical semantic baseline gate (если configured)
@@ -63,6 +64,13 @@ Project-owned config считается executable code: `candidate.v1` срав
 `project_python` → configured `python` → Harness Python. Для явной зависимости
 от worktree runtime используется `{project_python}`, для Harness utility —
 `{harness_python}`.
+
+Physical candidate inventory не использует repository ignore rules как
+authority. `.gitignore` может быть обычным candidate change, но не исключает
+созданные им files. Git control metadata отдельно заморожены вокруг bootstrap,
+agent/check/evaluator/final batches. При `GIT_CONTROL_STATE_MUTATED_*` текущий
+attempt не принимается, даже если Controller смог best-effort восстановить
+metadata.
 
 После компиляции Verification Plan остаётся второй gate. Он переиспользует
 успешные static probes и проверяет on demand впервые появившиеся tool-backed или
@@ -301,7 +309,7 @@ Do not edit `WORKFLOW.md` or `workflow.v6.json` manually.
 
 ```text
 reconciles one candidate/revision vector
-→ builds candidate.patch
+→ builds candidate.patch through a private isolated index
 → reconstructs candidate from clean baseline
 → creates immutable final-acceptance.v2
 → delivers via keep_worktree or transactional apply_to_source
