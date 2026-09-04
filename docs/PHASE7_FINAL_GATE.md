@@ -141,9 +141,28 @@ Proof сохраняется как `patch-proof.v1`.
 candidate и требует точного совпадения identity. Historical benchmark отдельно
 требует material candidate change ещё до Final Gate.
 
+После identity proof Controller materializes только authoritative runtime:
+
+```text
+source-owned projection → fresh physical copy в proof repo
+source-owned exposed file → pristine source copy
+project runtime → fresh proof-repo .venv
+external executable → original configured external entry
+```
+
+Toolchain разрешается заново и historical source-local entries rebind-ятся к
+proof projections. Original candidate workspace `node_modules`, `.env`, `.venv`,
+`.harness_tmp` и loose objects не копируются. Затем без agent/Codex stages
+выполняются static preflight, все active repair specs и, для historical
+benchmark, final held-out specs. Каждый batch защищён physical candidate,
+Git-control и runtime-projection guards. Public
+`reconstructed-verification.v1` содержит только статусы и IDs; hidden output и
+command diagnostics остаются private.
+
 ## 3. Immutable final acceptance
 
-`final_acceptance.json` создаётся только после patch reconstruction и больше не перезаписывается.
+`final_acceptance.json` создаётся только после patch reconstruction и
+`reconstructed-verification.v1=PASS` и больше не перезаписывается.
 
 Перед созданием Controller повторно проверяет, что quality reconciliation,
 patch SHA-256, expected/reconstructed candidate и, для benchmark, `HELDOUT_PASS`
@@ -159,6 +178,7 @@ stage bindings
 artifact SHA-256
 patch SHA-256
 patch reconstruction proof
+reconstructed verification proof
 held-out evidence — только benchmark
 ```
 
@@ -355,7 +375,7 @@ Execution Broker продолжает честно различать `ENFORCED`
 
 ## 9. Следующий checkpoint
 
-После Windows `HARNESS_SELF_CHECK_PASS` версии `0.8.0a14` новых архитектурных фаз quality-core не требуется.
+После Windows `HARNESS_SELF_CHECK_PASS` версии `0.8.0a15` новых архитектурных фаз quality-core не требуется.
 
 Следующий шаг:
 

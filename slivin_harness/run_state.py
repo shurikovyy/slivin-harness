@@ -31,7 +31,11 @@ from slivin_harness.workflow import (
 
 RUN_STATE_VERSION = "run-state.v1"
 CANDIDATE_IDENTITY_VERSION = "candidate.v1"
-DEFAULT_CANDIDATE_EXCLUDES = (".harness_tmp", ".venv")
+DEFAULT_CANDIDATE_EXCLUDES = (
+    ".git",
+    ".harness_tmp",
+    ".harness_git_excludes",
+)
 
 
 class WorkflowStateError(RuntimeError):

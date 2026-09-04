@@ -22,6 +22,8 @@ from slivin_harness.execution import ExecutionBroker, ExecutionRole
 from slivin_harness.git_integrity import (
     GitControlIntegrityError,
     GitControlIntegrityManager,
+    TrustedBatchIntegrityCoordinator,
+    TrustedBatchIntegrityError,
 )
 from slivin_harness.run_state import (
     DEFAULT_CANDIDATE_EXCLUDES,
@@ -365,6 +367,7 @@ class ToolProbeRegistry:
         control_plane: ControllerPlane,
         runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
         git_integrity_manager: GitControlIntegrityManager | None = None,
+        integrity_coordinator: TrustedBatchIntegrityCoordinator | None = None,
         historical: bool = False,
         rebound_to_workspace: Mapping[str, str] | None = None,
         probe_timeout_seconds: int = 30,
@@ -396,6 +399,7 @@ class ToolProbeRegistry:
         self.control_plane = control_plane
         self.runtime_integrity_manager = runtime_integrity_manager
         self.git_integrity_manager = git_integrity_manager
+        self.integrity_coordinator = integrity_coordinator
         self.historical = historical
         self.rebound_to_workspace = {
             str(key): str(value).replace("\\", "/")
@@ -1044,16 +1048,19 @@ class ToolProbeRegistry:
                     new_verified.discard(Capability.JEST.value)
 
         try:
-            manager = self.runtime_integrity_manager
-            guarded_operation = (
-                (lambda: manager.run_batch(batch_id, operation))
-                if manager is not None
-                else operation
-            )
-            if self.git_integrity_manager is not None:
-                self.git_integrity_manager.run_batch(batch_id, guarded_operation)
+            if self.integrity_coordinator is not None:
+                self.integrity_coordinator.run_read_only(batch_id, operation)
             else:
-                guarded_operation()
+                manager = self.runtime_integrity_manager
+                guarded_operation = (
+                    (lambda: manager.run_batch(batch_id, operation))
+                    if manager is not None
+                    else operation
+                )
+                if self.git_integrity_manager is not None:
+                    self.git_integrity_manager.run_batch(batch_id, guarded_operation)
+                else:
+                    guarded_operation()
         except RuntimeProjectionIntegrityError as exc:
             return ToolProbeBatchResult(
                 requested_capabilities=tuple(sorted(requested)),
@@ -1070,6 +1077,15 @@ class ToolProbeRegistry:
                 reused_capabilities=tuple(sorted(reused)),
                 probes=(),
                 reason_codes=(STATIC_GIT_CONTROL_INTEGRITY_FAILED,),
+                integrity_reason_code=exc.reason_code,
+            )
+        except TrustedBatchIntegrityError as exc:
+            return ToolProbeBatchResult(
+                requested_capabilities=tuple(sorted(requested)),
+                verified_capabilities=tuple(sorted(requested & self._verified_capabilities)),
+                reused_capabilities=tuple(sorted(reused)),
+                probes=(),
+                reason_codes=(STATIC_PREFLIGHT_MUTATED_CANDIDATE,),
                 integrity_reason_code=exc.reason_code,
             )
 

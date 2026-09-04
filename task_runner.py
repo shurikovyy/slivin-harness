@@ -27,6 +27,7 @@ from slivin_harness.control_plane import (
 from slivin_harness.execution import ExecutionBroker, ExecutionRole
 from slivin_harness.git_integrity import (
     CandidateWorkspaceBaseline,
+    CandidateInventoryError,
     GitControlIntegrityError,
     GitControlIntegrityManager,
     TrustedBatchIntegrityCoordinator,
@@ -85,6 +86,9 @@ from slivin_harness.phase7 import (
     reconcile_quality_gate,
     reset_workspace_for_semantic_replan,
     sanitize_benchmark_toolchain,
+)
+from slivin_harness.reconstructed_verification import (
+    run_authoritative_reconstructed_verification,
 )
 from slivin_harness.preflight import (
     ToolProbeRegistry,
@@ -1325,6 +1329,7 @@ def run_checks(
     runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
     git_integrity_manager: GitControlIntegrityManager | None = None,
     batch_id: str | None = None,
+    publish_output: bool = True,
 ) -> list[CheckResult]:
     print(f"=== {label} ===")
     started = time.monotonic()
@@ -1396,7 +1401,7 @@ def run_checks(
                 f"[{index}/{len(specs)}] {spec['name']}: "
                 f"{state} ({result.duration_seconds:.2f}s)"
             )
-            if result.output.strip():
+            if publish_output and result.output.strip():
                 print(result.output.rstrip())
     print()
     return results
@@ -2231,21 +2236,6 @@ def main(argv: list[str] | None = None) -> int:
             ".git",
             ".harness_tmp",
             ".harness_git_excludes",
-            ".venv",
-            "__pycache__",
-            "**/__pycache__",
-            "*.py[cod]",
-            "**/*.py[cod]",
-            ".pytest_cache",
-            "**/.pytest_cache",
-            ".mypy_cache",
-            "**/.mypy_cache",
-            ".ruff_cache",
-            "**/.ruff_cache",
-            ".jest-cache*",
-            "**/.jest-cache*",
-            "coverage",
-            "**/coverage",
         }
         if runtime_config is not None:
             candidate_excludes.add(runtime_config.venv_relative)
@@ -2411,6 +2401,7 @@ def main(argv: list[str] | None = None) -> int:
             control_plane=recorder.control_plane,
             runtime_integrity_manager=runtime_integrity_manager,
             git_integrity_manager=git_integrity_manager,
+            integrity_coordinator=integrity_coordinator,
             historical=workflow_mode == WorkflowMode.HISTORICAL_BENCHMARK,
             rebound_to_workspace=benchmark_toolchain_rebound,
         )
@@ -4368,11 +4359,94 @@ def main(argv: list[str] | None = None) -> int:
         patch_proof_artifact = "patch_proof.json"
         recorder.write_authoritative_json(patch_proof_artifact, patch_proof)
 
+        reconstructed_verification = integrity_coordinator.run_read_only(
+            "PHASE7_RECONSTRUCTED_VERIFICATION",
+            lambda: run_authoritative_reconstructed_verification(
+                source_session=session,
+                repository=(
+                    session.workspace
+                    if session.benchmark_isolated or session.source_repo is None
+                    else session.source_repo
+                ),
+                expected_candidate=final_candidate,
+                patch=patch,
+                private_root=recorder.private_root,
+                proof_run_root=recorder.root / "reconstructed_verification_runtime",
+                harness_root=HARNESS_ROOT,
+                local_config=local_config,
+                manifest=manifest,
+                runtime_config=runtime_config,
+                workflow_mode=workflow_mode,
+                benchmark_failure_marker=str(
+                    benchmark.get("baseline_failure_marker") or ""
+                ),
+                heldout_specs=heldout_specs,
+                active_repair_specs=active_repair_specs,
+                local_runtime_files_baseline=local_runtime_files_baseline,
+                resolve_toolchain=resolve_toolchain,
+                validate_toolchain=validate_toolchain,
+                exposed_runtime_file_snapshot=lambda proof_session: (
+                    exposed_runtime_file_snapshot(
+                        proof_session,
+                        control_plane=recorder.control_plane,
+                    )
+                ),
+                run_checks=run_checks,
+                check_records=check_records,
+            ),
+        )
+        reconstructed_verification_artifact = "reconstructed_verification.json"
+        recorder.write_json(
+            reconstructed_verification_artifact,
+            reconstructed_verification.public,
+        )
+        recorder.write_private_json(
+            "reconstructed_verification_private.json",
+            reconstructed_verification.private,
+        )
+        if reconstructed_verification.public.get("status") != "PASS":
+            reconstruction_reason = str(
+                reconstructed_verification.public.get("reason_code")
+                or "RECONSTRUCTED_VERIFICATION_FAILED"
+            )
+            reconstruction_semantic = (
+                reconstructed_verification.public.get("heldout_status")
+                == "HELDOUT_SEMANTIC_FAIL"
+            )
+            reconstruction_code = (
+                StageResultCode.HARNESS_BENCHMARK_FAIL
+                if reconstruction_semantic
+                else StageResultCode.BENCHMARK_INVALID
+            )
+            run_state.route_stage(
+                StageId.FINAL_GATE,
+                outcome=(
+                    WorkflowOutcome.FAIL
+                    if reconstruction_semantic
+                    else WorkflowOutcome.INVALID
+                ),
+                result_code=reconstruction_code,
+                reason_code=reconstruction_reason,
+                artifacts=(
+                    quality_reconciliation_artifact,
+                    patch_proof_artifact,
+                    reconstructed_verification_artifact,
+                ),
+            )
+            print(reconstruction_code.value)
+            print("RECONSTRUCTED_VERIFICATION:", reconstruction_reason)
+            return 1 if reconstruction_semantic else 2
+
         evidence_names: list[str] = []
         for binding in quality_reconciliation["stage_bindings"]:
             evidence_names.extend(binding.get("artifacts", []))
         evidence_names.extend(
-            [quality_reconciliation_artifact, patch_proof_artifact, *heldout_artifacts]
+            [
+                quality_reconciliation_artifact,
+                patch_proof_artifact,
+                reconstructed_verification_artifact,
+                *heldout_artifacts,
+            ]
         )
         artifact_bindings = [
             artifact_digest(recorder.root, recorder.private_root, name)
@@ -4399,6 +4473,7 @@ def main(argv: list[str] | None = None) -> int:
             quality_reconciliation=quality_reconciliation,
             patch_metadata=patch_metadata,
             patch_proof=patch_proof,
+            reconstructed_verification=reconstructed_verification.public,
             artifact_bindings=artifact_bindings,
             heldout_evidence=heldout_evidence,
         )
@@ -4482,8 +4557,19 @@ def main(argv: list[str] | None = None) -> int:
             print("RUN_DIR:", recorder.root, file=sys.stderr)
         print(f"TOTAL_ELAPSED: {time.monotonic() - started:.2f}s", file=sys.stderr)
         return 2
-    except (GitControlIntegrityError, TrustedBatchIntegrityError) as exc:
+    except (
+        CandidateInventoryError,
+        GitControlIntegrityError,
+        TrustedBatchIntegrityError,
+    ) as exc:
         reason_code = exc.reason_code
+        if (
+            reason_code == "CANDIDATE_EXCLUSION_OVERLAPS_TRACKED_PATH"
+            and session is not None
+            and session.managed
+        ):
+            remove_managed_workspace(session)
+            session = None
         if run_state is not None:
             try:
                 run_state.fail_active_stage(reason_code=reason_code, detail="integrity boundary failed")

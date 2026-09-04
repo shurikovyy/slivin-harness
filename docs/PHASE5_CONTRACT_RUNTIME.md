@@ -55,7 +55,8 @@ This post-plan gate is intentionally distinct from Stage 0 static toolchain
 preflight. Probe evidence for manifest-required `GIT`, `NODE`, `JEST` or
 `PROJECT_PYTHON` is reused. A tool-backed capability first introduced by the
 active Verification Plan is probed on demand through the same Controller
-registry and projected-runtime integrity guard; a configured key or boolean
+registry and read-only integrity coordinator. Every such probe protects
+candidate, Git control state and projected runtime; a configured key or boolean
 declaration alone is not capability evidence. Non-tool runtime scenario
 selection remains a late Verification Plan concern.
 
@@ -205,6 +206,11 @@ Implementer thread to Step 3.
 
 A candidate is accepted only after self-verification succeeds in the final rebuilt
 runtime.
+
+Final reconstructed verification does not copy this mutable `.venv`. It creates
+a new proof-repository runtime from the same Controller configuration, re-runs
+static preflight and active checks there, and accepts only matching pristine
+candidate/Git/runtime boundaries.
 
 ## Evidence identity
 

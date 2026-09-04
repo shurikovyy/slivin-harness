@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class Phase7ExecutableIntegrationTests(unittest.TestCase):
     def test_release_and_contract_versions_are_phase7(self) -> None:
-        self.assertEqual(slivin_harness.__version__, "0.8.0a14")
+        self.assertEqual(slivin_harness.__version__, "0.8.0a15")
         self.assertEqual(WORKFLOW_VERSION, "workflow.v6")
         self.assertEqual(WORKFLOW_PHASE, "phase7-final-gate-delivery-benchmark")
         self.assertEqual(PHASE7_VERSION, "phase7-final-gate.v1")
@@ -48,6 +48,7 @@ class Phase7ExecutableIntegrationTests(unittest.TestCase):
         for marker in (
             "reconcile_quality_gate(",
             "build_patch_reconstruction_proof(",
+            "run_authoritative_reconstructed_verification(",
             "build_final_acceptance(",
             "deliver_candidate_transaction(",
             "write_once_authoritative_json(",

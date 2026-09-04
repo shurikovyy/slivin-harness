@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from slivin_harness.git_integrity import CandidateWorkspaceBaseline
 from slivin_harness.run_state import (
     RunState,
     WorkflowStateError,
@@ -116,7 +117,7 @@ class CandidateIdentityTests(unittest.TestCase):
         self.assertEqual(clean.changed_paths, ())
         self.assertNotEqual(executable.candidate_id, clean.candidate_id)
 
-    def test_harness_runtime_paths_do_not_change_candidate_id(self) -> None:
+    def test_only_explicit_harness_runtime_paths_are_excluded(self) -> None:
         repo = self.make_repo()
         baseline = git(repo, "rev-parse", "HEAD")
         before = build_candidate_identity(repo, baseline_sha=baseline)
@@ -124,11 +125,25 @@ class CandidateIdentityTests(unittest.TestCase):
         (repo / ".harness_tmp" / "planner" / "probe.txt").write_text(
             "probe", encoding="utf-8"
         )
+        scratch_only = build_candidate_identity(repo, baseline_sha=baseline)
+        self.assertEqual(before.candidate_id, scratch_only.candidate_id)
         (repo / ".venv").mkdir()
         (repo / ".venv" / "runtime.txt").write_text("runtime", encoding="utf-8")
-        after = build_candidate_identity(repo, baseline_sha=baseline)
-        self.assertEqual(before.candidate_id, after.candidate_id)
-        self.assertEqual(after.changed_paths, ())
+        unregistered = build_candidate_identity(repo, baseline_sha=baseline)
+        self.assertEqual(unregistered.changed_paths, (".venv/runtime.txt",))
+
+        CandidateWorkspaceBaseline.capture(
+            repo,
+            baseline_sha=baseline,
+            excluded_prefixes=(
+                ".git",
+                ".harness_tmp",
+                ".harness_git_excludes",
+                ".venv",
+            ),
+        )
+        registered = build_candidate_identity(repo, baseline_sha=baseline)
+        self.assertEqual(registered.changed_paths, ())
 
 
 class RunStateTests(unittest.TestCase):

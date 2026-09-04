@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from slivin_harness.git_integrity import CandidateWorkspaceBaseline
 from slivin_harness.phase4 import CheckClassification
 from slivin_harness.phase7 import (
     FINAL_ACCEPTANCE_VERSION,
@@ -635,10 +636,24 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
         root = Path(tempfile.mkdtemp(prefix="phase7-replan-reset-"))
         repo = make_repo(root)
         head = git(repo, "rev-parse", "HEAD")
-        (repo / ".gitignore").write_text(".env\n.venv/\n.harness_tmp/\n", encoding="utf-8")
+        (repo / ".gitignore").write_text(
+            ".env\n.venv/\n.harness_tmp/\nignored-helper.js\n",
+            encoding="utf-8",
+        )
         git(repo, "add", ".gitignore")
         git(repo, "commit", "-m", "runtime policy")
         head = git(repo, "rev-parse", "HEAD")
+        CandidateWorkspaceBaseline.capture(
+            repo,
+            baseline_sha=head,
+            excluded_prefixes=(
+                ".git",
+                ".env",
+                ".venv",
+                ".harness_tmp",
+                ".harness_git_excludes",
+            ),
+        )
         (repo / ".env").write_text("SECRET=kept\n", encoding="utf-8")
         (repo / ".venv").mkdir()
         (repo / ".venv" / "state.txt").write_text("runtime\n", encoding="utf-8")
@@ -646,7 +661,12 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
         (repo / ".harness_tmp" / "scratch.txt").write_text("scratch\n", encoding="utf-8")
         (repo / "keep.txt").write_text("rejected\n", encoding="utf-8")
         (repo / "new_test.py").write_text("assert False\n", encoding="utf-8")
+        (repo / "ignored-helper.js").write_text("rejected\n", encoding="utf-8")
         git(repo, "add", "keep.txt")
+        index_path = Path(
+            git(repo, "rev-parse", "--path-format=absolute", "--git-path", "index")
+        )
+        index_before = index_path.read_bytes()
 
         record = reset_workspace_for_semantic_replan(
             workspace=repo,
@@ -655,12 +675,18 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
 
         self.assertEqual(record["status"], "SEMANTIC_REPLAN_RESET_PASS")
         self.assertIn("new_test.py", record["removed_untracked_paths"])
+        self.assertIn("ignored-helper.js", record["removed_untracked_paths"])
         self.assertEqual((repo / "keep.txt").read_text(encoding="utf-8"), "before\n")
         self.assertFalse((repo / "new_test.py").exists())
+        self.assertFalse((repo / "ignored-helper.js").exists())
         self.assertEqual((repo / ".env").read_text(encoding="utf-8"), "SECRET=kept\n")
         self.assertTrue((repo / ".venv" / "state.txt").is_file())
         self.assertTrue((repo / ".harness_tmp" / "scratch.txt").is_file())
-        self.assertEqual(git(repo, "status", "--porcelain=v1", "--untracked-files=all"), "")
+        self.assertEqual(index_path.read_bytes(), index_before)
+        self.assertIn(
+            "MM keep.txt",
+            git(repo, "status", "--porcelain=v1", "--untracked-files=all"),
+        )
 
     def test_final_acceptance_is_built_after_patch_proof(self) -> None:
         candidate = SimpleNamespace(
@@ -692,6 +718,11 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
                 "expected_candidate_id": "c",
                 "reconstructed_candidate_id": "c",
             },
+            reconstructed_verification={
+                "status": "PASS",
+                "expected_candidate_id": "c",
+                "reconstructed_candidate_id": "c",
+            },
             artifact_bindings=[],
             heldout_evidence=None,
         )
@@ -720,6 +751,7 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
                 },
                 patch_metadata={"sha256": "p", "path": "candidate.patch"},
                 patch_proof=bad_proof,
+                reconstructed_verification=payload["reconstructed_verification"],
                 artifact_bindings=[],
                 heldout_evidence=None,
             )

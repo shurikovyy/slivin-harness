@@ -88,6 +88,34 @@ class WorkspaceTests(unittest.TestCase):
             )
         self.assertEqual(git(source, "worktree", "list", "--porcelain"), before)
 
+    def test_copy_untracked_cannot_exclude_tracked_source(self) -> None:
+        sandbox = Path(tempfile.mkdtemp(prefix="slivin-runtime-tracked-overlap-"))
+        source = make_source(sandbox)
+        (source / "runtime" / "package.js").parent.mkdir()
+        (source / "runtime" / "package.js").write_text("tracked\n", encoding="utf-8")
+        git(source, "add", "runtime/package.js")
+        git(source, "commit", "-m", "tracked runtime collision")
+        before = git(source, "worktree", "list", "--porcelain")
+        local_config = {
+            "workspace": {"root": str(sandbox / "workspaces")},
+            "projects": {
+                "demo": {
+                    "repo": str(source),
+                    "workspace": {"copy_untracked": ["runtime"]},
+                }
+            },
+        }
+        with self.assertRaisesRegex(
+            RuntimeError, "CANDIDATE_EXCLUSION_OVERLAPS_TRACKED_PATH"
+        ):
+            prepare_workspace_session(
+                manifest={"project": "demo", "workspace_mode": "git_worktree"},
+                local_config=local_config,
+                harness_root=sandbox,
+                task_id="RUNTIME_TRACKED_OVERLAP",
+            )
+        self.assertEqual(git(source, "worktree", "list", "--porcelain"), before)
+
     def test_managed_worktree_isolated_and_can_apply_exact_result(self) -> None:
         sandbox = Path(tempfile.mkdtemp(prefix="slivin-worktree-"))
         source = make_source(sandbox)

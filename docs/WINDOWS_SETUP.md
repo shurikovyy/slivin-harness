@@ -1,4 +1,4 @@
-# Windows setup для Slivin Harness 0.8.0a14
+# Windows setup для Slivin Harness 0.8.0a15
 
 ## Целевая среда
 
@@ -23,8 +23,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемо:
 
 ```text
-0.8.0a14
-DOCS_SYNC_PASS harness=0.8.0a14 ...
+0.8.0a15
+DOCS_SYNC_PASS harness=0.8.0a15 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -186,7 +186,19 @@ Git-control guard. Patch staging использует disposable private
 `GIT_INDEX_FILE`, `git add -f` и empty hooks directory, поэтому real workspace
 index остаётся неизменным.
 
-После Evaluator PASS Controller строит patch proof и `final-acceptance.v2`. Для `apply_to_source` используется короткий cross-platform delivery lock в Git common-dir. Controller повторно проверяет source HEAD, clean state и preimages до apply, а затем exact patch/postimages.
+Git-control restore использует только original paths baseline. Worktree/private
+standalone controls могут быть восстановлены; common/source/external refs,
+hooks, config и targets — detect-only. Loose/packed refs, replace refs, shallow,
+alternates/grafts и split-index controls входят в bounded snapshot. Mutated
+config target не сканируется и не изменяется. Candidate inventory исключает
+только explicit Controller-owned roots; обычные cache names остаются candidate.
+
+После Evaluator PASS Controller строит patch proof, materializes fresh proof
+runtime и повторяет static preflight, repair checks и benchmark held-out в clean
+reconstruction repo. Только `reconstructed-verification.v1=PASS` разрешает
+`final-acceptance.v2`. Для `apply_to_source` используется короткий cross-platform
+delivery lock в Git common-dir. Controller повторно проверяет source HEAD, clean
+state и preimages до apply, а затем exact patch/postimages.
 
 Patch reconstruction не принуждает LF. Она читает effective `core.autocrlf`/`core.eol` и связанные безопасные checkout settings source repository до создания verification checkout. Поэтому accepted CRLF worktree и reconstructed worktree имеют одинаковые bytes; arbitrary source Git configuration при этом не копируется.
 
@@ -226,4 +238,4 @@ benchmark сразу. Ожидаема строка `INTAKE_ARTIFACT_REPAIR`; п
 
 ## Следующий checkpoint
 
-После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a14` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.
+После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a15` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.

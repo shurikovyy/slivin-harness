@@ -317,12 +317,17 @@ timeout_seconds = 30
         self.assertIn("HARNESS_TASK_PASS", output)
         self.assertTrue((run_root / "candidate.patch").is_file())
         self.assertTrue((run_root / "patch_proof.json").is_file())
+        self.assertTrue((run_root / "reconstructed_verification.json").is_file())
         self.assertTrue((run_root / "quality_gate_reconciliation.json").is_file())
         self.assertTrue((run_root / "final_acceptance.json").is_file())
         self.assertTrue((run_root / "delivery_record.json").is_file())
         acceptance = json.loads((run_root / "final_acceptance.json").read_text(encoding="utf-8"))
         self.assertEqual(acceptance["schema_version"], "final-acceptance.v2")
         self.assertEqual(acceptance["patch_proof"]["status"], "PATCH_RECONSTRUCTION_PASS")
+        self.assertEqual(acceptance["reconstructed_verification"]["status"], "PASS")
+        self.assertEqual(
+            acceptance["reconstructed_verification"]["repair_checks_status"], "PASS"
+        )
         self.assertTrue((run_root / "controller_private" / "run_state.json").is_file())
         self.assertTrue(
             (run_root / "controller_private" / "self_verify_receipt_current.json").is_file()
@@ -332,7 +337,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a14")
+        self.assertEqual(build_identity["version"], "0.8.0a15")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)
@@ -403,6 +408,13 @@ timeout_seconds = 30
         self.assertFalse(static_preflight["hidden_commands_executed"])
         heldout = json.loads((run_root / "heldout_evidence.json").read_text(encoding="utf-8"))
         self.assertEqual(heldout["status"], "HELDOUT_PASS")
+        reconstructed = json.loads(
+            (run_root / "reconstructed_verification.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(reconstructed["status"], "PASS")
+        self.assertEqual(reconstructed["static_preflight_status"], "PASS")
+        self.assertEqual(reconstructed["repair_checks_status"], "PASS")
+        self.assertEqual(reconstructed["heldout_status"], "HELDOUT_PASS")
         isolation = json.loads((run_root / "benchmark_isolation.json").read_text(encoding="utf-8"))
         self.assertFalse(isolation["shared_git_metadata"])
 

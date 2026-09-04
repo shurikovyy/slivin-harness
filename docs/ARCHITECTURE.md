@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a14 — Phase 7
+# Архитектура Slivin Harness 0.8.0a15 — Phase 7
 
 ## Назначение
 
-`0.8.0a14` сохраняет согласованный Step 0–7 quality-core и укрепляет Git/candidate trust boundary без изменения protocol/workflow versions.
+`0.8.0a15` сохраняет согласованный Step 0–7 quality-core и укрепляет Git/candidate trust boundary без изменения protocol/workflow versions.
 
 Machine phase id:
 
@@ -35,7 +35,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a14
+Harness                     0.8.0a15
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -130,17 +130,25 @@ Inventory не читает `.gitignore`, `.git/info/exclude`, `core.excludesFil
 `assume-unchanged`/`skip-worktree`, deletion, rename или type change остаются
 candidate-visible. Исключаются только Controller-authorized roots: `.git`,
 `.harness_tmp`, worktree `.venv`/configured project runtime, registered runtime
-projections, `session.exposed_paths`, `.harness_git_excludes` и узкие
-Controller cache patterns. Эти roots не попадают в `candidate.patch`, delivery
-или Phase 7 patch reconstruction.
+projections, `session.exposed_paths` и `.harness_git_excludes`. Wildcard/cache
+эвристики не являются authority: cache вне конкретного Controller-owned root
+считается candidate mutation. До baseline capture Controller отклоняет exclusion,
+перекрывающий tracked path. Разрешённые roots не попадают в `candidate.patch`,
+delivery или Phase 7 patch reconstruction.
 
 Отдельный private `GitControlStateBaseline` фиксирует repository identity,
 worktree/common Git directories, `.git` pointer, HEAD/symbolic ref, raw index и
 `ls-files` stage/flags/debug semantics, local/worktree config, split-index
 objects, info exclude/attributes/sparse definitions, local exclude/attribute
-targets, hooks и `.harness_git_excludes`. `GitControlIntegrityManager` проверяет
-baseline до/после authoritative batch и best-effort восстанавливает control
-state, но mutation всегда инвалидирует текущий result. Public
+targets, hooks, `.harness_git_excludes`, packed/loose/worktree refs,
+`refs/replace`, `shallow`, `objects/info/alternates` и `grafts`.
+Baseline содержит immutable mapping logical key → original path → ownership →
+restore policy. Worktree-private и standalone-private controls могут быть
+best-effort восстановлены только в original path; common/source/external paths
+detect-only. Изменённый config target не сканируется и не становится destination.
+Directory snapshots ограничены по depth, entry count, total и single-file bytes.
+`GitControlIntegrityManager` проверяет baseline до/после authoritative batch,
+но mutation всегда инвалидирует текущий result. Public
 `git-control-integrity.v1` содержит только batch/event codes; private paths,
 bytes и fingerprints остаются в Controller plane.
 
@@ -212,7 +220,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a14`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a15`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -352,9 +360,17 @@ Final Gate выполняет четыре независимых действи
 
 Так как `candidate.v1` учитывает реальные worktree bytes, Controller перед checkout зеркалирует узкий allowlist effective Git conversion settings source repository (`core.autocrlf`, `core.eol`, `core.safecrlf`, `core.filemode`, `core.symlinks`). Это сохраняет CRLF/LF semantics native Windows без копирования arbitrary Git configuration в private proof repository.
 
+После byte-level proof Controller materializes runtime из исходных authoritative
+источников: заново копирует source-owned projections/exposed files, при наличии
+строит отдельный proof `.venv`, разрешает и rebind-ит toolchain. В proof repo без
+agent turns выполняются static preflight, все active repair checks и benchmark
+held-out. Candidate/Git/runtime guards должны остаться pristine; результат
+фиксирует `reconstructed-verification.v1`. Original workspace runtime, `.env`,
+`.harness_tmp` и loose unreferenced Git objects не переносятся.
+
 ### Immutable acceptance
 
-После patch proof создаётся `final-acceptance.v2`. Он связывает candidate, revisions, stage artifacts и patch SHA-256 и не перезаписывается.
+После patch proof и `reconstructed-verification.v1=PASS` создаётся `final-acceptance.v2`. Он связывает candidate, revisions, stage artifacts и patch SHA-256 и не перезаписывается.
 
 ### Delivery
 
@@ -463,7 +479,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a14` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a15` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 

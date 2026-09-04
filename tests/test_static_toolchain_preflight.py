@@ -21,6 +21,8 @@ from slivin_harness.execution import ExecutionBroker
 from slivin_harness.git_integrity import (
     CandidateWorkspaceBaseline,
     GitControlIntegrityManager,
+    TrustedBatchIntegrityCoordinator,
+    TRUSTED_BATCH_MUTATED_CANDIDATE,
 )
 from slivin_harness.preflight import (
     STATIC_CHECK_INPUT_NOT_FOUND,
@@ -38,6 +40,7 @@ from slivin_harness.preflight import (
     STATIC_TOOLCHAIN_UNKNOWN_PLACEHOLDER,
     CommandTemplateError,
     ToolProbeRegistry,
+    ToolProbeRecord,
     expand_check_command,
     extract_command_placeholders,
     resolve_python_command,
@@ -86,6 +89,7 @@ class StaticToolchainPreflightTests(unittest.TestCase):
         source_repo: Path | None = None,
         manager: RuntimeProjectionIntegrityManager | None = None,
         git_manager: GitControlIntegrityManager | None = None,
+        coordinator: TrustedBatchIntegrityCoordinator | None = None,
         historical: bool = False,
         rebound: dict[str, str] | None = None,
         probe_timeout_seconds: int = 30,
@@ -99,10 +103,65 @@ class StaticToolchainPreflightTests(unittest.TestCase):
             control_plane=self.control_plane,
             runtime_integrity_manager=manager,
             git_integrity_manager=git_manager,
+            integrity_coordinator=coordinator,
             historical=historical,
             rebound_to_workspace=rebound or {},
             probe_timeout_seconds=probe_timeout_seconds,
         )
+
+    def test_post_plan_probe_is_candidate_read_only(self) -> None:
+        git(self.workspace, "init")
+        git(self.workspace, "config", "user.name", "Preflight Test")
+        git(self.workspace, "config", "user.email", "preflight@example.invalid")
+        (self.workspace / "tracked.txt").write_text("baseline\n", encoding="utf-8")
+        git(self.workspace, "add", "tracked.txt")
+        git(self.workspace, "commit", "-m", "baseline")
+        baseline_sha = git(self.workspace, "rev-parse", "HEAD")
+        CandidateWorkspaceBaseline.capture(
+            self.workspace,
+            baseline_sha=baseline_sha,
+            excluded_prefixes=(".git", ".harness_tmp", ".harness_git_excludes"),
+        )
+        git_manager = GitControlIntegrityManager(
+            workspace=self.workspace,
+            control_plane=self.control_plane,
+        )
+        git_manager.establish_baseline()
+        coordinator = TrustedBatchIntegrityCoordinator(
+            git_manager=git_manager,
+            runtime_manager=None,
+            candidate_identity=lambda: build_candidate_identity(
+                self.workspace, baseline_sha=baseline_sha
+            ),
+        )
+        registry = self.registry(
+            {"node": sys.executable},
+            git_manager=git_manager,
+            coordinator=coordinator,
+        )
+
+        def mutating_probe(**kwargs):
+            (self.workspace / "late-probe-output.txt").write_text(
+                "candidate mutation\n", encoding="utf-8"
+            )
+            return ToolProbeRecord(
+                probe_id=str(kwargs["probe_id"]),
+                capability=kwargs.get("capability"),
+                status="PASS",
+                reason_code=None,
+                safe_summary="",
+                returncode=0,
+                timed_out=False,
+                output_truncated=False,
+            )
+
+        with mock.patch.object(registry, "_run_probe", side_effect=mutating_probe):
+            evidence = registry.ensure_capabilities(
+                [Capability.NODE.value], batch_id="post-plan-capability-gate"
+            )
+        self.assertIn(STATIC_PREFLIGHT_MUTATED_CANDIDATE, evidence.reason_codes)
+        self.assertEqual(evidence.integrity_reason_code, TRUSTED_BATCH_MUTATED_CANDIDATE)
+        self.assertNotIn(Capability.NODE.value, registry.verified_capabilities)
 
     @staticmethod
     def check(command: list[str], *, name: str = "check", feedback: str = "repair") -> dict:

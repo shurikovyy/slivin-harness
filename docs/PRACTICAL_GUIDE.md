@@ -1,4 +1,4 @@
-# Практическая работа с Slivin Harness 0.8.0a14
+# Практическая работа с Slivin Harness 0.8.0a15
 
 ## Установка и self-check
 
@@ -11,8 +11,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемый финал:
 
 ```text
-0.8.0a14
-DOCS_SYNC_PASS harness=0.8.0a14 ...
+0.8.0a15
+DOCS_SYNC_PASS harness=0.8.0a15 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -71,6 +71,12 @@ authority. `.gitignore` может быть обычным candidate change, н�
 agent/check/evaluator/final batches. При `GIT_CONTROL_STATE_MUTATED_*` текущий
 attempt не принимается, даже если Controller смог best-effort восстановить
 metadata.
+
+Git baseline сохраняет original control paths и ownership. Worktree-private
+controls восстанавливаются только по этим путям; common/source/external controls
+detect-only. Изменённый `core.hooksPath`/`core.excludesFile` не выбирает путь
+чтения или restore. Candidate exclusions — только конкретные Controller-owned
+roots, без `coverage`/cache wildcard heuristics.
 
 После компиляции Verification Plan остаётся второй gate. Он переиспользует
 успешные static probes и проверяет on demand впервые появившиеся tool-backed или
@@ -311,6 +317,7 @@ Do not edit `WORKFLOW.md` or `workflow.v6.json` manually.
 reconciles one candidate/revision vector
 → builds candidate.patch through a private isolated index
 → reconstructs candidate from clean baseline
+→ materializes authoritative proof runtime and replays static/repair/held-out checks
 → creates immutable final-acceptance.v2
 → delivers via keep_worktree or transactional apply_to_source
 ```

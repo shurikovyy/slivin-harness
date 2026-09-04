@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.0a15 — Trusted reconstructed verification boundary
+
+- Made Git control restoration path-stable: the baseline owns immutable paths and restore policy, while shared, source-repository, and external controls are detect-only. Mutated `core.hooksPath`, `core.excludesFile`, or `core.attributesFile` values can no longer select a scan or restore destination.
+- Added bounded deterministic snapshots for refs, `packed-refs`, replace refs, shallow state, object alternates/grafts, Git pointer files, and split/shared-index controls without hashing the object database.
+- Routed static and on-demand tool probes through the same read-only `TrustedBatchIntegrityCoordinator`, so candidate, Git-control, or projected-runtime mutation invalidates capability evidence.
+- Removed wildcard/cache heuristics from physical candidate exclusions. Only explicit Controller-authorized paths are excluded, and an exclusion overlapping tracked baseline source fails setup.
+- Added `reconstructed-verification.v1`: Final Gate now rebuilds authoritative runtime inputs in a clean patch reconstruction and replays active repair checks plus historical held-out checks before Final Acceptance.
+- Preserved real-index isolation for patch construction and semantic reset, and raised the package version to `0.8.0a15` without changing manifest, workflow, or role protocol versions.
+
 ## 0.8.0a14 — Git control and physical candidate integrity
 
 - Froze worktree Git control state (HEAD/ref identity, index bytes/semantic flags, local/worktree config, exclude/attribute/sparse-control files, hooks and Harness excludes) around authoritative batches, with typed mutation/restore failures and public-safe diagnostics.

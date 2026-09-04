@@ -10,10 +10,14 @@ import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path, PureWindowsPath
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from slivin_harness.control_plane import canonical_path, is_within, safe_artifact_name
-from slivin_harness.git_integrity import CandidateWorkspaceBaseline, candidate_baseline_for
+from slivin_harness.git_integrity import (
+    CandidateWorkspaceBaseline,
+    candidate_baseline_for,
+    clear_candidate_baseline,
+)
 from slivin_harness.run_state import CandidateIdentity, build_candidate_identity
 from slivin_harness.workflow import (
     HeldoutStatus,
@@ -36,6 +40,7 @@ FINAL_ACCEPTANCE_VERSION = "final-acceptance.v2"
 DELIVERY_RECORD_VERSION = "delivery-record.v2"
 HELDOUT_EVIDENCE_VERSION = "heldout-evidence.v2"
 BENCHMARK_ISOLATION_VERSION = "benchmark-isolation.v1"
+RECONSTRUCTED_VERIFICATION_VERSION = "reconstructed-verification.v1"
 
 
 # ``candidate.v1`` intentionally binds the exact bytes visible in the task
@@ -72,6 +77,18 @@ class BenchmarkToolchainSanitization:
 
         yield self.toolchain
         yield self.removed
+
+
+@dataclass(frozen=True)
+class ReconstructionPreparation:
+    context: Any
+    excluded_prefixes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ReconstructedVerificationResult:
+    public: dict[str, Any]
+    private: dict[str, Any]
 
 
 def _safe_projection_relative(raw: str) -> Path:
@@ -509,7 +526,7 @@ def build_patch_reconstruction_proof(
         CandidateWorkspaceBaseline.capture(
             proof_repo,
             baseline_sha=baseline_sha,
-            excluded_prefixes=(".git", ".harness_tmp", ".venv"),
+            excluded_prefixes=(".git", ".harness_tmp", ".harness_git_excludes"),
         )
         # An empty production candidate is uncommon but can be legitimate when
         # the requested state already exists.  ``git apply`` rejects an empty
@@ -574,6 +591,130 @@ def build_patch_reconstruction_proof(
             "status": "PATCH_RECONSTRUCTION_PASS",
         }
     finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+        try:
+            proof_parent.rmdir()
+        except OSError:
+            pass
+
+
+def run_reconstructed_verification(
+    *,
+    repository: Path,
+    baseline_sha: str,
+    patch: bytes,
+    expected_candidate: CandidateIdentity,
+    private_root: Path,
+    prepare_workspace: Callable[[Path], ReconstructionPreparation],
+    verify: Callable[[Path, CandidateIdentity, Any], tuple[Mapping[str, Any], Mapping[str, Any]]],
+) -> ReconstructedVerificationResult:
+    """Replay authoritative checks on a clean, private patch reconstruction."""
+
+    # Keep Controller-private proof paths short enough for Git's Windows path limits.
+    proof_parent = private_root / "rv"
+    proof_parent.mkdir(parents=True, exist_ok=True)
+    temp_root = Path(tempfile.mkdtemp(prefix="p-", dir=proof_parent))
+    proof_repo = temp_root / "repo"
+    public: dict[str, Any] = {
+        "schema_version": RECONSTRUCTED_VERIFICATION_VERSION,
+        "status": "FAIL",
+        "expected_candidate_id": expected_candidate.candidate_id,
+        "reconstructed_candidate_id": None,
+        "static_preflight_status": "NOT_RUN",
+        "repair_checks_status": "NOT_RUN",
+        "heldout_status": "NOT_RUN",
+        "runtime_projection_status": "NOT_RUN",
+        "git_control_status": "NOT_RUN",
+        "candidate_unchanged": False,
+        "reason_code": "RECONSTRUCTED_VERIFICATION_INFRASTRUCTURE_FAILED",
+    }
+    private: dict[str, Any] = {"public_result": public}
+    try:
+        _run_git(temp_root, "init", str(proof_repo))
+        checkout_policy = _copy_patch_reconstruction_checkout_policy(
+            source_repo=repository,
+            proof_repo=proof_repo,
+        )
+        _run_git(
+            proof_repo,
+            "fetch",
+            "--depth=1",
+            "--no-tags",
+            str(repository),
+            baseline_sha,
+        )
+        _run_git(proof_repo, "checkout", "--detach", "FETCH_HEAD")
+        preparation = prepare_workspace(proof_repo)
+        CandidateWorkspaceBaseline.capture(
+            proof_repo,
+            baseline_sha=baseline_sha,
+            excluded_prefixes=preparation.excluded_prefixes,
+        )
+        if patch:
+            applied = subprocess.run(
+                ["git", "apply", "--binary", "--whitespace=nowarn", "-"],
+                cwd=proof_repo,
+                input=patch,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+            )
+            if applied.returncode != 0:
+                raise Phase7Error("Reconstructed verification could not apply candidate.patch")
+        reconstructed = build_candidate_identity(
+            proof_repo,
+            baseline_sha=baseline_sha,
+        )
+        public["reconstructed_candidate_id"] = reconstructed.candidate_id
+        if (
+            reconstructed.candidate_id != expected_candidate.candidate_id
+            or reconstructed.changed_paths != expected_candidate.changed_paths
+        ):
+            public["reason_code"] = "RECONSTRUCTED_CANDIDATE_MISMATCH"
+            return ReconstructedVerificationResult(public=dict(public), private=dict(private))
+
+        verification_public, verification_private = verify(
+            proof_repo,
+            reconstructed,
+            preparation.context,
+        )
+        public.update(dict(verification_public))
+        after = build_candidate_identity(proof_repo, baseline_sha=baseline_sha)
+        public["candidate_unchanged"] = after.candidate_id == reconstructed.candidate_id
+        private = {
+            "public_result": public,
+            "checkout_policy": checkout_policy,
+            "verification": dict(verification_private),
+        }
+        required_pass = (
+            public.get("static_preflight_status") == "PASS"
+            and public.get("repair_checks_status") == "PASS"
+            and public.get("heldout_status") in {"NOT_APPLICABLE", "HELDOUT_PASS"}
+            and public.get("runtime_projection_status") == "PASS"
+            and public.get("git_control_status") == "PASS"
+            and bool(public["candidate_unchanged"])
+        )
+        if required_pass:
+            public["status"] = "PASS"
+            public["reason_code"] = None
+        elif not public.get("reason_code"):
+            public["reason_code"] = "RECONSTRUCTED_AUTHORITATIVE_CHECK_FAILED"
+        private["public_result"] = public
+        return ReconstructedVerificationResult(public=dict(public), private=dict(private))
+    except BaseException as exc:
+        public["reason_code"] = str(
+            getattr(exc, "reason_code", None)
+            or public.get("reason_code")
+            or "RECONSTRUCTED_VERIFICATION_INFRASTRUCTURE_FAILED"
+        )
+        private = {
+            "public_result": public,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+        return ReconstructedVerificationResult(public=dict(public), private=private)
+    finally:
+        clear_candidate_baseline(proof_repo)
         shutil.rmtree(temp_root, ignore_errors=True)
         try:
             proof_parent.rmdir()
@@ -1045,7 +1186,8 @@ def reset_workspace_for_semantic_replan(
     its diff visible to the next Planner/Implementer would reintroduce the exact
     anchoring that the fresh-thread contract is meant to remove.  The rejected
     patch is preserved by the caller as a run artifact; this function resets
-    tracked/index state and removes only non-ignored untracked candidate files.
+    tracked worktree bytes without touching the real index and removes added
+    physical candidate files.
     Task-local runtime and Harness scratch directories are preserved and are
     separately reconciled by the Controller.
     """
@@ -1093,7 +1235,7 @@ def reset_workspace_for_semantic_replan(
             "baseline_sha": baseline_sha,
             "rejected_candidate_id": before.candidate_id,
             "restored_candidate_id": after.candidate_id,
-            "removed_untracked": sorted(additions),
+            "removed_untracked_paths": sorted(additions),
             "preserved_prefixes": sorted(
                 item.replace("\\", "/").strip("/") for item in preserve_prefixes
             ),
@@ -1118,7 +1260,7 @@ def reset_workspace_for_semantic_replan(
             continue
         removable.append(rel)
 
-    _run_git(root, "reset", "--hard", baseline_sha)
+    _run_git(root, "restore", "--source", baseline_sha, "--worktree", "--", ".")
     for rel in sorted(removable, key=lambda value: (value.count("/"), value), reverse=True):
         target = root / _safe_relative(rel)
         if target.is_symlink() or target.is_file():
@@ -1166,6 +1308,7 @@ def build_final_acceptance(
     quality_reconciliation: Mapping[str, Any],
     patch_metadata: Mapping[str, Any],
     patch_proof: Mapping[str, Any],
+    reconstructed_verification: Mapping[str, Any],
     artifact_bindings: Sequence[Mapping[str, Any]],
     heldout_evidence: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
@@ -1180,6 +1323,15 @@ def build_final_acceptance(
         raise Phase7Error("Patch proof expected candidate does not match final candidate")
     if patch_proof.get("reconstructed_candidate_id") != candidate_id:
         raise Phase7Error("Patch proof reconstructed candidate does not match final candidate")
+    if (
+        reconstructed_verification is None
+        or reconstructed_verification.get("status") != "PASS"
+        or reconstructed_verification.get("expected_candidate_id") != candidate_id
+        or reconstructed_verification.get("reconstructed_candidate_id") != candidate_id
+    ):
+        raise Phase7Error(
+            "Final acceptance requires successful reconstructed authoritative verification"
+        )
     patch_sha = str(patch_metadata.get("sha256") or "")
     if not patch_sha or patch_proof.get("patch_sha256") != patch_sha:
         raise Phase7Error("Patch metadata and patch proof digests do not match")
@@ -1211,6 +1363,7 @@ def build_final_acceptance(
         "artifact_bindings": list(artifact_bindings),
         "patch": dict(patch_metadata),
         "patch_proof": dict(patch_proof),
+        "reconstructed_verification": dict(reconstructed_verification),
         "heldout": dict(heldout_evidence) if heldout_evidence is not None else None,
         "quality_gate_status": StageResultCode.FINAL_ACCEPTANCE_PASS.value,
         "expected_terminal_result": (

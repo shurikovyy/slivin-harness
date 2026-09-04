@@ -28,8 +28,8 @@ def git(repo: Path, *args: str) -> str:
 
 
 class HarnessBuildIdentityTests(unittest.TestCase):
-    def test_package_version_is_0_8_0a14(self) -> None:
-        self.assertEqual(slivin_harness.__version__, "0.8.0a14")
+    def test_package_version_is_0_8_0a15(self) -> None:
+        self.assertEqual(slivin_harness.__version__, "0.8.0a15")
 
     def test_git_checkout_reports_exact_commit_and_tracked_dirty_state(self) -> None:
         with tempfile.TemporaryDirectory(prefix="slivin-build-identity-") as tmp:

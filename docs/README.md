@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a14
+# Документация Slivin Harness 0.8.0a15
 
-Актуальная версия: **0.8.0a14 — Git control and physical candidate integrity**.
+Актуальная версия: **0.8.0a15 — trusted reconstructed verification boundary**.
 
 Основные документы:
 

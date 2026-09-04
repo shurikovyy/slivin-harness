@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a14 — Phase 7
+# Модель качества Slivin Harness 0.8.0a15 — Phase 7
 
 ## Основная формула
 
@@ -150,12 +150,19 @@ tracked mutations под `assume-unchanged`/`skip-worktree` остаются в�
 consumers changed-set. Отдельный Git control-state baseline обнаруживает и
 инвалидирует изменение самих ignore/config/index/HEAD controls.
 
-Не учитывает Harness/runtime artifacts:
+Исключаются только конкретные Controller-authorized roots:
 
 ```text
-.venv/
+.git/
 .harness_tmp/
+.harness_git_excludes
+configured project venv
+registered runtime projections
+session exposed paths
 ```
+
+Cache-name wildcards не применяются. Exclusion, перекрывающий tracked baseline
+path, является controlled setup failure.
 
 ## Contract closure
 
@@ -210,9 +217,18 @@ Reconstruction использует тот же effective Git worktree conversio
 
 Artifact: `patch-proof.v1`.
 
+### Reconstructed verification
+
+Proof repository получает pristine source-owned projections/exposed files и
+отдельно rebuilt project runtime. После static preflight Controller повторяет
+все active repair checks и benchmark held-out. Candidate, Git controls и runtime
+projection должны остаться pristine; иначе `reconstructed-verification.v1`
+блокирует Final Acceptance. Это выявляет зависимости от original-only
+`.harness_tmp`, изменённой runtime `.env` или loose unreferenced Git objects.
+
 ### Immutable acceptance
 
-`final-acceptance.v2` создаётся один раз после patch proof. Он содержит artifact bindings и patch SHA-256, но не дублирует reasoning/logs.
+`final-acceptance.v2` создаётся один раз после patch proof и reconstructed verification PASS. Он содержит artifact bindings и patch SHA-256, но не дублирует reasoning/logs.
 
 ### Delivery
 
@@ -283,7 +299,7 @@ historical benchmark не раскрывает другие refs/objects/held-ou
 успешный CI/deployment/production rollout;
 ```
 
-Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a14` первый такой checkpoint — historical `_90`.
+Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a15` первый такой checkpoint — historical `_90`.
 
 ## Версии
 

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import base64
-import fnmatch
 import hashlib
 import json
 import os
-import shutil
 import stat
 import subprocess
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, TypeVar
 
@@ -22,7 +21,13 @@ GIT_CONTROL_STATE_MUTATED_DURING_BATCH = "GIT_CONTROL_STATE_MUTATED_DURING_BATCH
 GIT_CONTROL_STATE_RESTORE_FAILED = "GIT_CONTROL_STATE_RESTORE_FAILED"
 GIT_CONTROL_STATE_BASELINE_MISMATCH = "GIT_CONTROL_STATE_BASELINE_MISMATCH"
 GIT_CONTROL_STATE_UNSUPPORTED = "GIT_CONTROL_STATE_UNSUPPORTED"
+GIT_CONTROL_STATE_UNSAFE_RETARGET = "GIT_CONTROL_STATE_UNSAFE_RETARGET"
+GIT_CONTROL_STATE_DETECT_ONLY_MUTATION = "GIT_CONTROL_STATE_DETECT_ONLY_MUTATION"
+GIT_CONTROL_STATE_DIRECTORY_LIMIT = "GIT_CONTROL_STATE_DIRECTORY_LIMIT"
 CANDIDATE_BASELINE_MISSING = "CANDIDATE_BASELINE_MISSING"
+CANDIDATE_EXCLUSION_OVERLAPS_TRACKED_PATH = (
+    "CANDIDATE_EXCLUSION_OVERLAPS_TRACKED_PATH"
+)
 TRUSTED_BATCH_MUTATED_CANDIDATE = "TRUSTED_BATCH_MUTATED_CANDIDATE"
 
 _T = TypeVar("_T")
@@ -61,15 +66,68 @@ def _excluded(rel: str, prefixes: Iterable[str]) -> bool:
     normalized = _normalize_rel(rel)
     for raw in prefixes:
         prefix = _normalize_rel(raw)
-        if any(marker in prefix for marker in "*?["):
-            if fnmatch.fnmatchcase(normalized, prefix) or fnmatch.fnmatchcase(
-                normalized.casefold(), prefix.casefold()
-            ):
-                return True
-            continue
         if prefix and (normalized == prefix or normalized.startswith(prefix + "/")):
             return True
     return False
+
+
+def _validated_exclusions(values: Iterable[str]) -> tuple[str, ...]:
+    exclusions: set[str] = set()
+    for raw in values:
+        value = str(raw)
+        normalized = _normalize_rel(value)
+        path = Path(value.replace("\\", "/"))
+        if (
+            not normalized
+            or path.is_absolute()
+            or ".." in path.parts
+            or any(marker in normalized for marker in "*?[")
+        ):
+            raise CandidateInventoryError(
+                "CANDIDATE_EXCLUSION_INVALID",
+                f"Candidate exclusion must be an explicit repo-relative path: {value!r}",
+            )
+        exclusions.add(normalized)
+    return tuple(sorted(exclusions))
+
+
+def _tracked_paths(workspace: Path, baseline_sha: str) -> tuple[str, ...]:
+    completed = subprocess.run(
+        ["git", "ls-tree", "-r", "-z", "--name-only", baseline_sha],
+        cwd=workspace,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+        shell=False,
+    )
+    if completed.returncode != 0:
+        raise CandidateInventoryError(
+            CANDIDATE_BASELINE_MISSING, "Tracked candidate baseline is unavailable"
+        )
+    return tuple(
+        item.decode("utf-8", errors="surrogateescape").replace("\\", "/")
+        for item in completed.stdout.split(b"\0")
+        if item
+    )
+
+
+def _validate_exclusions_do_not_hide_tracked(
+    workspace: Path,
+    *,
+    baseline_sha: str,
+    exclusions: Iterable[str],
+) -> None:
+    tracked = _tracked_paths(workspace, baseline_sha)
+    for prefix in exclusions:
+        if prefix == ".git":
+            continue
+        for rel in tracked:
+            if rel == prefix or rel.startswith(prefix + "/"):
+                raise CandidateInventoryError(
+                    CANDIDATE_EXCLUSION_OVERLAPS_TRACKED_PATH,
+                    "Controller candidate exclusion overlaps tracked baseline path: "
+                    + prefix,
+                )
 
 
 def _hash_file(path: Path, *, chunk_size: int = 1024 * 1024) -> tuple[str, int]:
@@ -189,7 +247,10 @@ class CandidateWorkspaceBaseline:
         control_plane: ControllerPlane | None = None,
     ) -> "CandidateWorkspaceBaseline":
         root = canonical_path(workspace)
-        exclusions = tuple(sorted({_normalize_rel(item) for item in excluded_prefixes if item}))
+        exclusions = _validated_exclusions(excluded_prefixes)
+        _validate_exclusions_do_not_hide_tracked(
+            root, baseline_sha=baseline_sha, exclusions=exclusions
+        )
         entries = scan_candidate_tree(root, excluded_prefixes=exclusions)
         payload = {
             "baseline_sha": baseline_sha,
@@ -223,7 +284,10 @@ class CandidateWorkspaceBaseline:
         """Compatibility baseline from immutable commit objects, never the real index."""
 
         root = canonical_path(workspace)
-        exclusions = tuple(sorted({_normalize_rel(item) for item in excluded_prefixes if item}))
+        exclusions = _validated_exclusions(excluded_prefixes)
+        _validate_exclusions_do_not_hide_tracked(
+            root, baseline_sha=baseline_sha, exclusions=exclusions
+        )
         tree = subprocess.run(
             ["git", "ls-tree", "-r", "-z", "--long", baseline_sha],
             cwd=root,
@@ -318,18 +382,53 @@ def clear_candidate_baseline(workspace: Path) -> None:
     _CANDIDATE_BASELINES.pop(os.path.normcase(str(canonical_path(workspace))), None)
 
 
+GIT_CONTROL_MAX_ENTRIES = 8_192
+GIT_CONTROL_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+GIT_CONTROL_MAX_DEPTH = 32
+GIT_CONTROL_MAX_SINGLE_FILE_BYTES = 16 * 1024 * 1024
+
+
+class GitControlOwnership(str, Enum):
+    WORKTREE_CONTROLLER_OWNED = "WORKTREE_CONTROLLER_OWNED"
+    SHARED_OR_EXTERNAL_DETECT_ONLY = "SHARED_OR_EXTERNAL_DETECT_ONLY"
+    DISPOSABLE_STANDALONE_REPO = "DISPOSABLE_STANDALONE_REPO"
+
+
+@dataclass(frozen=True)
+class GitControlPath:
+    key: str
+    path: Path
+    ownership: GitControlOwnership
+
+    @property
+    def restoreable(self) -> bool:
+        return self.ownership in {
+            GitControlOwnership.WORKTREE_CONTROLLER_OWNED,
+            GitControlOwnership.DISPOSABLE_STANDALONE_REPO,
+        }
+
+
 @dataclass(frozen=True)
 class _ControlFile:
     key: str
     path: Path
+    ownership: GitControlOwnership
     kind: str
     payload: bytes | None
+    restore_payload: bytes | None
     mode: int | None
 
     @property
     def fingerprint(self) -> str:
         body = self.payload if self.payload is not None else b"<MISSING>"
         return hashlib.sha256(self.kind.encode() + b"\0" + body).hexdigest()
+
+    @property
+    def restoreable(self) -> bool:
+        return self.ownership in {
+            GitControlOwnership.WORKTREE_CONTROLLER_OWNED,
+            GitControlOwnership.DISPOSABLE_STANDALONE_REPO,
+        }
 
 
 @dataclass(frozen=True)
@@ -379,13 +478,54 @@ def _local_config_path(workspace: Path, key: str) -> str:
     return ""
 
 
-def _read_control_path(key: str, path: Path) -> _ControlFile:
-    if path.is_symlink():
-        raise GitControlIntegrityError(
-            GIT_CONTROL_STATE_UNSUPPORTED, f"Git control path is an alias: {key}"
-        )
+def _is_reparse(metadata: os.stat_result) -> bool:
+    return bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+
+
+def _read_file_bounded(path: Path, *, capture: bool) -> tuple[str, int, bytes | None]:
+    digest = hashlib.sha256()
+    size = 0
+    chunks: list[bytes] | None = [] if capture else None
+    with path.open("rb") as stream:
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > GIT_CONTROL_MAX_SINGLE_FILE_BYTES:
+                raise GitControlIntegrityError(
+                    GIT_CONTROL_STATE_DIRECTORY_LIMIT,
+                    "Git control file exceeds the bounded snapshot limit",
+                )
+            digest.update(chunk)
+            if chunks is not None:
+                chunks.append(chunk)
+    return digest.hexdigest(), size, b"".join(chunks) if chunks is not None else None
+
+
+def _read_control_path(spec: GitControlPath) -> _ControlFile:
+    key = spec.key
+    path = spec.path
+    cursor = path
+    while True:
+        if cursor.exists() or cursor.is_symlink():
+            try:
+                metadata = cursor.lstat()
+            except OSError as exc:
+                raise GitControlIntegrityError(
+                    GIT_CONTROL_STATE_UNSUPPORTED,
+                    f"Git control path cannot be inspected: {key}",
+                ) from exc
+            if stat.S_ISLNK(metadata.st_mode) or _is_reparse(metadata):
+                raise GitControlIntegrityError(
+                    GIT_CONTROL_STATE_UNSUPPORTED,
+                    f"Git control path contains an alias: {key}",
+                )
+        if cursor.parent == cursor:
+            break
+        cursor = cursor.parent
     try:
-        if path.exists() and bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400):
+        if path.exists() and _is_reparse(path.lstat()):
             raise GitControlIntegrityError(
                 GIT_CONTROL_STATE_UNSUPPORTED, f"Git control path is a reparse point: {key}"
             )
@@ -394,46 +534,161 @@ def _read_control_path(key: str, path: Path) -> _ControlFile:
             GIT_CONTROL_STATE_UNSUPPORTED, f"Git control path cannot be inspected: {key}"
         ) from exc
     if not path.exists():
-        return _ControlFile(key, path, "missing", None, None)
+        return _ControlFile(key, path, spec.ownership, "missing", None, None, None)
     if path.is_file():
-        return _ControlFile(key, path, "file", path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
-    if path.is_dir():
-        rows: list[dict[str, str]] = []
-        for item in sorted(path.rglob("*"), key=lambda value: value.as_posix().casefold()):
-            if (
-                item.is_symlink()
-                or bool(getattr(item.lstat(), "st_file_attributes", 0) & 0x400)
-                or (item.exists() and not (item.is_file() or item.is_dir()))
-            ):
-                raise GitControlIntegrityError(
-                    GIT_CONTROL_STATE_UNSUPPORTED, f"Unsupported Git control entry: {key}"
-                )
-            rel = item.relative_to(path).as_posix().encode("utf-8", errors="surrogateescape")
-            if item.is_dir():
-                rows.append(
-                    {
-                        "kind": "directory",
-                        "path": rel.decode("utf-8", errors="surrogateescape"),
-                        "mode": stat.S_IMODE(item.stat().st_mode),
-                    }
-                )
-            else:
-                rows.append(
-                    {
-                        "kind": "file",
-                        "path": rel.decode("utf-8", errors="surrogateescape"),
-                        "mode": stat.S_IMODE(item.stat().st_mode),
-                        "payload": base64.b64encode(item.read_bytes()).decode("ascii"),
-                    }
-                )
+        digest, size, content = _read_file_bounded(path, capture=spec.restoreable)
+        payload = json.dumps(
+            {"sha256": digest, "size": size}, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
         return _ControlFile(
             key,
             path,
+            spec.ownership,
+            "file",
+            payload,
+            content,
+            stat.S_IMODE(path.stat().st_mode),
+        )
+    if path.is_dir():
+        rows: list[dict[str, Any]] = []
+        restore_rows: list[dict[str, Any]] | None = [] if spec.restoreable else None
+        entry_count = 0
+        total_bytes = 0
+
+        def visit(directory: Path, relative: str, depth: int) -> None:
+            nonlocal entry_count, total_bytes
+            if depth > GIT_CONTROL_MAX_DEPTH:
+                raise GitControlIntegrityError(
+                    GIT_CONTROL_STATE_DIRECTORY_LIMIT,
+                    "Git control directory exceeds the bounded depth limit",
+                )
+            try:
+                children = sorted(os.scandir(directory), key=lambda item: item.name.casefold())
+            except OSError as exc:
+                raise GitControlIntegrityError(
+                    GIT_CONTROL_STATE_UNSUPPORTED,
+                    f"Git control directory cannot be inspected: {key}",
+                ) from exc
+            for child in children:
+                entry_count += 1
+                if entry_count > GIT_CONTROL_MAX_ENTRIES:
+                    raise GitControlIntegrityError(
+                        GIT_CONTROL_STATE_DIRECTORY_LIMIT,
+                        "Git control directory exceeds the bounded entry limit",
+                    )
+                rel = f"{relative}/{child.name}" if relative else child.name
+                item = Path(child.path)
+                metadata = item.lstat()
+                if stat.S_ISLNK(metadata.st_mode) or _is_reparse(metadata):
+                    raise GitControlIntegrityError(
+                        GIT_CONTROL_STATE_UNSUPPORTED,
+                        f"Unsupported Git control entry: {key}",
+                    )
+                mode = stat.S_IMODE(metadata.st_mode)
+                if stat.S_ISDIR(metadata.st_mode):
+                    row = {"kind": "directory", "path": rel, "mode": mode}
+                    rows.append(row)
+                    if restore_rows is not None:
+                        restore_rows.append(dict(row))
+                    visit(item, rel, depth + 1)
+                elif stat.S_ISREG(metadata.st_mode):
+                    digest, size, content = _read_file_bounded(
+                        item, capture=spec.restoreable
+                    )
+                    total_bytes += size
+                    if total_bytes > GIT_CONTROL_MAX_TOTAL_BYTES:
+                        raise GitControlIntegrityError(
+                            GIT_CONTROL_STATE_DIRECTORY_LIMIT,
+                            "Git control directory exceeds the bounded byte limit",
+                        )
+                    rows.append(
+                        {
+                            "kind": "file",
+                            "path": rel,
+                            "mode": mode,
+                            "sha256": digest,
+                            "size": size,
+                        }
+                    )
+                    if restore_rows is not None:
+                        restore_rows.append(
+                            {
+                                "kind": "file",
+                                "path": rel,
+                                "mode": mode,
+                                "payload": base64.b64encode(content or b"").decode("ascii"),
+                            }
+                        )
+                else:
+                    raise GitControlIntegrityError(
+                        GIT_CONTROL_STATE_UNSUPPORTED,
+                        f"Unsupported Git control entry: {key}",
+                    )
+
+        visit(path, "", 0)
+        return _ControlFile(
+            key,
+            path,
+            spec.ownership,
             "directory",
             json.dumps(rows, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+            (
+                json.dumps(restore_rows, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+                if restore_rows is not None
+                else None
+            ),
             None,
         )
     raise GitControlIntegrityError(GIT_CONTROL_STATE_UNSUPPORTED, f"Unsupported Git control path: {key}")
+
+
+def _remove_control_tree(path: Path) -> None:
+    """Remove a previously bounded control tree without following filesystem aliases."""
+
+    entries = 0
+
+    def remove(item: Path, depth: int) -> None:
+        nonlocal entries
+        if depth > GIT_CONTROL_MAX_DEPTH:
+            raise GitControlIntegrityError(
+                GIT_CONTROL_STATE_RESTORE_FAILED,
+                "Git control restore exceeded the bounded depth limit",
+            )
+        try:
+            metadata = item.lstat()
+        except FileNotFoundError:
+            return
+        entries += 1
+        if entries > GIT_CONTROL_MAX_ENTRIES:
+            raise GitControlIntegrityError(
+                GIT_CONTROL_STATE_RESTORE_FAILED,
+                "Git control restore exceeded the bounded entry limit",
+            )
+        if stat.S_ISLNK(metadata.st_mode):
+            item.unlink()
+            return
+        if _is_reparse(metadata):
+            if stat.S_ISDIR(metadata.st_mode):
+                item.rmdir()
+            else:
+                item.unlink()
+            return
+        if stat.S_ISDIR(metadata.st_mode):
+            for child in sorted(os.scandir(item), key=lambda entry: entry.name.casefold()):
+                remove(Path(child.path), depth + 1)
+            item.rmdir()
+            return
+        if stat.S_ISREG(metadata.st_mode):
+            item.unlink()
+            return
+        raise GitControlIntegrityError(
+            GIT_CONTROL_STATE_RESTORE_FAILED,
+            "Git control restore encountered an unsupported entry",
+        )
+
+    remove(path, 0)
 
 
 class GitControlIntegrityManager:
@@ -444,13 +699,76 @@ class GitControlIntegrityManager:
         self.control_plane = control_plane
         self.baseline: GitControlStateBaseline | None = None
         self._events: list[dict[str, str]] = []
+        self._git_dir: Path | None = None
+        self._common_dir: Path | None = None
 
     @property
     def active(self) -> bool:
         return self.baseline is not None
 
-    def _control_paths(self) -> tuple[tuple[str, Path], ...]:
+    @staticmethod
+    def _lexically_within(root: Path, candidate: Path) -> bool:
+        try:
+            common = os.path.commonpath([str(root.absolute()), str(candidate.absolute())])
+        except (OSError, ValueError):
+            return False
+        return os.path.normcase(common) == os.path.normcase(str(root.absolute()))
+
+    def _ownership_for(
+        self,
+        key: str,
+        path: Path,
+        *,
+        git_dir: Path,
+        common_dir: Path,
+        standalone: bool,
+    ) -> GitControlOwnership:
+        if standalone and (
+            self._lexically_within(git_dir, path)
+            or self._lexically_within(common_dir, path)
+        ):
+            return GitControlOwnership.DISPOSABLE_STANDALONE_REPO
+        if key == "harness-excludes":
+            return GitControlOwnership.WORKTREE_CONTROLLER_OWNED
+        if key in {
+            "index",
+            "config-worktree",
+            "head",
+            "workspace-dot-git",
+            "commondir-pointer",
+            "gitdir-pointer",
+        } and self._lexically_within(git_dir, path):
+            return GitControlOwnership.WORKTREE_CONTROLLER_OWNED
+        if key.startswith("shared-index:") and self._lexically_within(git_dir, path):
+            return GitControlOwnership.WORKTREE_CONTROLLER_OWNED
+        return GitControlOwnership.SHARED_OR_EXTERNAL_DETECT_ONLY
+
+    def _control_paths(self) -> tuple[GitControlPath, ...]:
         dot_git = self.workspace / ".git"
+        git_dir = canonical_path(
+            Path(
+                _git_bytes(self.workspace, "rev-parse", "--absolute-git-dir")
+                .decode("utf-8", errors="surrogateescape")
+                .strip()
+            )
+        )
+        common_dir = canonical_path(
+            Path(
+                _git_bytes(
+                    self.workspace,
+                    "rev-parse",
+                    "--path-format=absolute",
+                    "--git-common-dir",
+                )
+                .decode("utf-8", errors="surrogateescape")
+                .strip()
+            )
+        )
+        self._git_dir = git_dir
+        self._common_dir = common_dir
+        standalone = is_within(self.workspace, git_dir) and is_within(
+            self.workspace, common_dir
+        )
         paths: dict[str, Path] = {
             "index": _git_path(self.workspace, "index"),
             "head": _git_path(self.workspace, "HEAD"),
@@ -460,7 +778,16 @@ class GitControlIntegrityManager:
             "info-attributes": _git_path(self.workspace, "info/attributes"),
             "sparse-checkout": _git_path(self.workspace, "info/sparse-checkout"),
             "harness-excludes": self.workspace / ".harness_git_excludes",
+            "packed-refs": common_dir / "packed-refs",
+            "refs": common_dir / "refs",
+            "shallow": common_dir / "shallow",
+            "objects-info-alternates": common_dir / "objects" / "info" / "alternates",
+            "objects-info-grafts": common_dir / "objects" / "info" / "grafts",
+            "commondir-pointer": git_dir / "commondir",
+            "gitdir-pointer": git_dir / "gitdir",
         }
+        if git_dir != common_dir:
+            paths["worktree-refs"] = git_dir / "refs"
         if dot_git.is_file() or dot_git.is_symlink():
             paths["workspace-dot-git"] = dot_git
         symbolic = _git_bytes(self.workspace, "symbolic-ref", "-q", "HEAD", check=False).decode(
@@ -473,25 +800,62 @@ class GitControlIntegrityManager:
             path = Path(excludes)
             if not path.is_absolute():
                 path = self.workspace / path
-            paths["core-excludes-file"] = canonical_path(path)
+            paths["core-excludes-file"] = path.absolute()
         attributes = _local_config_path(self.workspace, "core.attributesFile")
         if attributes:
             path = Path(attributes)
             if not path.is_absolute():
                 path = self.workspace / path
-            paths["core-attributes-file"] = canonical_path(path)
+            paths["core-attributes-file"] = path.absolute()
         hooks = _local_config_path(self.workspace, "core.hooksPath")
         hooks_path = Path(hooks) if hooks else _git_path(self.workspace, "hooks")
         if hooks and not hooks_path.is_absolute():
             hooks_path = self.workspace / hooks_path
-        paths["hooks"] = canonical_path(hooks_path)
+        paths["hooks"] = hooks_path.absolute()
         index = paths["index"]
         for shared in sorted(index.parent.glob("sharedindex.*")):
             paths[f"shared-index:{shared.name}"] = shared
-        return tuple(sorted(paths.items()))
+        return tuple(
+            GitControlPath(
+                key,
+                path.absolute(),
+                self._ownership_for(
+                    key,
+                    path.absolute(),
+                    git_dir=git_dir,
+                    common_dir=common_dir,
+                    standalone=standalone,
+                ),
+            )
+            for key, path in sorted(paths.items())
+        )
 
-    def _snapshot(self) -> GitControlStateBaseline:
-        files = tuple(_read_control_path(key, path) for key, path in self._control_paths())
+    def _fixed_config_value(self, key: str, files: Iterable[_ControlFile]) -> bytes:
+        by_key = {item.key: item for item in files}
+        for config_key in ("config-worktree", "config"):
+            item = by_key.get(config_key)
+            if item is None or item.kind != "file":
+                continue
+            completed = subprocess.run(
+                [
+                    "git",
+                    "config",
+                    "--no-includes",
+                    "--file",
+                    str(item.path),
+                    "--get",
+                    key,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+                env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+            )
+            if completed.returncode == 0:
+                return completed.stdout.rstrip(b"\r\n")
+        return b""
+
+    def _semantic_snapshot(self, files: tuple[_ControlFile, ...]) -> dict[str, bytes]:
         semantic = {
             "head": _git_bytes(self.workspace, "rev-parse", "HEAD"),
             "symbolic-head": _git_bytes(self.workspace, "symbolic-ref", "-q", "HEAD", check=False),
@@ -502,16 +866,46 @@ class GitControlIntegrityManager:
             "worktree-config": _git_bytes(
                 self.workspace, "config", "--worktree", "--null", "--list", check=False
             ),
-            "git-dir": _git_bytes(self.workspace, "rev-parse", "--absolute-git-dir"),
-            "common-dir": _git_bytes(
-                self.workspace, "rev-parse", "--path-format=absolute", "--git-common-dir"
-            ),
+            "git-dir": str(self._git_dir).encode("utf-8", errors="surrogateescape"),
+            "common-dir": str(self._common_dir).encode("utf-8", errors="surrogateescape"),
         }
+        for key in ("core.hooksPath", "core.excludesFile", "core.attributesFile"):
+            semantic[f"config-target:{key}"] = self._fixed_config_value(key, files)
+        return semantic
+
+    @staticmethod
+    def _build_baseline(
+        files: tuple[_ControlFile, ...], semantic: Mapping[str, bytes]
+    ) -> GitControlStateBaseline:
         payload = {
             "files": [(item.key, item.kind, item.fingerprint) for item in files],
             "semantic": {key: hashlib.sha256(value).hexdigest() for key, value in semantic.items()},
         }
         return GitControlStateBaseline(files, semantic, stable_fingerprint(payload, length=64))
+
+    def _snapshot(self) -> GitControlStateBaseline:
+        if self.baseline is None:
+            specs = self._control_paths()
+        else:
+            specs = tuple(
+                GitControlPath(item.key, item.path, item.ownership)
+                for item in self.baseline.files
+            )
+        files = tuple(_read_control_path(spec) for spec in specs)
+        if self.baseline is not None:
+            baseline_files = {
+                item.key: (item.kind, item.payload, item.mode)
+                for item in self.baseline.files
+            }
+            current_files = {
+                item.key: (item.kind, item.payload, item.mode) for item in files
+            }
+            if current_files != baseline_files:
+                # Do not execute Git object/config resolution after a fixed
+                # control path has changed. In particular, a mutated config
+                # target can never select a directory to inspect.
+                return self._build_baseline(files, {})
+        return self._build_baseline(files, self._semantic_snapshot(files))
 
     def establish_baseline(self) -> GitControlStateBaseline:
         baseline = self._snapshot()
@@ -531,37 +925,64 @@ class GitControlIntegrityManager:
         private = {
             **public,
             "baseline_fingerprint": self.baseline.fingerprint if self.baseline else None,
-            "control_paths": [item.key for item in self.baseline.files] if self.baseline else [],
+            "control_paths": [
+                {"key": item.key, "ownership": item.ownership.value}
+                for item in self.baseline.files
+            ] if self.baseline else [],
         }
         self.control_plane.write_private_json("git_control_integrity_private.json", private)
 
     def _matches(self, current: GitControlStateBaseline) -> bool:
         return self.baseline is not None and current.fingerprint == self.baseline.fingerprint
 
-    def _restore(self) -> None:
+    def _assert_restore_path_safe(self, item: _ControlFile) -> None:
+        if self._git_dir is None or self._common_dir is None:
+            raise GitControlIntegrityError(
+                GIT_CONTROL_STATE_RESTORE_FAILED, "Git control roots are unavailable"
+            )
+        if item.ownership == GitControlOwnership.DISPOSABLE_STANDALONE_REPO:
+            allowed = (self.workspace, self._git_dir, self._common_dir)
+        else:
+            allowed = (self.workspace, self._git_dir)
+        if not any(self._lexically_within(root, item.path) for root in allowed):
+            raise GitControlIntegrityError(
+                GIT_CONTROL_STATE_RESTORE_FAILED,
+                "Original Git control path is outside its restore authority",
+            )
+        current = item.path.parent
+        while True:
+            if current.exists() or current.is_symlink():
+                metadata = current.lstat()
+                if stat.S_ISLNK(metadata.st_mode) or _is_reparse(metadata):
+                    raise GitControlIntegrityError(
+                        GIT_CONTROL_STATE_RESTORE_FAILED,
+                        "Git control restore path contains an alias",
+                    )
+            if any(os.path.normcase(str(current)) == os.path.normcase(str(root)) for root in allowed):
+                break
+            if current.parent == current:
+                raise GitControlIntegrityError(
+                    GIT_CONTROL_STATE_RESTORE_FAILED,
+                    "Git control restore path escaped its authority",
+                )
+            current = current.parent
+
+    def _restore(self) -> tuple[str, ...]:
         if self.baseline is None:
             raise GitControlIntegrityError(GIT_CONTROL_STATE_BASELINE_MISMATCH, "Git baseline missing")
-        baseline_paths = {item.key: item for item in self.baseline.files}
-        current_paths = {key: path for key, path in self._control_paths()}
-        git_dir = canonical_path(
-            Path(
-                self.baseline.semantic["git-dir"]
-                .decode("utf-8", errors="surrogateescape")
-                .strip()
-            )
-        )
-        common_dir = canonical_path(
-            Path(
-                self.baseline.semantic["common-dir"]
-                .decode("utf-8", errors="surrogateescape")
-                .strip()
-            )
-        )
-        for key, original in baseline_paths.items():
-            path = current_paths.get(key, original.path)
+        reasons: list[str] = []
+        for key in ("core.hooksPath", "core.excludesFile", "core.attributesFile"):
+            current_value = self._fixed_config_value(key, self.baseline.files)
+            if current_value != self.baseline.semantic.get(f"config-target:{key}", b""):
+                reasons.append(GIT_CONTROL_STATE_UNSAFE_RETARGET)
+                break
+        for original in self.baseline.files:
+            path = original.path
             try:
                 try:
-                    current = _read_control_path(key, path)
+                    current = _read_control_path(
+                        GitControlPath(original.key, path, original.ownership)
+                    )
                 except GitControlIntegrityError:
                     current = None
                 if current is not None and (
@@ -570,40 +991,33 @@ class GitControlIntegrityManager:
                     current.mode,
                 ) == (original.kind, original.payload, original.mode):
                     continue
-                canonical_parent = canonical_path(path.parent)
-                if not any(
-                    is_within(root, canonical_parent)
-                    for root in (self.workspace, git_dir, common_dir)
-                ):
+                if not original.restoreable:
+                    reasons.append(GIT_CONTROL_STATE_DETECT_ONLY_MUTATION)
+                    continue
+                self._assert_restore_path_safe(original)
+                if current is None:
                     raise GitControlIntegrityError(
                         GIT_CONTROL_STATE_RESTORE_FAILED,
-                        "Git control state outside Controller-owned roots cannot be restored",
+                        "Mutated Git control path is unsafe to restore",
                     )
                 if original.kind == "missing":
-                    if path.is_dir() and not path.is_symlink():
-                        shutil.rmtree(path)
-                    elif path.exists() or path.is_symlink():
-                        path.unlink()
+                    if path.exists() or path.is_symlink():
+                        _remove_control_tree(path)
                 elif original.kind == "file":
-                    if path.is_dir() and not path.is_symlink():
-                        shutil.rmtree(path)
+                    if path.exists() or path.is_symlink():
+                        _remove_control_tree(path)
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(original.payload or b"")
+                    path.write_bytes(original.restore_payload or b"")
                     if original.mode is not None:
                         try:
                             path.chmod(original.mode)
                         except OSError:
                             pass
                 elif original.kind == "directory":
-                    if path.exists() and not path.is_dir():
-                        path.unlink()
+                    if path.exists() or path.is_symlink():
+                        _remove_control_tree(path)
                     path.mkdir(parents=True, exist_ok=True)
-                    for child in list(path.iterdir()):
-                        if child.is_dir() and not child.is_symlink():
-                            shutil.rmtree(child)
-                        else:
-                            child.unlink(missing_ok=True)
-                    rows = json.loads((original.payload or b"[]").decode("utf-8"))
+                    rows = json.loads((original.restore_payload or b"[]").decode("utf-8"))
                     for row in rows:
                         target = path / str(row["path"])
                         if row["kind"] == "directory":
@@ -619,20 +1033,34 @@ class GitControlIntegrityManager:
                 raise GitControlIntegrityError(
                     GIT_CONTROL_STATE_RESTORE_FAILED, "Git control state restore failed"
                 ) from exc
-        if not self._matches(self._snapshot()):
-            raise GitControlIntegrityError(
-                GIT_CONTROL_STATE_RESTORE_FAILED, "Restored Git control state did not match baseline"
+        for original in self.baseline.files:
+            if not original.restoreable:
+                continue
+            current = _read_control_path(
+                GitControlPath(original.key, original.path, original.ownership)
             )
+            if (current.kind, current.payload, current.mode) != (
+                original.kind,
+                original.payload,
+                original.mode,
+            ):
+                raise GitControlIntegrityError(
+                    GIT_CONTROL_STATE_RESTORE_FAILED,
+                    "Restored Git control state did not match its original path",
+                )
+        return tuple(dict.fromkeys(reasons))
 
     def _restore_after_mutation(self, batch_id: str) -> tuple[str, ...]:
         try:
-            self._restore()
+            reasons = self._restore()
+            for reason in reasons:
+                self._events.append({"batch_id": batch_id, "event": reason})
+            return reasons
         except GitControlIntegrityError:
             self._events.append(
                 {"batch_id": batch_id, "event": GIT_CONTROL_STATE_RESTORE_FAILED}
             )
             return (GIT_CONTROL_STATE_RESTORE_FAILED,)
-        return ()
 
     def run_batch(self, batch_id: str, operation: Callable[[], _T]) -> _T:
         if self.baseline is None:

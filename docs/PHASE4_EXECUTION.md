@@ -92,6 +92,10 @@ repository control files до/после self-verify, deterministic/dynamic/runt
 held-out batches. Green command, изменившая Git control state, классифицируется
 как infrastructure/integrity failure и не выпускает receipt.
 
+Static и все post-plan/on-demand tool probes используют один
+`TrustedBatchIntegrityCoordinator.run_read_only`: capability evidence не
+принимается при mutation candidate, Git controls или runtime projection.
+
 Manifest check commands have one strict expansion contract shared by execution
 and `static-toolchain-preflight.v1`. Before any agent stage the Controller parses
 all repair/held-out templates, resolves required executables, validates only
@@ -110,8 +114,9 @@ this resolver.
 Because Jest config is executable project code, static preflight freezes the
 canonical `candidate.v1` before and after its runtime-guarded probe batch.
 Tracked changes, deletions or untracked additions invalidate every successful
-probe and stop the run. `.harness_tmp`, worktree `.venv` and registered projected
-runtime roots retain the existing candidate exclusions. Raw probe output is
+probe and stop the run. Only concrete Controller-owned paths such as
+`.harness_tmp`, configured worktree `.venv`, registered projections and exposed
+paths are excluded; cache-name wildcards are not exclusions. Raw probe output is
 Controller-private and hard-capped at 1 MiB; public failure evidence is typed
 and contains no raw output.
 

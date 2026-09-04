@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
 
+from slivin_harness.control_plane import canonical_path
 from slivin_harness.git_integrity import (
     CandidateWorkspaceBaseline,
     candidate_baseline_for,
@@ -372,6 +373,7 @@ def _copy_exposed_paths(
     *,
     allow_sensitive_copy: bool,
     missing_is_error: bool = False,
+    tracked_is_error: bool = False,
 ) -> tuple[str, ...]:
     copied: list[str] = []
     for raw in raw_paths:
@@ -395,6 +397,10 @@ def _copy_exposed_paths(
             rel.as_posix(),
             check=False,
         ).returncode == 0:
+            if tracked_is_error:
+                raise RuntimeError(
+                    "CANDIDATE_EXCLUSION_OVERLAPS_TRACKED_PATH: " + rel.as_posix()
+                )
             print("WORKSPACE_EXPOSE_TRACKED_SKIP:", rel.as_posix())
             continue
         _assert_regular_tree(source)
@@ -727,6 +733,7 @@ def prepare_workspace_session(
             ],
             allow_sensitive_copy=allow_sensitive_copy,
             missing_is_error=True,
+            tracked_is_error=True,
         )
         copied = tuple(dict.fromkeys([*canonical_copied, *manual_copied]))
         runtime_projections = tuple(
@@ -776,14 +783,7 @@ def prepare_workspace_session(
             excluded_prefixes=(
                 ".git",
                 ".harness_tmp",
-                ".venv",
                 ".harness_git_excludes",
-                "__pycache__",
-                "**/__pycache__",
-                "*.py[cod]",
-                "**/*.py[cod]",
-                ".pytest_cache",
-                "**/.pytest_cache",
                 *copied,
                 *(item.relative_path for item in runtime_projections),
             ),
@@ -807,6 +807,73 @@ def remove_managed_workspace(session: WorkspaceSession) -> None:
         _remove_worktree(session.source_repo, session.workspace)
 
 
+def materialize_authoritative_runtime_copy(
+    session: WorkspaceSession,
+    *,
+    workspace: Path,
+) -> WorkspaceSession:
+    """Recreate runtime-only inputs in a private reconstruction workspace.
+
+    The source repository remains the authority.  Nothing is copied from the
+    candidate workspace, so an agent-modified runtime or exposed file cannot
+    participate in reconstructed verification.
+    """
+
+    destination = canonical_path(workspace)
+    if session.source_repo is None:
+        if session.exposed_paths or session.runtime_projections:
+            raise RuntimeError("Authoritative runtime source repository is unavailable")
+        return WorkspaceSession(
+            workspace=destination,
+            mode="reconstruction",
+            managed=False,
+            project_name=session.project_name,
+            source_head=session.source_head,
+            source_base_sha=session.source_base_sha,
+            base_sha=session.base_sha,
+            result_mode="keep_worktree",
+            benchmark_isolated=session.benchmark_isolated,
+        )
+
+    copied = _copy_exposed_paths(
+        source_repo=session.source_repo,
+        workspace=destination,
+        raw_paths=list(session.exposed_paths),
+        allow_sensitive_copy=True,
+        missing_is_error=True,
+        tracked_is_error=True,
+    )
+    projection_roots = {item.relative_path for item in session.runtime_projections}
+    projections = tuple(
+        RuntimeProjection(
+            relative_path=relative,
+            source_kind="workspace.copy_untracked",
+            destination=destination / relative,
+            is_directory=True,
+            copy_mode="physical_copy",
+            runtime_only=True,
+        )
+        for relative in copied
+        if relative in projection_roots
+    )
+    if {item.relative_path for item in projections} != projection_roots:
+        raise RuntimeError("Authoritative runtime projection could not be reconstructed")
+    return WorkspaceSession(
+        workspace=destination,
+        mode="reconstruction",
+        managed=False,
+        project_name=session.project_name,
+        source_repo=session.source_repo,
+        source_head=session.source_head,
+        source_base_sha=session.source_base_sha,
+        base_sha=session.base_sha,
+        result_mode="keep_worktree",
+        exposed_paths=copied,
+        runtime_projections=projections,
+        benchmark_isolated=session.benchmark_isolated,
+    )
+
+
 def _collect_untracked(repo: Path) -> list[str]:
     output = str(
         _run_git(repo, "ls-files", "--others", "--exclude-standard", "-z").stdout
@@ -824,14 +891,7 @@ def _build_patch(repo: Path, *, scratch_root: Path | None = None) -> bytes:
             excluded_prefixes=(
                 ".git",
                 ".harness_tmp",
-                ".venv",
                 ".harness_git_excludes",
-                "__pycache__",
-                "**/__pycache__",
-                "*.py[cod]",
-                "**/*.py[cod]",
-                ".pytest_cache",
-                "**/.pytest_cache",
             ),
         )
 
@@ -903,14 +963,7 @@ def build_candidate_patch(
             excluded_prefixes=(
                 ".git",
                 ".harness_tmp",
-                ".venv",
                 ".harness_git_excludes",
-                "__pycache__",
-                "**/__pycache__",
-                "*.py[cod]",
-                "**/*.py[cod]",
-                ".pytest_cache",
-                "**/.pytest_cache",
                 *session.exposed_paths,
                 *(item.relative_path for item in session.runtime_projections),
             ),

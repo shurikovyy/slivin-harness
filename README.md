@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a14 — Phase 7
+# Slivin Harness 0.8.0a15 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Текущий `0.8.0a14` quality-core сохраняет protocol/workflow versions и добавляет
+Текущий `0.8.0a15` quality-core сохраняет protocol/workflow versions и добавляет
 Stage 0 static toolchain gate до semantic baseline и agent stages:
 
 ```text
@@ -63,15 +63,20 @@ canonical candidate identity до/после probe batch. Любое измен�
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a14`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a15`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
 index/ignore state. Поэтому `.gitignore`, `.git/info/exclude`, local
 `core.excludesFile`, `assume-unchanged` и `skip-worktree` не скрывают новый или
 изменённый project file. Отдельный `GitControlIntegrityManager` замораживает
-HEAD/ref, index, local/worktree config и repository control files вокруг
-trusted batches; mutation инвалидирует текущий batch даже при exit code 0.
+HEAD/refs/replace, packed refs, shallow и object-lookup controls, index,
+local/worktree config и repository control files вокруг trusted batches.
+Restore использует только пути, зафиксированные baseline: common/source/external
+controls detect-only и никогда не становятся destination записи. Mutation
+инвалидирует текущий batch даже при exit code 0. Все static и post-plan/on-demand
+tool probes проходят через общий read-only coordinator, который одновременно
+защищает candidate, Git controls и runtime projection.
 Runtime projection, physical candidate и Git control state остаются тремя
 раздельными integrity boundaries.
 
@@ -244,7 +249,7 @@ Controller принимает результат только если Step 3–
 
 ### Patch reconstruction
 
-`candidate.patch` применяется в отдельной чистой verification-копии recorded baseline. Полученный `candidate_id` обязан побайтово совпасть с уже проверенным candidate. Только после этого создаётся immutable `final-acceptance.v2`.
+`candidate.patch` применяется в отдельной чистой verification-копии recorded baseline. Полученный `candidate_id` обязан побайтово совпасть с уже проверенным candidate. Затем proof repo заново получает source-authoritative runtime/exposed files, отдельный project runtime и proof toolchain, проходит static preflight, все active repair checks и, для benchmark, final held-out checks. Только `reconstructed-verification.v1=PASS` разрешает создать immutable `final-acceptance.v2`.
 
 Patch строится из того же physical changed-set через Controller-private
 disposable `GIT_INDEX_FILE`, с `git add -f` для ignored additions и отключёнными
@@ -287,7 +292,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a14 ...
+DOCS_SYNC_PASS harness=0.8.0a15 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -301,7 +306,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a14` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a15` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;
