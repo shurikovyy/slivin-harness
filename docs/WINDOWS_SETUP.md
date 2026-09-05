@@ -1,4 +1,4 @@
-# Windows setup для Slivin Harness 0.8.0a17
+# Windows setup для Slivin Harness 0.8.0a18
 
 ## Целевая среда
 
@@ -23,8 +23,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемо:
 
 ```text
-0.8.0a17
-DOCS_SYNC_PASS harness=0.8.0a17 ...
+0.8.0a18
+DOCS_SYNC_PASS harness=0.8.0a18 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -190,6 +190,11 @@ Git-control guard. Patch staging использует disposable private
 `GIT_INDEX_FILE`, `git add -f` и empty hooks directory, поэтому real workspace
 index остаётся неизменным.
 
+Trusted checks и agent self-verify тоже используют disposable index из `HEAD`.
+Это особенно важно после semantic reset: `git diff --check` на Windows может
+обновить stat cache даже при `GIT_OPTIONAL_LOCKS=0`, но теперь такая запись не
+попадает в real worktree index.
+
 Git-control restore использует только original paths baseline. Worktree/private
 standalone controls могут быть восстановлены; common/source/external refs,
 hooks, config и targets — detect-only. Loose/packed refs, replace refs, shallow,
@@ -242,4 +247,4 @@ benchmark сразу. Ожидаема строка `INTAKE_ARTIFACT_REPAIR`; п
 
 ## Следующий checkpoint
 
-После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a17` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.
+После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a18` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.

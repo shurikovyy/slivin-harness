@@ -271,6 +271,54 @@ class ImplementerContractTests(unittest.TestCase):
         self.assertNotEqual(before, candidate_content_fingerprint(repo))
         self.assertFalse(verify_self_verification_stamp(workspace=repo, stamp_path=stamp))
 
+    def test_self_verify_git_commands_do_not_refresh_real_index(self) -> None:
+        repo = self.make_repo()
+        (repo / "src" / "a.py").write_text("VALUE = 2\n", encoding="utf-8")
+        real_index = Path(
+            git(repo, "rev-parse", "--path-format=absolute", "--git-path", "index")
+        )
+        before = real_index.read_bytes()
+        specs = [
+            {
+                "name": "isolated index is available",
+                "feedback": "repair",
+                "command": [
+                    "{python}",
+                    "-c",
+                    (
+                        "import os,pathlib; "
+                        "p=pathlib.Path(os.environ['GIT_INDEX_FILE']); "
+                        "assert p.is_file(); assert '.harness_tmp' in p.as_posix()"
+                    ),
+                ],
+                "timeout_seconds": 30,
+            },
+            {
+                "name": "git diff check",
+                "feedback": "repair",
+                "command": ["git", "diff", "--check"],
+                "timeout_seconds": 30,
+            },
+        ]
+        _, stamp, command = prepare_self_verify_runner(
+            workspace=repo,
+            specs=specs,
+            toolchain={"project_python": sys.executable},
+        )
+        completed = subprocess.run(
+            command,
+            cwd=repo,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertTrue(stamp.is_file())
+        self.assertEqual(real_index.read_bytes(), before)
+
     def test_mutating_self_verify_cannot_issue_controller_receipt(self) -> None:
         repo = self.make_repo()
         (repo / ".gitignore").write_text("node_modules/\n", encoding="utf-8")

@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a17
+# Документация Slivin Harness 0.8.0a18
 
-Актуальная версия: **0.8.0a17 — capability-aware planning**.
+Актуальная версия: **0.8.0a18 — trusted check index isolation**.
 
 Основные документы:
 

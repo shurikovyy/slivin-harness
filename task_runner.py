@@ -33,6 +33,7 @@ from slivin_harness.git_integrity import (
     TrustedBatchIntegrityCoordinator,
     TrustedBatchIntegrityError,
     candidate_baseline_for,
+    isolated_git_index_environment,
 )
 from slivin_harness.evaluator import (
     run_evaluator,
@@ -856,6 +857,41 @@ BASELINE_ENTRIES = json.loads(__BASELINE_ENTRIES__)
 BASELINE_EXCLUDES = json.loads(__BASELINE_EXCLUDES__)
 
 
+def _prepare_isolated_git_index():
+    git_runtime = RUNTIME / "git-index"
+    git_runtime.mkdir(parents=True, exist_ok=True)
+    index_path = git_runtime / "index"
+    index_path.unlink(missing_ok=True)
+    (git_runtime / "index.lock").unlink(missing_ok=True)
+    hooks_path = git_runtime / "hooks"
+    hooks_path.mkdir(exist_ok=True)
+    env = os.environ.copy()
+    env.update({
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_INDEX_FILE": str(index_path),
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "core.hooksPath",
+        "GIT_CONFIG_VALUE_0": str(hooks_path),
+    })
+    initialized = subprocess.run(
+        ["git", "read-tree", "HEAD"], cwd=WORKSPACE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+    )
+    if initialized.returncode != 0:
+        print("SELF_VERIFY_GIT_INDEX_INIT_FAILED")
+        raise SystemExit(1)
+    os.environ.update({
+        key: env[key]
+        for key in (
+            "GIT_OPTIONAL_LOCKS", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+        )
+    })
+
+
+_prepare_isolated_git_index()
+
+
 def _git(*args):
     result = subprocess.run(
         ["git", *args],
@@ -1278,17 +1314,22 @@ def run_check(
     candidate_before = controller_check_fingerprint(workspace)
     started = time.monotonic()
     try:
-        result = subprocess.run(
-            command,
-            cwd=workspace,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=spec["timeout_seconds"],
-            env=env,
-        )
+        with isolated_git_index_environment(
+            workspace=workspace,
+            scratch_root=runtime_tmp,
+            environment=env,
+        ) as command_env:
+            result = subprocess.run(
+                command,
+                cwd=workspace,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=spec["timeout_seconds"],
+                env=command_env,
+            )
         return CheckResult(
             name=spec["name"],
             command=command,

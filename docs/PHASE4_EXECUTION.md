@@ -92,6 +92,13 @@ repository control files до/после self-verify, deterministic/dynamic/runt
 held-out batches. Green command, изменившая Git control state, классифицируется
 как infrastructure/integrity failure и не выпускает receipt.
 
+Trusted command subprocesses и Harness-owned self-verify получают отдельный
+одноразовый `GIT_INDEX_FILE`, initialized from `HEAD`, с отключёнными hooks.
+Это сохраняет прежнюю `git diff` semantics для candidate, но stat-cache refresh
+от `git diff --check` или вложенного project utility затрагивает только temporary
+index. Real index остаётся frozen; explicit mutation `.git` по-прежнему видит
+Git-control guard.
+
 Static и все post-plan/on-demand tool probes используют один
 `TrustedBatchIntegrityCoordinator.run_read_only`: capability evidence не
 принимается при mutation candidate, Git controls или runtime projection.

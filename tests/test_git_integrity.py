@@ -20,6 +20,7 @@ from slivin_harness.git_integrity import (
     CandidateWorkspaceBaseline,
     GitControlIntegrityError,
     GitControlIntegrityManager,
+    isolated_git_index_environment,
 )
 from slivin_harness.run_state import build_candidate_identity
 from slivin_harness.workspace import WorkspaceSession, build_candidate_patch
@@ -131,6 +132,44 @@ class GitIntegrityTests(unittest.TestCase):
                 encoding="utf-8"
             )
             self.assertNotIn(str(repo), public)
+
+    def test_trusted_git_diff_uses_disposable_index_and_preserves_real_index(self) -> None:
+        with self.temp_directory() as raw:
+            root = Path(raw)
+            repo, _baseline_sha, _plane = self.make_repo(root)
+            (repo / "tracked.js").write_text("candidate\n", encoding="utf-8")
+            real_index = Path(
+                git(
+                    repo,
+                    "rev-parse",
+                    "--path-format=absolute",
+                    "--git-path",
+                    "index",
+                ).strip()
+            )
+            before = real_index.read_bytes()
+            scratch = root / "trusted-check"
+            isolated_path: Path | None = None
+            with isolated_git_index_environment(
+                workspace=repo,
+                scratch_root=scratch,
+                environment=os.environ,
+            ) as environment:
+                isolated_path = Path(environment["GIT_INDEX_FILE"])
+                self.assertNotEqual(isolated_path, real_index)
+                completed = subprocess.run(
+                    ["git", "diff", "--check"],
+                    cwd=repo,
+                    env=environment,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    shell=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertTrue(isolated_path.is_file())
+            self.assertEqual(real_index.read_bytes(), before)
+            self.assertIsNotNone(isolated_path)
+            self.assertFalse(isolated_path.exists())
 
     def test_control_mutation_is_reported_when_operation_raises(self) -> None:
         with self.temp_directory() as raw:

@@ -4,8 +4,11 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import stat
 import subprocess
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -56,6 +59,67 @@ class TrustedBatchIntegrityError(RuntimeError):
     def __init__(self, reason_code: str, message: str) -> None:
         self.reason_code = reason_code
         super().__init__(message)
+
+
+@contextmanager
+def isolated_git_index_environment(
+    *,
+    workspace: Path,
+    scratch_root: Path,
+    environment: Mapping[str, str],
+) -> Iterable[dict[str, str]]:
+    """Give a trusted command a disposable HEAD index instead of the real index.
+
+    Even read-looking Git commands such as ``git diff --check`` may refresh
+    index stat data.  Trusted project commands therefore inherit a temporary
+    index initialized from HEAD.  Explicit writes to repository control files
+    remain visible to :class:`GitControlIntegrityManager`.
+    """
+
+    env = {str(key): str(value) for key, value in environment.items()}
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    probe = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=workspace,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+        env=env,
+    )
+    if probe.returncode != 0 or probe.stdout.strip().lower() != b"true":
+        yield env
+        return
+
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    temp_root = Path(tempfile.mkdtemp(prefix="git-index-", dir=scratch_root))
+    index_path = temp_root / "index"
+    hooks_path = temp_root / "hooks"
+    hooks_path.mkdir()
+    env.update(
+        {
+            "GIT_INDEX_FILE": str(index_path),
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.hooksPath",
+            "GIT_CONFIG_VALUE_0": str(hooks_path),
+        }
+    )
+    try:
+        initialized = subprocess.run(
+            ["git", "read-tree", "HEAD"],
+            cwd=workspace,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+            env=env,
+        )
+        if initialized.returncode != 0:
+            raise GitControlIntegrityError(
+                GIT_CONTROL_STATE_UNSUPPORTED,
+                "Trusted command isolated Git index could not be initialized",
+            )
+        yield env
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
 
 
 def _normalize_rel(value: str) -> str:

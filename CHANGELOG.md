@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.0a18 — Trusted check index isolation
+
+- Trusted Controller checks now run with a disposable `GIT_INDEX_FILE` initialized from `HEAD`, so read-looking Git commands cannot refresh the frozen real worktree index after semantic reset.
+- Harness-owned Implementer self-verification uses the same isolated-index semantics, while explicit writes to repository Git controls remain detectable by `GitControlIntegrityManager`.
+- Raised the package version to `0.8.0a18` without changing manifest, workflow, candidate, Planner, Implementer, or Evaluator protocol versions.
+
 ## 0.8.0a17 — Capability-aware planning
 
 - Planner now receives the Controller-authoritative, probe-backed verification capability set and public-safe manifest repair executor evidence before choosing proof routes.
