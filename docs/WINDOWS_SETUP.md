@@ -1,4 +1,4 @@
-# Windows setup для Slivin Harness 0.8.0a16
+# Windows setup для Slivin Harness 0.8.0a17
 
 ## Целевая среда
 
@@ -23,8 +23,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемо:
 
 ```text
-0.8.0a16
-DOCS_SYNC_PASS harness=0.8.0a16 ...
+0.8.0a17
+DOCS_SYNC_PASS harness=0.8.0a17 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -153,6 +153,10 @@ and is reported as `STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT` without raw output.
 Only toolchain entries referenced by manifest commands are required at this
 point; an unused configured `project_python` is not probed. New tool-backed
 requirements can still be probed by the post-plan capability gate.
+Planner receives this probe-backed capability set before selecting proof routes;
+one infeasible READY gets a single corrective turn before Contract compilation.
+An invalid optional `project_python` therefore cannot become available merely
+because it is present in `harness.local.toml`.
 
 ## Canonical path checks
 
@@ -238,4 +242,4 @@ benchmark сразу. Ожидаема строка `INTAKE_ARTIFACT_REPAIR`; п
 
 ## Следующий checkpoint
 
-После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a16` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.
+После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a17` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.

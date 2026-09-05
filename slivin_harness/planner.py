@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from slivin_harness.app_server import CodexAppServer
 from slivin_harness.protocol import (
@@ -14,13 +14,29 @@ from slivin_harness.protocol import (
     safe_repo_relative,
 )
 from slivin_harness.task_contract import validate_task_contract
-from slivin_harness.verification import PROOF_TARGET_SCHEMA, validate_proof_target
+from slivin_harness.verification import (
+    Capability,
+    PROOF_TARGET_SCHEMA,
+    proof_required_capabilities,
+    validate_proof_target,
+)
 from slivin_harness.workflow import PlannerStatus, enum_values
 
 _CONFIDENCE = ["HIGH", "MEDIUM", "LOW"]
 _DIAGNOSIS_KINDS = ["BUG", "FEATURE", "MIXED"]
 _UNKNOWN_KINDS = ["BLOCKING", "NON_BLOCKING", "PRODUCT_SEMANTIC"]
 _ALIGNMENT = ["ALIGNED", "INVALID"]
+
+
+class PlannerCapabilityInfeasible(RuntimeError):
+    reason_code = "PLANNER_CAPABILITY_INFEASIBLE"
+
+    def __init__(self, unavailable_capabilities: Iterable[str], *, plan: dict[str, Any]):
+        self.unavailable_capabilities = tuple(sorted(set(unavailable_capabilities)))
+        self.plan = plan
+        super().__init__(
+            self.reason_code + " " + ", ".join(self.unavailable_capabilities)
+        )
 
 PLANNER_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -221,8 +237,97 @@ extension point/design constraints для FEATURE. Не пиши patch и не �
 
 READY запрещён при LOW diagnosis confidence, blocking unknowns, product-semantic ambiguity,
 неподтверждённом compatibility-narrowing assumption или конфликте owner boundary.
+READY plan может требовать только capabilities из Controller-owned
+AVAILABLE_VERIFICATION_CAPABILITIES. Выбирай минимальную достаточную capability для
+конкретного proof route и не добавляй язык/runtime проекта «на всякий случай». Если
+недоступная capability действительно обязательна, верни BLOCKED с конкретным blocking
+unknown вместо READY с невыполнимым proof.
 Не используй previous plans, reference patches, hidden grader или другие копии проекта.
 """.strip()
+
+
+def planner_required_capabilities(plan: Mapping[str, Any]) -> set[str]:
+    """Collect explicit and proof-level-implied capabilities from planner.v4."""
+
+    proofs: list[Mapping[str, Any]] = []
+    for item in plan.get("affected_consumers", []):
+        if isinstance(item, Mapping) and isinstance(item.get("required_proof"), Mapping):
+            proofs.append(item["required_proof"])
+    state = plan.get("state_model")
+    if isinstance(state, Mapping) and isinstance(state.get("required_proof"), Mapping):
+        proofs.append(state["required_proof"])
+    for item in plan.get("risks", []):
+        if isinstance(item, Mapping) and isinstance(item.get("required_proof"), Mapping):
+            proofs.append(item["required_proof"])
+    evidence_plan = plan.get("evidence_plan")
+    if isinstance(evidence_plan, Mapping):
+        for group in ("regression", "preservation", "consumers", "boundaries"):
+            for proof in evidence_plan.get(group, []):
+                if isinstance(proof, Mapping):
+                    proofs.append(proof)
+    documentation = plan.get("documentation")
+    if isinstance(documentation, Mapping) and isinstance(
+        documentation.get("required_proof"), Mapping
+    ):
+        proofs.append(documentation["required_proof"])
+
+    required: set[str] = set()
+    for proof in proofs:
+        required.update(
+            proof_required_capabilities(
+                level=str(proof.get("level", "")),
+                capabilities=proof.get("capabilities", ()),
+            )
+        )
+    return required
+
+
+def planner_capability_gaps(
+    plan: Mapping[str, Any], *, available: Iterable[str]
+) -> list[str]:
+    if plan.get("status") != PlannerStatus.READY.value:
+        return []
+    return sorted(planner_required_capabilities(plan) - set(available))
+
+
+_FAMILY_TOOL_CAPABILITIES = {
+    "git": {Capability.GIT.value},
+    "node": {Capability.NODE.value},
+    "jest": {Capability.NODE.value, Capability.JEST.value},
+    "project_python": {Capability.PROJECT_PYTHON.value},
+}
+
+
+def manifest_repair_evidence(
+    static_preflight: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Build the public-safe executor evidence supplied to Planner."""
+    verified = set(str(value) for value in static_preflight.get("verified_capabilities", []))
+    result: list[dict[str, Any]] = []
+    for check in static_preflight.get("checks", []):
+        if not isinstance(check, Mapping) or check.get("feedback") != "repair":
+            continue
+        family = str(check.get("command_family") or "unknown")
+        result.append(
+            {
+                "check_name": str(check.get("name") or "<unnamed>"),
+                "command_family": family,
+                "verified_tool_capabilities": sorted(
+                    _FAMILY_TOOL_CAPABILITIES.get(family, set()) & verified
+                ),
+            }
+        )
+    return result
+
+
+def _parse_planner_output(raw: str) -> dict[str, Any]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Planner returned invalid JSON structured output.\n" + raw) from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("Planner returned a non-object structured output")
+    return value
 
 
 def _validate_claim_block(value: object, *, field: str, required_when_ready: bool = False) -> dict[str, Any]:
@@ -418,6 +523,8 @@ def run_planner(
     task_contract: dict[str, Any],
     preflight: dict,
     owner_allowed_paths: list[str],
+    available_verification_capabilities: Sequence[str],
+    manifest_repair_evidence: Sequence[Mapping[str, Any]],
     replan_context: str = "",
     explicit_skills: list[dict[str, str]] | None = None,
     on_heartbeat: Callable[[dict], None] | None = None,
@@ -446,6 +553,12 @@ OWNER-DEFINED HARD PATH BOUNDARY:
 Trusted preflight до изменений:
 {json.dumps(preflight, ensure_ascii=False, indent=2)}
 
+AVAILABLE_VERIFICATION_CAPABILITIES:
+{json.dumps(sorted(set(available_verification_capabilities)), ensure_ascii=False)}
+
+MANIFEST_REPAIR_EVIDENCE:
+{json.dumps(list(manifest_repair_evidence), ensure_ascii=False, indent=2)}
+
 {replan_context}
 
 Исследуй текущий repository независимо и верни planner.v4 artifact.
@@ -458,7 +571,41 @@ Trusted preflight до изменений:
         on_heartbeat=on_heartbeat,
         timeout=timeout,
     )
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Planner returned invalid JSON structured output.\n" + raw) from exc
+    plan = _parse_planner_output(raw)
+    validate_plan_artifact(plan, workspace=workspace, task_contract=task_contract)
+    unavailable = planner_capability_gaps(
+        plan, available=available_verification_capabilities
+    )
+    if not unavailable:
+        return plan
+
+    correction_prompt = f"""
+CAPABILITY FEASIBILITY CORRECTION
+
+Твой READY plan потребовал недоступные capabilities:
+{json.dumps(unavailable, ensure_ascii=False)}
+
+Controller-authoritative available capabilities:
+{json.dumps(sorted(set(available_verification_capabilities)), ensure_ascii=False)}
+
+Верни полный planner.v4 artifact. Сохрани product claims, но выбери честный конкретный
+proof route только из available capabilities. Не заменяй недоступный executor фиктивным.
+Если без недоступной capability обязательный proof действительно невозможен, верни BLOCKED
+с конкретным BLOCKING unknown. Это единственный corrective turn.
+""".strip()
+    corrected_raw = codex.run_turn(
+        thread_id=thread_id,
+        prompt=correction_prompt,
+        output_schema=PLANNER_SCHEMA,
+        skills=explicit_skills,
+        on_heartbeat=on_heartbeat,
+        timeout=timeout,
+    )
+    corrected = _parse_planner_output(corrected_raw)
+    validate_plan_artifact(corrected, workspace=workspace, task_contract=task_contract)
+    remaining = planner_capability_gaps(
+        corrected, available=available_verification_capabilities
+    )
+    if remaining:
+        raise PlannerCapabilityInfeasible(remaining, plan=corrected)
+    return corrected

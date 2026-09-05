@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a16 — Phase 7
+# Модель качества Slivin Harness 0.8.0a17 — Phase 7
 
 ## Основная формула
 
@@ -66,7 +66,7 @@ agent-provided `receipt_id` Controller authority.
 
 ### Planner
 
-`planner.v4` характеризует current behavior, existing contract, root cause/extension point, consumers, state model, risks и evidence plan. Planner не доказывает корректность future candidate.
+`planner.v4` характеризует current behavior, existing contract, root cause/extension point, consumers, state model, risks и evidence plan. Planner не доказывает корректность future candidate. Controller заранее сообщает только подтверждённые executors; READY proof не может стохастически потребовать отсутствующую capability. Первый overreach получает один corrective turn в том же thread, повторный блокируется до Contract compiler.
 
 ### Implementation Contract
 
@@ -305,7 +305,7 @@ historical benchmark не раскрывает другие refs/objects/held-ou
 успешный CI/deployment/production rollout;
 ```
 
-Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a16` первый такой checkpoint — historical `_90`.
+Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a17` первый такой checkpoint — historical `_90`.
 
 ## Версии
 

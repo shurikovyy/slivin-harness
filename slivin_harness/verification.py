@@ -242,6 +242,19 @@ def _required_capabilities(level: str, capabilities: Iterable[str]) -> set[str]:
     return result
 
 
+def proof_required_capabilities(
+    *, level: str, capabilities: Iterable[str]
+) -> set[str]:
+    """Return explicit and executor-implied capabilities for one proof target."""
+    values = list(capabilities)
+    _validate_level_and_capabilities(
+        level=level,
+        capabilities=values,
+        field="proof_target",
+    )
+    return _required_capabilities(level, values)
+
+
 def compile_verification_plan(
     implementation_contract: Mapping[str, Any],
     *,

@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a16
+# Документация Slivin Harness 0.8.0a17
 
-Актуальная версия: **0.8.0a16 — strict agent output schemas**.
+Актуальная версия: **0.8.0a17 — capability-aware planning**.
 
 Основные документы:
 

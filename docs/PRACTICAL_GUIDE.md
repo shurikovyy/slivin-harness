@@ -1,4 +1,4 @@
-# Практическая работа с Slivin Harness 0.8.0a16
+# Практическая работа с Slivin Harness 0.8.0a17
 
 ## Установка и self-check
 
@@ -11,8 +11,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемый финал:
 
 ```text
-0.8.0a16
-DOCS_SYNC_PASS harness=0.8.0a16 ...
+0.8.0a17
+DOCS_SYNC_PASS harness=0.8.0a17 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -82,6 +82,12 @@ roots, без `coverage`/cache wildcard heuristics.
 успешные static probes и проверяет on demand впервые появившиеся tool-backed или
 runtime capabilities. Поэтому optional `project_python`, не используемый
 manifest и не требуемый Verification Plan, остаётся `UNUSED_NOT_PROBED`.
+
+До компиляции первого Contract Planner видит authoritative available set и
+repair command families. Он не должен добавлять `PROJECT_PYTHON` или другую
+capability «на всякий случай»: proof route обязан соответствовать конкретному
+доступному executor. Для одного ошибочного READY разрешён один corrective turn;
+повторный overreach даёт `PLANNER_CAPABILITY_INFEASIBLE`.
 
 Runtime is not a ritual step. A local-only Verification Plan records:
 

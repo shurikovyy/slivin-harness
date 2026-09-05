@@ -60,6 +60,14 @@ candidate, Git control state and projected runtime; a configured key or boolean
 declaration alone is not capability evidence. Non-tool runtime scenario
 selection remains a late Verification Plan concern.
 
+Before the initial Contract compilation, Planner also receives the currently
+available probe-backed capabilities and public-safe manifest repair command
+families. Explicit proof capabilities and the runtime executor implied by a
+proof level must be feasible. One corrective turn may replace an unavailable
+proof route or return honest `BLOCKED`; a second infeasible READY stops as
+`PLANNER_CAPABILITY_INFEASIBLE`. The retained post-plan gate still handles
+later Contract expansion and newly discovered requirements.
+
 The command placeholder contract preserves the Phase 5 runtime: `{python}` uses
 the worktree-local `project_python` when it exists, then configured `python`, and
 only then the Harness interpreter. `{project_python}` has no fallback and needs

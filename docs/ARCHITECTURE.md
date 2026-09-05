@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a16 — Phase 7
+# Архитектура Slivin Harness 0.8.0a17 — Phase 7
 
 ## Назначение
 
-`0.8.0a16` сохраняет согласованный Step 0–7 quality-core и проверяет strict Structured Outputs contract локально до App Server `turn/start`, без изменения protocol/workflow versions.
+`0.8.0a17` сохраняет согласованный Step 0–7 quality-core, проверяет strict Structured Outputs contract локально до App Server `turn/start` и ограничивает Planner доказанными executors без изменения protocol/workflow versions.
 
 Machine phase id:
 
@@ -35,7 +35,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a16
+Harness                     0.8.0a17
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -220,7 +220,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a16`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a17`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -230,6 +230,11 @@ artifact не входит.
 `planner.v4` исследует current behavior, intended contract, root cause или extension point, consumers, state model, risks и typed evidence plan.
 
 Planner read-only относительно candidate и не получает previous solution/reference/held-out.
+Controller передаёт ему probe-backed `AVAILABLE_VERIFICATION_CAPABILITIES` и
+public-safe manifest repair evidence без held-out command. Explicit capabilities
+и implicit runtime capability proof level проверяются до Contract compiler. Один
+невыполнимый READY получает corrective turn в том же thread; второй даёт
+`PLANNER_CAPABILITY_INFEASIBLE` и не создаёт Implementation Contract.
 
 ## 5. Step 2 — Contract compiler
 
@@ -254,6 +259,8 @@ Tool-backed `GIT`, `PROJECT_PYTHON`, `NODE` и `JEST` считаются availab
 по успешному Controller probe evidence. Раннее evidence переиспользуется;
 новое требование Verification Plan пробуется on demand тем же registry.
 Configured/runtime semantics non-tool capabilities остаются отдельными.
+Этот retained gate не заменён Planner feasibility: он по-прежнему покрывает
+contract expansion, registered checks и действительно новые runtime requirements.
 
 ## 6. Step 3 — Implementer
 
@@ -488,7 +495,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a16` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a17` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 

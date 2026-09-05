@@ -12,6 +12,7 @@ from unittest import mock
 
 import task_runner
 from slivin_harness.implementer import IMPLEMENTER_PROTOCOL_VERSION
+from slivin_harness.planner import PlannerCapabilityInfeasible
 from slivin_harness.protocol import EVALUATOR_PROTOCOL_VERSION
 from slivin_harness.workflow import StageResultCode, StageState
 from test_protocol import valid_blind_audit, valid_pass, valid_plan, valid_task_contract
@@ -123,6 +124,7 @@ timeout_seconds = 30
         with_replan: bool = False,
         benchmark_fail: bool = False,
         projected_jest: bool = False,
+        planner_exception: PlannerCapabilityInfeasible | None = None,
     ) -> tuple[int, Path, str]:
         root = Path(tempfile.mkdtemp(prefix="slivin-main-workflow-"))
         repo = self.make_repo(root)
@@ -149,6 +151,8 @@ timeout_seconds = 30
             return valid_task_contract()
 
         def fake_planner(*_args, **_kwargs):
+            if planner_exception is not None:
+                raise planner_exception
             return valid_plan()
 
         evaluator_calls = 0
@@ -294,6 +298,25 @@ timeout_seconds = 30
             result = task_runner.main([str(manifest)])
         return result, run_root, output.getvalue()
 
+    def test_infeasible_corrected_plan_stops_before_contract_and_implementer(self) -> None:
+        plan = valid_plan()
+        plan["evidence_plan"]["regression"][0]["capabilities"] = [
+            "PROJECT_PYTHON"
+        ]
+        result, run_root, output = self.run_case(
+            benchmark=False,
+            risk="medium",
+            planner_exception=PlannerCapabilityInfeasible(
+                ["PROJECT_PYTHON"], plan=plan
+            ),
+        )
+        self.assertEqual(result, 2, output)
+        self.assertIn("PLANNER_CAPABILITY_INFEASIBLE PROJECT_PYTHON", output)
+        self.assertTrue((run_root / "plan_01.json").is_file())
+        self.assertFalse((run_root / "implementation_contract_01.json").exists())
+        self.assertFalse((run_root / "verification_plan_01.json").exists())
+        self.assertFalse((run_root / "implementation_report_01.json").exists())
+
     def test_production_run_records_all_steps_and_terminal_pass(self) -> None:
         result, run_root, output = self.run_case(benchmark=False)
         self.assertEqual(result, 0, output)
@@ -337,7 +360,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a16")
+        self.assertEqual(build_identity["version"], "0.8.0a17")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)

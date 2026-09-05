@@ -47,7 +47,13 @@ from slivin_harness.implementer import (
     validate_implementation_contract,
     validate_implementation_report,
 )
-from slivin_harness.planner import run_planner, validate_plan_artifact as validate_planner_artifact
+from slivin_harness.planner import (
+    PlannerCapabilityInfeasible,
+    manifest_repair_evidence as build_manifest_repair_evidence,
+    planner_capability_gaps,
+    run_planner,
+    validate_plan_artifact as validate_planner_artifact,
+)
 from slivin_harness.phase4 import (
     CheckClassification,
     CheckRegistry,
@@ -2448,6 +2454,19 @@ def main(argv: list[str] | None = None) -> int:
         runtime_scenarios = runtime_scenarios_from_config(
             local_config, project_name=session.project_name
         )
+        declared_capabilities = configured_capabilities(
+            local_config, project_name=session.project_name
+        )
+        runtime_capabilities = runtime_available_capabilities(runtime_scenarios)
+        planning_available_capabilities = available_capabilities(
+            toolchain=toolchain,
+            configured=declared_capabilities,
+            runtime=runtime_capabilities,
+            verified_tool_capabilities=tool_probe_registry.verified_capabilities,
+        )
+        planner_repair_evidence = build_manifest_repair_evidence(
+            static_preflight.public_dict()
+        )
         runtime_executor = RuntimeExecutor(
             workspace=workspace,
             source_repo=session.source_repo,
@@ -2642,22 +2661,61 @@ def main(argv: list[str] | None = None) -> int:
             run_state.begin_stage(StageId.PLANNER)
             if pipeline_profile == PipelineProfile.FULL:
                 print("=== PLAN ===")
-                plan = integrity_coordinator.run_read_only(
-                    "PLANNER_TURN:1",
-                    lambda: run_planner(
-                        codex,
-                        workspace=workspace,
-                        task_prompt=manifest["prompt"],
-                        task_contract=task_contract,
-                        preflight=preflight,
-                        owner_allowed_paths=allowed_paths,
-                        replan_context=planner_benchmark_context(benchmark_evidence),
-                        on_heartbeat=make_heartbeat("PLAN"),
-                        on_thread_started=_thread_recorder(recorder, "planner_1"),
-                        timeout=timeout,
-                    ),
-                )
+                try:
+                    plan = integrity_coordinator.run_read_only(
+                        "PLANNER_TURN:1",
+                        lambda: run_planner(
+                            codex,
+                            workspace=workspace,
+                            task_prompt=manifest["prompt"],
+                            task_contract=task_contract,
+                            preflight=preflight,
+                            owner_allowed_paths=allowed_paths,
+                            available_verification_capabilities=sorted(
+                                planning_available_capabilities
+                            ),
+                            manifest_repair_evidence=planner_repair_evidence,
+                            replan_context=planner_benchmark_context(benchmark_evidence),
+                            on_heartbeat=make_heartbeat("PLAN"),
+                            on_thread_started=_thread_recorder(recorder, "planner_1"),
+                            timeout=timeout,
+                        ),
+                    )
+                except PlannerCapabilityInfeasible as exc:
+                    plan = exc.plan
+                    recorder.write_authoritative_json("plan_01.json", plan)
+                    run_state.bump_revision(RevisionKind.PLAN, artifact="plan_01.json")
+                    run_state.route_stage(
+                        StageId.PLANNER,
+                        outcome=WorkflowOutcome.BLOCKED,
+                        result_code=StageResultCode.BLOCKED,
+                        reason_code=exc.reason_code,
+                        artifacts=("plan_01.json",),
+                    )
+                    print(
+                        "HARNESS_TASK_STOPPED: PLANNER_CAPABILITY_INFEASIBLE",
+                        ", ".join(exc.unavailable_capabilities),
+                    )
+                    return 2
                 validate_plan_artifact(plan, workspace=workspace, task_contract=task_contract)
+                remaining_planner_gaps = planner_capability_gaps(
+                    plan, available=planning_available_capabilities
+                )
+                if remaining_planner_gaps:
+                    recorder.write_authoritative_json("plan_01.json", plan)
+                    run_state.bump_revision(RevisionKind.PLAN, artifact="plan_01.json")
+                    run_state.route_stage(
+                        StageId.PLANNER,
+                        outcome=WorkflowOutcome.BLOCKED,
+                        result_code=StageResultCode.BLOCKED,
+                        reason_code="PLANNER_CAPABILITY_INFEASIBLE",
+                        artifacts=("plan_01.json",),
+                    )
+                    print(
+                        "HARNESS_TASK_STOPPED: PLANNER_CAPABILITY_INFEASIBLE",
+                        ", ".join(remaining_planner_gaps),
+                    )
+                    return 2
                 recorder.write_authoritative_json("plan_01.json", plan)
                 run_state.bump_revision(RevisionKind.PLAN, artifact="plan_01.json")
                 print(json.dumps(plan, ensure_ascii=False, indent=2))
@@ -2719,10 +2777,6 @@ def main(argv: list[str] | None = None) -> int:
                 RevisionKind.VERIFICATION_PLAN,
                 artifact="verification_plan_01.json",
             )
-            declared_capabilities = configured_capabilities(
-                local_config, project_name=session.project_name
-            )
-            runtime_capabilities = runtime_available_capabilities(runtime_scenarios)
             post_plan_tool_probes = tool_probe_registry.ensure_capabilities(
                 verification_plan["required_capabilities"],
                 batch_id="post-plan-capability-gate-01",
@@ -3960,26 +4014,79 @@ def main(argv: list[str] | None = None) -> int:
                         tool_probe_registry.invalidate_runtime_environment_evidence()
 
                     run_state.begin_stage(StageId.PLANNER)
-                    plan = integrity_coordinator.run_read_only(
-                        f"PLANNER_REPLAN:{replan_cycles}",
-                        lambda: run_planner(
-                            codex,
-                            workspace=workspace,
-                            task_prompt=manifest["prompt"],
-                            task_contract=task_contract,
-                            preflight=preflight,
-                            owner_allowed_paths=allowed_paths,
-                            replan_context=(
-                                "Current candidate was rejected by a blind Evaluator. "
-                                "Observed reason (not a reference implementation):\n"
-                                + evaluation["reason"]
-                            ),
-                            on_heartbeat=make_heartbeat(f"REPLAN #{replan_cycles}"),
-                            on_thread_started=_thread_recorder(recorder, f"planner_replan_{replan_cycles}"),
-                            timeout=timeout,
-                        ),
+                    replan_available_capabilities = available_capabilities(
+                        toolchain=toolchain,
+                        configured=declared_capabilities,
+                        runtime=runtime_available_capabilities(runtime_scenarios),
+                        verified_tool_capabilities=tool_probe_registry.verified_capabilities,
                     )
+                    try:
+                        plan = integrity_coordinator.run_read_only(
+                            f"PLANNER_REPLAN:{replan_cycles}",
+                            lambda: run_planner(
+                                codex,
+                                workspace=workspace,
+                                task_prompt=manifest["prompt"],
+                                task_contract=task_contract,
+                                preflight=preflight,
+                                owner_allowed_paths=allowed_paths,
+                                available_verification_capabilities=sorted(
+                                    replan_available_capabilities
+                                ),
+                                manifest_repair_evidence=planner_repair_evidence,
+                                replan_context=(
+                                    "Current candidate was rejected by a blind Evaluator. "
+                                    "Observed reason (not a reference implementation):\n"
+                                    + evaluation["reason"]
+                                ),
+                                on_heartbeat=make_heartbeat(f"REPLAN #{replan_cycles}"),
+                                on_thread_started=_thread_recorder(
+                                    recorder, f"planner_replan_{replan_cycles}"
+                                ),
+                                timeout=timeout,
+                            ),
+                        )
+                    except PlannerCapabilityInfeasible as exc:
+                        plan = exc.plan
+                        replan_artifact = f"replan_{replan_cycles:02d}.json"
+                        recorder.write_authoritative_json(replan_artifact, plan)
+                        run_state.bump_revision(
+                            RevisionKind.PLAN, artifact=replan_artifact
+                        )
+                        run_state.route_stage(
+                            StageId.PLANNER,
+                            outcome=WorkflowOutcome.BLOCKED,
+                            result_code=StageResultCode.BLOCKED,
+                            reason_code=exc.reason_code,
+                            artifacts=(replan_artifact,),
+                        )
+                        print(
+                            "HARNESS_TASK_STOPPED: PLANNER_CAPABILITY_INFEASIBLE",
+                            ", ".join(exc.unavailable_capabilities),
+                        )
+                        return 2
                     validate_plan_artifact(plan, workspace=workspace, task_contract=task_contract)
+                    remaining_replan_gaps = planner_capability_gaps(
+                        plan, available=replan_available_capabilities
+                    )
+                    if remaining_replan_gaps:
+                        replan_artifact = f"replan_{replan_cycles:02d}.json"
+                        recorder.write_authoritative_json(replan_artifact, plan)
+                        run_state.bump_revision(
+                            RevisionKind.PLAN, artifact=replan_artifact
+                        )
+                        run_state.route_stage(
+                            StageId.PLANNER,
+                            outcome=WorkflowOutcome.BLOCKED,
+                            result_code=StageResultCode.BLOCKED,
+                            reason_code="PLANNER_CAPABILITY_INFEASIBLE",
+                            artifacts=(replan_artifact,),
+                        )
+                        print(
+                            "HARNESS_TASK_STOPPED: PLANNER_CAPABILITY_INFEASIBLE",
+                            ", ".join(remaining_replan_gaps),
+                        )
+                        return 2
                     replan_artifact = f"replan_{replan_cycles:02d}.json"
                     recorder.write_authoritative_json(replan_artifact, plan)
                     run_state.bump_revision(RevisionKind.PLAN, artifact=replan_artifact)

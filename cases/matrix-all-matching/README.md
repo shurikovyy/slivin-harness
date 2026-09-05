@@ -112,6 +112,10 @@ semantic script проверяется на наличие, но не испол
 содержит source absolute path. Текущий manifest использует `{node}`, `{jest}` и
 `{harness_python}`, но не `{python}`/`{project_python}`; поэтому optional local
 `project_python` не нужен и, если всё же задан, остаётся `UNUSED_NOT_PROBED`.
+Planner получает подтверждённый available set `GIT`, `NODE`, `JEST`,
+`DOCS_SYNC` и public-safe repair executor families. Он не должен добавлять
+`PROJECT_PYTHON` без concrete Python proof route; один ошибочный READY
+корректируется в том же Planner thread до компиляции Contract.
 
 `{python}` в generic project checks остаётся project-first alias, тогда как EOL
 check Matrix явно использует `{harness_python}`, потому что

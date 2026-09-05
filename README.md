@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a16 — Phase 7
+# Slivin Harness 0.8.0a17 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Текущий `0.8.0a16` quality-core сохраняет protocol/workflow versions, strict-валидацию
+Текущий `0.8.0a17` quality-core сохраняет protocol/workflow versions, strict-валидацию
 agent output schemas до `turn/start` и ранее добавленный
 Stage 0 static toolchain gate до semantic baseline и agent stages:
 
@@ -71,7 +71,7 @@ canonical candidate identity до/после probe batch. Любое измен�
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a16`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a17`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
@@ -134,6 +134,12 @@ documentation decision
 ```
 
 Planner остаётся read-only и не может заменить пользовательское acceptance собственной формулировкой.
+До turn он получает только Controller-authoritative
+`AVAILABLE_VERIFICATION_CAPABILITIES` и public-safe evidence о repair command
+families. READY может выбирать proof capabilities только из этого набора. Если
+первый artifact требует недоступный executor, тот же thread получает один
+corrective turn; повторный невыполнимый READY останавливается как
+`PLANNER_CAPABILITY_INFEASIBLE` до компиляции Implementation Contract.
 
 ### Implementation Contract v3
 
@@ -300,7 +306,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a16 ...
+DOCS_SYNC_PASS harness=0.8.0a17 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -314,7 +320,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a16` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a17` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.0a17 — Capability-aware planning
+
+- Planner now receives the Controller-authoritative, probe-backed verification capability set and public-safe manifest repair executor evidence before choosing proof routes.
+- A READY plan whose explicit or proof-level-implied capability is unavailable receives one corrective turn in the same Planner thread before any Implementation Contract is compiled; repeated overreach stops as `PLANNER_CAPABILITY_INFEASIBLE`.
+- The retained post-plan and dynamic capability gates still probe genuinely new requirements on demand; declarations or sanitized paths alone do not become capability evidence.
+- Raised the package version to `0.8.0a17` without changing manifest, workflow, candidate, Planner, Implementer, or Evaluator protocol versions.
+
 ## 0.8.0a16 — Strict agent output schemas
 
 - Added recursive Controller validation for every JSON Schema passed to Codex App Server Structured Outputs. Object schemas must reject additional properties and require every declared property before `turn/start`.
