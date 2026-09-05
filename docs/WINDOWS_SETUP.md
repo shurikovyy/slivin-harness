@@ -1,4 +1,4 @@
-# Windows setup для Slivin Harness 0.8.0a19
+# Windows setup для Slivin Harness 0.8.0a20
 
 ## Целевая среда
 
@@ -23,8 +23,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемо:
 
 ```text
-0.8.0a19
-DOCS_SYNC_PASS harness=0.8.0a19 ...
+0.8.0a20
+DOCS_SYNC_PASS harness=0.8.0a20 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -195,6 +195,10 @@ Trusted checks и agent self-verify тоже используют disposable ind
 обновить stat cache даже при `GIT_OPTIONAL_LOCKS=0`, но теперь такая запись не
 попадает в real worktree index.
 
+Generated Harness-owned `self_verify.py` явно переводит stdout/stderr в UTF-8
+до запуска checks. Поэтому Unicode Jest output (включая `√`) не зависит от
+legacy console code page вроде CP1251.
+
 Git-control restore использует только original paths baseline. Worktree/private
 standalone controls могут быть восстановлены; common/source/external refs,
 hooks, config и targets — detect-only. Loose/packed refs, replace refs, shallow,
@@ -247,4 +251,4 @@ benchmark сразу. Ожидаема строка `INTAKE_ARTIFACT_REPAIR`; п
 
 ## Следующий checkpoint
 
-После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a19` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.
+После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a20` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.

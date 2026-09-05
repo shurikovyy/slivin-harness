@@ -847,6 +847,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 WORKSPACE = Path(__WORKSPACE__)
@@ -855,6 +856,22 @@ STAMP = Path(__STAMP__)
 CHECKS = json.loads(__CHECKS__)
 BASELINE_ENTRIES = json.loads(__BASELINE_ENTRIES__)
 BASELINE_EXCLUDES = json.loads(__BASELINE_EXCLUDES__)
+
+
+def _configure_utf8_stdio():
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(
+                encoding="utf-8",
+                errors="replace",
+                line_buffering=True,
+                write_through=True,
+            )
+
+
+_configure_utf8_stdio()
 
 
 def _prepare_isolated_git_index():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -270,6 +271,39 @@ class ImplementerContractTests(unittest.TestCase):
         (repo / "src" / "a.py").write_text("VALUE = 3\n", encoding="utf-8")
         self.assertNotEqual(before, candidate_content_fingerprint(repo))
         self.assertFalse(verify_self_verification_stamp(workspace=repo, stamp_path=stamp))
+
+    def test_self_verify_forces_utf8_output_under_legacy_windows_encoding(self) -> None:
+        repo = self.make_repo()
+        specs = [{
+            "name": "unicode output",
+            "feedback": "repair",
+            "command": [
+                "{python}",
+                "-c",
+                "import sys; sys.stdout.buffer.write('√'.encode('utf-8'))",
+            ],
+            "timeout_seconds": 30,
+        }]
+        _, stamp, command = prepare_self_verify_runner(
+            workspace=repo,
+            specs=specs,
+            toolchain={"project_python": sys.executable},
+        )
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "cp1251"
+        completed = subprocess.run(
+            command,
+            cwd=repo,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+            check=False,
+        )
+        output = completed.stdout.decode("utf-8", errors="strict")
+        self.assertEqual(completed.returncode, 0, output)
+        self.assertIn("√", output)
+        self.assertIn("SELF_VERIFY_PASS", output)
+        self.assertTrue(stamp.is_file())
 
     def test_self_verify_git_commands_do_not_refresh_real_index(self) -> None:
         repo = self.make_repo()

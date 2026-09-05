@@ -99,6 +99,11 @@ Trusted command subprocesses и Harness-owned self-verify получают от�
 index. Real index остаётся frozen; explicit mutation `.git` по-прежнему видит
 Git-control guard.
 
+Generated Harness-owned `self_verify.py` reconfigures its own stdout/stderr to
+UTF-8 before running checks. Unicode output from Jest or another project check
+therefore cannot turn an otherwise valid self-verification into a legacy Windows
+console-encoding crash.
+
 Static и все post-plan/on-demand tool probes используют один
 `TrustedBatchIntegrityCoordinator.run_read_only`: capability evidence не
 принимается при mutation candidate, Git controls или runtime projection.

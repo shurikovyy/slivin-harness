@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a19 — Phase 7
+# Модель качества Slivin Harness 0.8.0a20 — Phase 7
 
 ## Основная формула
 
@@ -308,7 +308,7 @@ historical benchmark не раскрывает другие refs/objects/held-ou
 успешный CI/deployment/production rollout;
 ```
 
-Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a19` первый такой checkpoint — historical `_90`.
+Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a20` первый такой checkpoint — historical `_90`.
 
 ## Версии
 

@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a19 — Phase 7
+# Slivin Harness 0.8.0a20 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Текущий `0.8.0a19` quality-core сохраняет protocol/workflow versions, strict-валидацию
+Текущий `0.8.0a20` quality-core сохраняет protocol/workflow versions, strict-валидацию
 agent output schemas до `turn/start` и ранее добавленный
 Stage 0 static toolchain gate до semantic baseline и agent stages:
 
@@ -71,7 +71,7 @@ canonical candidate identity до/после probe batch. Любое измен�
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a19`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a20`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
@@ -274,6 +274,9 @@ hooks. Persistent worktree index не меняется; ignored candidate file �
 `GIT_INDEX_FILE`, созданный из `HEAD`. Поэтому `git diff --check` и вложенные
 read-looking Git вызовы могут обновлять только disposable stat cache, а frozen
 real index остаётся побайтово неизменным и продолжает проверяться Git-control guard.
+Generated Harness-owned `self_verify.py` до первого вывода настраивает свои
+`stdout/stderr` как UTF-8, поэтому Unicode output project checks не зависит от
+legacy Windows console code page.
 
 Private reconstruction repository зеркалирует только effective Git settings, которые определяют worktree bytes/mode (`core.autocrlf`, `core.eol`, `core.safecrlf`, `core.filemode`, `core.symlinks`). Это сохраняет строгий CRLF/LF byte-level proof на native Windows, не перенося arbitrary hooks, aliases, transports или credentials.
 
@@ -311,7 +314,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a19 ...
+DOCS_SYNC_PASS harness=0.8.0a20 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -325,7 +328,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a19` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a20` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

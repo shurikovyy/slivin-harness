@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.0a20 — UTF-8 Implementer self-verification output
+
+- Harness-owned generated `self_verify.py` now reconfigures its own stdout/stderr to UTF-8 before emitting check output, so Unicode Jest diagnostics cannot crash the runner under legacy Windows console encodings such as CP1251.
+- Added a regression test that executes self-verification under an explicit CP1251 startup encoding and verifies the real Unicode output and receipt-producing success path.
+- Raised the package version to `0.8.0a20` without changing manifest, workflow, candidate, Planner, Implementer, or Evaluator protocol versions.
+
 ## 0.8.0a19 — Benchmark semantic terminal classification
 
 - Historical held-out semantic failures now terminate as `HARNESS_BENCHMARK_SEMANTIC_FAIL`; the typed `HELDOUT_SEMANTIC_FAIL` evidence, exit code `1`, hidden-output boundary, and no-Final-Acceptance behavior are unchanged.

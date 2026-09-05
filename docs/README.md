@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a19
+# Документация Slivin Harness 0.8.0a20
 
-Актуальная версия: **0.8.0a19 — benchmark semantic terminal classification**.
+Актуальная версия: **0.8.0a20 — UTF-8 Implementer self-verification output**.
 
 Основные документы:
 

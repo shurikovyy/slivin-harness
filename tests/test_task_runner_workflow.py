@@ -360,7 +360,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a19")
+        self.assertEqual(build_identity["version"], "0.8.0a20")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)
