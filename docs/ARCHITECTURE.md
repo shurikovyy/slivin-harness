@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a18 — Phase 7
+# Архитектура Slivin Harness 0.8.0a19 — Phase 7
 
 ## Назначение
 
-`0.8.0a18` сохраняет согласованный Step 0–7 quality-core, проверяет strict Structured Outputs contract локально до App Server `turn/start` и ограничивает Planner доказанными executors без изменения protocol/workflow versions.
+`0.8.0a19` сохраняет согласованный Step 0–7 quality-core, проверяет strict Structured Outputs contract локально до App Server `turn/start` и ограничивает Planner доказанными executors без изменения protocol/workflow versions.
 
 Machine phase id:
 
@@ -35,7 +35,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a18
+Harness                     0.8.0a19
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -220,7 +220,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a18`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a19`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -432,6 +432,9 @@ HELDOUT_MUTATED_CANDIDATE
 ```
 
 Hidden failure никогда не возвращается агентам текущего trial.
+Semantic held-out failure получает terminal result
+`HARNESS_BENCHMARK_SEMANTIC_FAIL`; infrastructure/invalid outcomes не используют
+этот result code.
 
 ### Source-owned runtime projection
 
@@ -495,7 +498,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a18` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a19` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 

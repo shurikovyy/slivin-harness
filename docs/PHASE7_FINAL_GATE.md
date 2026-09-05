@@ -346,7 +346,10 @@ HELDOUT_MUTATED_CANDIDATE
 
 Semantic fail требует oracle marker: обычная ошибка запуска Node/Python не может выдаваться за доказательство неправильного candidate.
 
-`HELDOUT_SEMANTIC_FAIL` завершает текущий trial. Hidden assertions не возвращаются агентам для ещё одной попытки. Evidence сохраняется как `heldout-evidence.v2` для разработчика Harness.
+`HELDOUT_SEMANTIC_FAIL` завершает текущий trial с terminal result
+`HARNESS_BENCHMARK_SEMANTIC_FAIL`. Hidden assertions не возвращаются агентам для
+ещё одной попытки. Evidence сохраняется как `heldout-evidence.v2` для разработчика
+Harness; Final Acceptance не создаётся.
 
 ## 8. Что Phase 7 не делает
 
@@ -375,7 +378,7 @@ Execution Broker продолжает честно различать `ENFORCED`
 
 ## 9. Следующий checkpoint
 
-После Windows `HARNESS_SELF_CHECK_PASS` версии `0.8.0a18` новых архитектурных фаз quality-core не требуется.
+После Windows `HARNESS_SELF_CHECK_PASS` версии `0.8.0a19` новых архитектурных фаз quality-core не требуется.
 
 Следующий шаг:
 

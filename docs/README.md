@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a18
+# Документация Slivin Harness 0.8.0a19
 
-Актуальная версия: **0.8.0a18 — trusted check index isolation**.
+Актуальная версия: **0.8.0a19 — benchmark semantic terminal classification**.
 
 Основные документы:
 

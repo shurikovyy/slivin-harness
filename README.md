@@ -1,8 +1,8 @@
-# Slivin Harness 0.8.0a18 — Phase 7
+# Slivin Harness 0.8.0a19 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
-Текущий `0.8.0a18` quality-core сохраняет protocol/workflow versions, strict-валидацию
+Текущий `0.8.0a19` quality-core сохраняет protocol/workflow versions, strict-валидацию
 agent output schemas до `turn/start` и ранее добавленный
 Stage 0 static toolchain gate до semantic baseline и agent stages:
 
@@ -71,7 +71,7 @@ canonical candidate identity до/после probe batch. Любое измен�
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a18`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a19`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
@@ -311,7 +311,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a18 ...
+DOCS_SYNC_PASS harness=0.8.0a19 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -325,7 +325,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a18` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a19` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

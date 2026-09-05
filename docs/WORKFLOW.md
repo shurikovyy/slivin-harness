@@ -2,7 +2,7 @@
 
 > Этот файл генерируется из `slivin_harness/workflow.py`. Не редактируйте таблицы вручную; запустите `./py tools/render_workflow_docs.py`.
 
-- Harness: **0.8.0a18**
+- Harness: **0.8.0a19**
 - Workflow schema: **workflow.v6**
 - Реализуемая фаза: **phase7-final-gate-delivery-benchmark**
 

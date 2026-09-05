@@ -4459,7 +4459,7 @@ def main(argv: list[str] | None = None) -> int:
             if heldout_status != "HELDOUT_PASS":
                 if heldout_status == "HELDOUT_SEMANTIC_FAIL":
                     outcome = WorkflowOutcome.FAIL
-                    result_code = StageResultCode.HARNESS_BENCHMARK_FAIL
+                    result_code = StageResultCode.HARNESS_BENCHMARK_SEMANTIC_FAIL
                     exit_code = 1
                 else:
                     outcome = WorkflowOutcome.INVALID
@@ -4568,7 +4568,7 @@ def main(argv: list[str] | None = None) -> int:
                 == "HELDOUT_SEMANTIC_FAIL"
             )
             reconstruction_code = (
-                StageResultCode.HARNESS_BENCHMARK_FAIL
+                StageResultCode.HARNESS_BENCHMARK_SEMANTIC_FAIL
                 if reconstruction_semantic
                 else StageResultCode.BENCHMARK_INVALID
             )

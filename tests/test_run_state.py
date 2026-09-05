@@ -333,12 +333,12 @@ class RunStateTests(unittest.TestCase):
         state.route_stage(
             StageId.INTAKE_PREFLIGHT,
             outcome=WorkflowOutcome.FAIL,
-            result_code=StageResultCode.HARNESS_BENCHMARK_FAIL,
+            result_code=StageResultCode.HARNESS_BENCHMARK_SEMANTIC_FAIL,
             reason_code="HELDOUT_SEMANTIC_FAIL",
         )
         self.assertEqual(
             state.data["terminal"]["result_code"],
-            StageResultCode.HARNESS_BENCHMARK_FAIL.value,
+            StageResultCode.HARNESS_BENCHMARK_SEMANTIC_FAIL.value,
         )
         self.assertEqual(state.data["terminal"]["outcome"], WorkflowOutcome.FAIL.value)
 

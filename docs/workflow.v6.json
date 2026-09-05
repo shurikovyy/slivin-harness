@@ -1,6 +1,6 @@
 {
   "schema_version": "workflow.v6",
-  "harness_version": "0.8.0a18",
+  "harness_version": "0.8.0a19",
   "phase": "phase7-final-gate-delivery-benchmark",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",
@@ -218,6 +218,7 @@
     "RESULT_DELIVERY_FAIL",
     "BENCHMARK_INVALID",
     "HARNESS_BENCHMARK_FAIL",
+    "HARNESS_BENCHMARK_SEMANTIC_FAIL",
     "HARNESS_TASK_PASS",
     "HARNESS_BENCHMARK_PASS",
     "BLOCKED",

@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a18 — Phase 7
+# Модель качества Slivin Harness 0.8.0a19 — Phase 7
 
 ## Основная формула
 
@@ -262,7 +262,10 @@ HELDOUT_TIMEOUT
 HELDOUT_MUTATED_CANDIDATE
 ```
 
-Semantic failure требует oracle marker. Held-out feedback не возвращается Planner/Implementer/Evaluator текущего trial.
+Semantic failure требует oracle marker и завершается terminal result
+`HARNESS_BENCHMARK_SEMANTIC_FAIL`. Held-out feedback не возвращается
+Planner/Implementer/Evaluator текущего trial; infrastructure failure сохраняет
+отдельную invalid/blocked классификацию.
 
 ## Anti-monster rules
 
@@ -305,7 +308,7 @@ historical benchmark не раскрывает другие refs/objects/held-ou
 успешный CI/deployment/production rollout;
 ```
 
-Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a18` первый такой checkpoint — historical `_90`.
+Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a19` первый такой checkpoint — historical `_90`.
 
 ## Версии
 

@@ -360,7 +360,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a18")
+        self.assertEqual(build_identity["version"], "0.8.0a19")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)
@@ -486,13 +486,14 @@ timeout_seconds = 30
         state = json.loads((run_root / "run_state.json").read_text(encoding="utf-8"))
         self.assertEqual(
             state["terminal"]["result_code"],
-            StageResultCode.HARNESS_BENCHMARK_FAIL.value,
+            StageResultCode.HARNESS_BENCHMARK_SEMANTIC_FAIL.value,
         )
         evidence = json.loads((run_root / "heldout_evidence.json").read_text(encoding="utf-8"))
         self.assertEqual(evidence["status"], "HELDOUT_SEMANTIC_FAIL")
         self.assertFalse(evidence["feedback_exposed_to_agents"])
         self.assertFalse((run_root / "final_acceptance.json").exists())
-        self.assertIn("HARNESS_BENCHMARK_FAIL", output)
+        self.assertIn("HARNESS_BENCHMARK_SEMANTIC_FAIL", output)
+        self.assertNotIn("\nHARNESS_BENCHMARK_FAIL\n", output)
 
     def test_discovery_recompiles_active_contract_and_verification_plan(self) -> None:
         result, run_root, output = self.run_case(

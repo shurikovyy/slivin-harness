@@ -1,4 +1,4 @@
-# Windows setup для Slivin Harness 0.8.0a18
+# Windows setup для Slivin Harness 0.8.0a19
 
 ## Целевая среда
 
@@ -23,8 +23,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемо:
 
 ```text
-0.8.0a18
-DOCS_SYNC_PASS harness=0.8.0a18 ...
+0.8.0a19
+DOCS_SYNC_PASS harness=0.8.0a19 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -247,4 +247,4 @@ benchmark сразу. Ожидаема строка `INTAKE_ARTIFACT_REPAIR`; п
 
 ## Следующий checkpoint
 
-После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a18` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.
+После `HARNESS_SELF_CHECK_PASS` версии `0.8.0a19` запускается historical `_90` case. Новая архитектурная фаза для этого не требуется.

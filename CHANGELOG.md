@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.0a19 — Benchmark semantic terminal classification
+
+- Historical held-out semantic failures now terminate as `HARNESS_BENCHMARK_SEMANTIC_FAIL`; the typed `HELDOUT_SEMANTIC_FAIL` evidence, exit code `1`, hidden-output boundary, and no-Final-Acceptance behavior are unchanged.
+- The same terminal classification is used if reconstructed held-out verification reaches the oracle and reports a semantic failure.
+- Raised the package version to `0.8.0a19` without changing manifest, workflow, candidate, Planner, Implementer, or Evaluator protocol versions.
+
 ## 0.8.0a18 — Trusted check index isolation
 
 - Trusted Controller checks now run with a disposable `GIT_INDEX_FILE` initialized from `HEAD`, so read-looking Git commands cannot refresh the frozen real worktree index after semantic reset.
