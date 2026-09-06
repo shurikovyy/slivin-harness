@@ -105,6 +105,34 @@ def valid_plan() -> dict:
                 "required_proof": proof("The configured target-content check passes."),
             }
         ],
+        "impact_closure": {
+            "applicable": True,
+            "changed_contracts": [{
+                "name": "Target read value",
+                "before": "read_target returns before.",
+                "after": "read_target returns after.",
+                "evidence_paths": ["reader.py", "target.txt"],
+                "evidence_symbols": ["read_target"],
+            }],
+            "in_scope_consumers": [{
+                "name": "Target fixture consumer",
+                "paths": ["reader.py"],
+                "symbols": ["read_target"],
+                "why_affected": "It reads target.txt.",
+                "required_behavior": "It observes after.",
+                "evidence": ["reader.py read_target reads target.txt directly."],
+                "required_proof": proof("The configured target-content check passes."),
+            }],
+            "not_affected_consumers": [],
+            "related_out_of_scope": [],
+            "search_evidence": [{
+                "target": "read_target",
+                "method": "Inspect the target reader and its file dependency.",
+                "evidence_paths": ["reader.py", "target.txt"],
+                "conclusion": "read_target is the only repository reader of the target value.",
+            }],
+            "closure_summary": "The fixture writer and the only reader were examined; no other target dependencies exist.",
+        },
         "state_model": {
             "applicable": False,
             "representations": [],
@@ -137,6 +165,15 @@ def valid_plan() -> dict:
         },
         "unknowns": [],
     }
+
+
+def write_plan_evidence(workspace: Path) -> None:
+    (workspace / "target.txt").write_text("before\n", encoding="utf-8")
+    (workspace / "reader.py").write_text(
+        "from pathlib import Path\n\ndef read_target():\n"
+        "    return Path('target.txt').read_text(encoding='utf-8').strip()\n",
+        encoding="utf-8",
+    )
 
 
 def evaluator_finding(finding_id: str = "BLIND-1") -> dict:
@@ -182,7 +219,10 @@ def valid_pass(*, blind_audit=None) -> dict:
 
 class ProtocolContractTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.workspace = Path(tempfile.mkdtemp(prefix="slivin-protocol-"))
+        temporary = tempfile.TemporaryDirectory(prefix="slivin-protocol-")
+        self.addCleanup(temporary.cleanup)
+        self.workspace = Path(temporary.name)
+        write_plan_evidence(self.workspace)
         self.task_contract = valid_task_contract()
 
     def test_protocol_versions_are_explicit(self) -> None:

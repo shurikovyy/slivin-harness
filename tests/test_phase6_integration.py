@@ -26,7 +26,7 @@ from slivin_harness.workflow import (
     WORKFLOW_PHASE,
     WORKFLOW_VERSION,
 )
-from test_protocol import valid_blind_audit, valid_pass, valid_plan, valid_task_contract
+from test_protocol import valid_blind_audit, valid_pass, valid_plan, valid_task_contract, write_plan_evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -115,7 +115,7 @@ class Phase6ExecutableIntegrationTests(unittest.TestCase):
         git(repo, "init")
         git(repo, "config", "user.name", "Test")
         git(repo, "config", "user.email", "test@example.invalid")
-        (repo / "target.txt").write_text("before\n", encoding="utf-8")
+        write_plan_evidence(repo)
         (repo / "runtime_probe.py").write_text(RUNTIME_PROBE, encoding="utf-8")
         git(repo, "add", "-A")
         git(repo, "commit", "-m", "baseline")
@@ -321,7 +321,7 @@ class PhaseSixTaskRunnerIntegrationTests(unittest.TestCase):
         self._git(repo, "init")
         self._git(repo, "config", "user.name", "Test")
         self._git(repo, "config", "user.email", "test@example.invalid")
-        (repo / "target.txt").write_text("before\n", encoding="utf-8")
+        write_plan_evidence(repo)
         (repo / "runtime_probe.py").write_text(
             """from __future__ import annotations
 import json

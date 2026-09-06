@@ -2,7 +2,7 @@
 
 > Этот файл генерируется из `slivin_harness/workflow.py`. Не редактируйте таблицы вручную; запустите `./py tools/render_workflow_docs.py`.
 
-- Harness: **0.8.0a20**
+- Harness: **0.8.0a21**
 - Workflow schema: **workflow.v6**
 - Реализуемая фаза: **phase7-final-gate-delivery-benchmark**
 
@@ -101,7 +101,7 @@ attempt_id
 machine-readable workflow и versioned Run State
 + private Controller plane / Execution Broker foundation
 + USER TASK CONTRACT task-contract.v1
-+ PLANNER planner.v4
++ PLANNER planner.v5
 + IMPLEMENTATION CONTRACT implementation-contract.v3
 + typed VERIFICATION PLAN verification-plan.v1
 + IMPLEMENTER implementer.v3

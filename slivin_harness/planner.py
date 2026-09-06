@@ -38,6 +38,54 @@ class PlannerCapabilityInfeasible(RuntimeError):
             self.reason_code + " " + ", ".join(self.unavailable_capabilities)
         )
 
+
+def _impact_rows_schema(*, text_fields: Sequence[str], list_fields: Sequence[str], proof: bool = False) -> dict[str, Any]:
+    properties: dict[str, Any] = {key: {"type": "string"} for key in text_fields}
+    properties.update({key: {"type": "array", "items": {"type": "string"}} for key in list_fields})
+    if proof:
+        properties["required_proof"] = PROOF_TARGET_SCHEMA
+    return {
+        "type": "array",
+        "items": {
+            "type": "object", "additionalProperties": False,
+            "properties": properties, "required": list(properties),
+        },
+    }
+
+
+IMPACT_CLOSURE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "applicable": {"type": "boolean"},
+        "changed_contracts": _impact_rows_schema(
+            text_fields=("name", "before", "after"),
+            list_fields=("evidence_paths", "evidence_symbols"),
+        ),
+        "in_scope_consumers": _impact_rows_schema(
+            text_fields=("name", "why_affected", "required_behavior"),
+            list_fields=("paths", "symbols", "evidence"), proof=True,
+        ),
+        "not_affected_consumers": _impact_rows_schema(
+            text_fields=("name", "why_considered", "reason"),
+            list_fields=("paths", "symbols", "evidence"),
+        ),
+        "related_out_of_scope": _impact_rows_schema(
+            text_fields=("name", "relation", "reason", "suggested_follow_up"),
+            list_fields=("paths", "symbols", "evidence"),
+        ),
+        "search_evidence": _impact_rows_schema(
+            text_fields=("target", "method", "conclusion"),
+            list_fields=("evidence_paths",),
+        ),
+        "closure_summary": {"type": "string"},
+    },
+    "required": [
+        "applicable", "changed_contracts", "in_scope_consumers",
+        "not_affected_consumers", "related_out_of_scope", "search_evidence", "closure_summary",
+    ],
+}
+
 PLANNER_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -122,7 +170,6 @@ PLANNER_SCHEMA: dict[str, Any] = {
         },
         "affected_consumers": {
             "type": "array",
-            "maxItems": 8,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -135,6 +182,7 @@ PLANNER_SCHEMA: dict[str, Any] = {
                 "required": ["name", "why_affected", "must_verify", "required_proof"],
             },
         },
+        "impact_closure": IMPACT_CLOSURE_SCHEMA,
         "state_model": {
             "type": "object",
             "additionalProperties": False,
@@ -210,7 +258,7 @@ PLANNER_SCHEMA: dict[str, Any] = {
     "required": [
         "protocol_version", "status", "summary", "task_contract_alignment",
         "characterization", "diagnosis", "assumptions", "technical_contract",
-        "affected_consumers", "state_model", "risks", "evidence_plan",
+        "affected_consumers", "impact_closure", "state_model", "risks", "evidence_plan",
         "documentation", "owner_boundary_assessment", "unknowns",
     ],
 }
@@ -223,10 +271,47 @@ semantics, верни TASK_CONTRACT_INVALID. Затем исследуй тек�
 observed behavior и existing intended contract, докажи root cause для BUG или current
 extension point/design constraints для FEATURE. Не пиши patch и не диктуй строки реализации.
 
+Симптом пользователя — starting point, а не технический scope. Пользователь не обязан
+перечислять consumers, files или edge cases. Найденный root cause — не конец исследования.
+До выбора minimal patch установи изменяемый semantic/state contract: before → after.
+Найди по текущему repository concrete writers, readers, decision points и sibling consumers.
+Не ограничивай исследование файлами пользователя; один локальный extension point не
+доказывает полный impact radius. User product scope, technical impact radius и patch size
+различны: минимальный patch выбирается после impact closure, а не вместо исследования.
+Impact discovery раскрывает технические следствия исходного intent, не придумывает feature.
+
+Обязательный impact_closure классифицирует каждую materially plausible область:
+- IN_SCOPE: зависит от изменяемого contract; его предпосылки, решения или observable behavior
+  могут измениться. Обязан проверить и при необходимости исправить в текущей задаче.
+- NOT_AFFECTED: реально рассмотрен; concrete repository evidence доказывает неизменность
+  его contract и достижимого поведения. Не превращай его в implementation obligation.
+- RELATED_OUT_OF_SCOPE: отдельная связанная проблема, не следствие root cause и не условие
+  корректности исправления. Сохрани relation, reason, evidence, suggested_follow_up в artifact;
+  не превращай её в implementation obligation и не исправляй молча.
+Каждый changed_contract и consumer получает существующие repo-relative file paths и
+concrete symbol/state/API/field names (отдельные identifiers, не общие описания).
+Для IN_SCOPE добавь why_affected, required_behavior, evidence и typed required_proof.
+В affected_consumers повтори каждый IN_SCOPE ровно один раз с тем же name, why_affected,
+must_verify=required_behavior и тем же proof claim/level/capabilities. Других consumers там нет.
+Behaviorally distinct consumers не схлопывай в одну строку или «shared consumers» ради краткости.
+search_evidence фиксирует target, method, evidence_paths и conclusion реального impact sweep;
+конкретная shell-команда не обязательна. closure_summary объясняет полноту исследования,
+но не заменяет structured entries. READY без impact closure запрещён.
+
+applicable=false разрешён только для задач без изменяемого behavioral/semantic/state contract,
+например редактирования обычного текста. Нужны search_evidence по существующим текстовым
+документам (.md/.rst/.txt/.adoc) и конкретное closure_summary с указанием evidence path и
+объяснением отсутствия behavioral impact. Проверь, что этот текст не исполняется и не служит
+config/API/state contract. Все четыре contract/consumer arrays, affected_consumers, risks,
+State Model collections и consumer/boundary proofs пусты; state_model.applicable=false.
+Proofs только LOCAL_DETERMINISTIC с capabilities из GIT/DOCS_SYNC или без capabilities.
+Не фабрикуй consumers для тривиальной задачи. Малый code change с изменением поведения
+требует applicable=true; false не служит обходом анализа. Если исследование не завершено,
+верни BLOCKED с причиной; незаполненные impact arrays допустимы до READY.
+
 Вывод должен быть компактным и load-bearing:
 - только material assumptions;
 - explicit user acceptance/preservation не переписывай и не ослабляй;
-- найди materially affected consumer families;
 - для stateful задачи дай один State Model: representations, authority, lifecycle и только
   достижимые boundaries;
 - каждый consumer/risk и каждый evidence-plan claim получает typed proof level и capabilities;
@@ -247,7 +332,7 @@ unknown вместо READY с невыполнимым proof.
 
 
 def planner_required_capabilities(plan: Mapping[str, Any]) -> set[str]:
-    """Collect explicit and proof-level-implied capabilities from planner.v4."""
+    """Collect capabilities; READY closure proofs exactly mirror affected_consumers."""
 
     proofs: list[Mapping[str, Any]] = []
     for item in plan.get("affected_consumers", []):
@@ -353,6 +438,155 @@ def _validate_claim_block(value: object, *, field: str, required_when_ready: boo
             expected="Non-empty claim and evidence", actual=value,
         )
     return value
+
+
+def _impact_error(code: str, *, field: str, message: str, actual: object) -> None:
+    raise ArtifactContractError(
+        code=code, field=field, message=message,
+        expected="Concrete, consistent repository-backed impact closure", actual=actual,
+    )
+
+
+def _impact_text(value: object, *, field: str) -> str:
+    require_type(value, str, field=field)
+    if not value.strip():
+        _impact_error("IMPACT_EVIDENCE_EMPTY", field=field, message=f"{field} must be non-empty", actual=value)
+    return " ".join(value.split())
+
+
+def _impact_paths(values: list[str], *, field: str, workspace: Path) -> list[str]:
+    root = workspace.resolve()
+    normalized: list[str] = []
+    for index, raw in enumerate(values):
+        path_field = f"{field}[{index}]"
+        relative = safe_repo_relative(raw, field=path_field)
+        # Reject drive/UNC paths on every host, NTFS streams, wildcard paths and
+        # empty normalized paths. Resolve symlinks before checking containment.
+        if relative == "." or raw.replace("\\", "/").startswith("/") or any(
+            char in raw for char in ':*?"<>|'
+        ) or any(ord(char) < 32 for char in raw):
+            _impact_error("UNSAFE_PATH", field=path_field, message="Unsafe impact evidence path", actual=raw)
+        try:
+            resolved = (root / relative).resolve()
+            inside = resolved.is_relative_to(root)
+            exists = inside and resolved.is_file()
+        except (OSError, RuntimeError, ValueError):
+            inside = exists = False
+        if not inside:
+            _impact_error("UNSAFE_PATH", field=path_field, message="Impact evidence path escapes workspace", actual=raw)
+        if not exists:
+            _impact_error("IMPACT_PATH_MISSING", field=path_field, message="Impact evidence requires an existing repository file", actual=raw)
+        normalized.append(relative)
+    return normalized
+
+
+def _validate_impact_closure(plan: dict[str, Any], *, workspace: Path) -> None:
+    closure = plan["impact_closure"]
+    field = "impact_closure"
+    require_type(closure, dict, field=field)
+    keys = set(IMPACT_CLOSURE_SCHEMA["required"])
+    ensure_exact_keys(closure, allowed=keys, required=keys, field=field)
+    require_type(closure["applicable"], bool, field=f"{field}.applicable")
+    require_type(closure["closure_summary"], str, field=f"{field}.closure_summary")
+    search_paths: list[str] = []
+    classifications: set[str] = set()
+    for group in (
+        "changed_contracts", "in_scope_consumers", "not_affected_consumers",
+        "related_out_of_scope", "search_evidence",
+    ):
+        group_field = f"{field}.{group}"
+        require_type(closure[group], list, field=group_field)
+        properties = IMPACT_CLOSURE_SCHEMA["properties"][group]["items"]["properties"]
+        names: set[str] = set()
+        for index, item in enumerate(closure[group]):
+            item_field = f"{group_field}[{index}]"
+            require_type(item, dict, field=item_field)
+            ensure_exact_keys(item, allowed=properties, required=properties, field=item_field)
+            for key, schema in properties.items():
+                key_field = f"{item_field}.{key}"
+                if key == "required_proof":
+                    validate_proof_target(item[key], field=key_field)
+                elif schema["type"] == "string":
+                    _impact_text(item[key], field=key_field)
+                else:
+                    values = require_string_list(item[key], field=key_field)
+                    if not values:
+                        _impact_error("IMPACT_EVIDENCE_EMPTY", field=key_field, message=f"{key_field} requires concrete evidence", actual=values)
+                    for value in values:
+                        _impact_text(value, field=key_field)
+                    if key in {"paths", "evidence_paths"}:
+                        paths = _impact_paths(values, field=key_field, workspace=workspace)
+                        if group == "search_evidence":
+                            search_paths.extend(paths)
+                    elif key in {"symbols", "evidence_symbols"}:
+                        if any(any(char.isspace() for char in value) or not any(char.isalnum() for char in value) for value in values):
+                            _impact_error("IMPACT_SYMBOL_GENERIC", field=key_field, message="Impact symbols must name concrete identifiers, not prose or placeholders", actual=values)
+            if "name" in item:
+                name = _impact_text(item["name"], field=f"{item_field}.name").casefold()
+                if name in names or (group != "changed_contracts" and name in classifications):
+                    _impact_error("IMPACT_DUPLICATE_CONSUMER", field=item_field, message="Impact names must be unique and consumer classifications disjoint", actual=name)
+                names.add(name)
+                if group != "changed_contracts":
+                    classifications.add(name)
+            if group == "changed_contracts" and " ".join(item["before"].split()) == " ".join(item["after"].split()):
+                _impact_error("IMPACT_CONTRACT_UNCHANGED", field=item_field, message="Changed contract requires distinct before and after semantics", actual=item)
+
+    if plan["status"] != PlannerStatus.READY.value:
+        return
+    _impact_text(closure["closure_summary"], field=f"{field}.closure_summary")
+    if not closure["search_evidence"]:
+        _impact_error("IMPACT_SEARCH_MISSING", field=f"{field}.search_evidence", message="READY requires repository evidence of an impact sweep", actual=[])
+    if not closure["applicable"]:
+        state = plan["state_model"]
+        behavioral = any(closure[group] for group in (
+            "changed_contracts", "in_scope_consumers", "not_affected_consumers", "related_out_of_scope",
+        )) or bool(plan["affected_consumers"] or plan["risks"] or state["applicable"])
+        behavioral = behavioral or any(state[key] for key in ("representations", "authority", "lifecycle", "boundaries"))
+        behavioral = behavioral or bool(plan["evidence_plan"]["consumers"] or plan["evidence_plan"]["boundaries"])
+        proofs = [state["required_proof"], plan["documentation"]["required_proof"]]
+        for group in ("regression", "preservation", "consumers", "boundaries"):
+            proofs.extend(plan["evidence_plan"][group])
+        behavioral = behavioral or any(
+            proof["level"] != "LOCAL_DETERMINISTIC"
+            or set(proof["capabilities"]) - {Capability.GIT.value, Capability.DOCS_SYNC.value}
+            for proof in proofs
+        )
+        # Conservative non-applicability route: existing prose evidence plus a
+        # path-specific explanation, never just a false flag/empty ledger. The
+        # Planner must also establish that the prose is not executable/config.
+        prose_only = all(Path(path).suffix.lower() in {".md", ".rst", ".txt", ".adoc"} for path in search_paths)
+        explained = any(path in closure["closure_summary"] for path in search_paths)
+        explanation = closure["closure_summary"]
+        for path in search_paths:
+            explanation = explanation.replace(path, "")
+        if behavioral or not prose_only or not explained or len(explanation.split()) < 6:
+            _impact_error("IMPACT_NOT_APPLICABLE_UNJUSTIFIED", field=field, message="Non-applicable READY requires a concrete prose-only explanation and no behavioral obligations or executors", actual=closure)
+        return
+
+    if not closure["changed_contracts"]:
+        _impact_error("IMPACT_CONTRACTS_MISSING", field=f"{field}.changed_contracts", message="Applicable READY requires changed semantic/state contracts", actual=[])
+
+    affected: dict[str, dict[str, Any]] = {}
+    for index, item in enumerate(plan["affected_consumers"]):
+        name = _impact_text(item["name"], field=f"affected_consumers[{index}].name").casefold()
+        if name in affected:
+            _impact_error("IMPACT_DUPLICATE_CONSUMER", field="affected_consumers", message="Affected consumer names must be unique", actual=name)
+        affected[name] = item
+    in_scope = {_impact_text(item["name"], field="in_scope_consumers.name").casefold(): item for item in closure["in_scope_consumers"]}
+    if affected.keys() != in_scope.keys():
+        _impact_error("IMPACT_CONSUMER_MISMATCH", field="affected_consumers", message="IN_SCOPE and affected_consumers must correspond one-to-one", actual={"affected": sorted(affected), "in_scope": sorted(in_scope)})
+    for name, consumer in in_scope.items():
+        target = affected[name]
+        for source_key, target_key in (("why_affected", "why_affected"), ("required_behavior", "must_verify")):
+            if _impact_text(consumer[source_key], field=source_key) != _impact_text(target[target_key], field=target_key):
+                _impact_error("IMPACT_BEHAVIOR_MISMATCH", field=f"affected_consumers.{name}.{target_key}", message="Affected consumer must retain the IN_SCOPE reason and required behavior", actual=target)
+        source_proof, target_proof = consumer["required_proof"], target["required_proof"]
+        if (
+            _impact_text(source_proof["claim"], field="required_proof.claim") != _impact_text(target_proof["claim"], field="required_proof.claim")
+            or source_proof["level"] != target_proof["level"]
+            or set(source_proof["capabilities"]) != set(target_proof["capabilities"])
+        ):
+            _impact_error("IMPACT_PROOF_MISMATCH", field=f"affected_consumers.{name}.required_proof", message="IN_SCOPE proof claim, level and capabilities must match affected consumer proof", actual=target_proof)
 
 
 def validate_plan_artifact(
@@ -476,6 +710,7 @@ def validate_plan_artifact(
         require_type(item["reason"], str, field=f"unknowns[{index}].reason")
 
     status = plan["status"]
+    _validate_impact_closure(plan, workspace=workspace)
     if status == PlannerStatus.TASK_CONTRACT_INVALID.value:
         if alignment["status"] != "INVALID" or not alignment["reason"].strip():
             raise ArtifactContractError(code="TASK_CONTRACT_INVALID_WITHOUT_EVIDENCE", field="task_contract_alignment", message="TASK_CONTRACT_INVALID requires INVALID alignment and reason", expected="INVALID with reason", actual=alignment)
@@ -508,11 +743,6 @@ def validate_plan_artifact(
         if "PRODUCT_SEMANTIC" not in unknown_kinds:
             raise ArtifactContractError(code="PLANNER_DECISION_WITHOUT_PRODUCT_UNKNOWN", field="unknowns", message="NEEDS_USER_DECISION requires product-semantic unknown", expected="PRODUCT_SEMANTIC", actual=unknown_kinds)
 
-    # No Planner output path is a hard scope boundary; this check only protects
-    # any future path-bearing evidence accidentally added to proof claims.
-    root_resolved = workspace.resolve()
-    if root_resolved != workspace.resolve():
-        raise RuntimeError("Workspace resolution changed unexpectedly")
 
 
 def run_planner(
@@ -561,7 +791,7 @@ MANIFEST_REPAIR_EVIDENCE:
 
 {replan_context}
 
-Исследуй текущий repository независимо и верни planner.v4 artifact.
+Исследуй текущий repository независимо и верни planner.v5 artifact.
 """.strip()
     raw = codex.run_turn(
         thread_id=thread_id,
@@ -588,7 +818,8 @@ CAPABILITY FEASIBILITY CORRECTION
 Controller-authoritative available capabilities:
 {json.dumps(sorted(set(available_verification_capabilities)), ensure_ascii=False)}
 
-Верни полный planner.v4 artifact. Сохрани product claims, но выбери честный конкретный
+Верни полный planner.v5 artifact. Сохрани product claims и impact closure, синхронизируй
+required_proof в IN_SCOPE и affected_consumers и выбери честный конкретный
 proof route только из available capabilities. Не заменяй недоступный executor фиктивным.
 Если без недоступной capability обязательный proof действительно невозможен, верни BLOCKED
 с конкретным BLOCKING unknown. Это единственный corrective turn.

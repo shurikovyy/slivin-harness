@@ -1,8 +1,12 @@
-# Архитектура Slivin Harness 0.8.0a20 — Phase 7
+# Архитектура Slivin Harness 0.8.0a21 — Phase 7
 
 ## Назначение
 
-`0.8.0a20` сохраняет согласованный Step 0–7 quality-core, проверяет strict Structured Outputs contract локально до App Server `turn/start` и ограничивает Planner доказанными executors без изменения protocol/workflow versions.
+`0.8.0a21` требует typed impact closure в `planner.v5` до `READY`, сохраняет
+согласованный Step 0–7 quality-core, strict Structured Outputs validation до
+App Server `turn/start` и Planner proof только через подтверждённые executors.
+Нормативная ответственность пользователя и агента определена в
+[AUTONOMOUS_ENGINEERING_CONTRACT.md](AUTONOMOUS_ENGINEERING_CONTRACT.md).
 
 Machine phase id:
 
@@ -35,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a20
+Harness                     0.8.0a21
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -43,7 +47,7 @@ Candidate                   candidate.v1
 Controller plane            controller-plane.v1
 Execution Broker            execution-broker.v1
 Task Contract               task-contract.v1
-Planner                     planner.v4
+Planner                     planner.v5
 Implementer                 implementer.v3
 Implementation Contract     implementation-contract.v3
 Verification Plan           verification-plan.v1
@@ -220,14 +224,22 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a20`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a21`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
 
 ## 4. Step 1 — Planner
 
-`planner.v4` исследует current behavior, intended contract, root cause или extension point, consumers, state model, risks и typed evidence plan.
+`planner.v5` исследует current behavior, intended contract, root cause или extension point, consumers, state model, risks и typed evidence plan.
+
+`slivin_harness/planner.py` определяет strict `IMPACT_CLOSURE_SCHEMA` и Controller
+semantic validation: changed contracts с before/after и paths/symbols, три
+consumer classifications, search evidence и summary. До initial/replan Contract
+compiler проверяются safe existing evidence files, concrete entries и точная
+IN_SCOPE ↔ affected_consumers mapping, включая required behavior и typed proof.
+Сначала исследуется technical impact radius, затем выбирается patch size в рамках
+user product scope. Эти три понятия не равны.
 
 Planner read-only относительно candidate и не получает previous solution/reference/held-out.
 Controller передаёт ему probe-backed `AVAILABLE_VERIFICATION_CAPABILITIES` и
@@ -253,6 +265,13 @@ LIVE_LOCAL
 TEST_EXTERNAL
 PROD_OBSERVE
 ```
+
+Compiler сохраняет по obligation на каждый `affected_consumers` entry, чьё
+соответствие IN_SCOPE доказано Planner validator. `not_affected_consumers` и
+`related_out_of_scope` не конвертируются в obligations. Последние остаются с
+`suggested_follow_up` в полном `plan_*.json` / `replan_*.json` artifact.
+Существующие open-world expansion, Implementer COMPLETE и Evaluator PASS semantics
+сохраняются; post-patch impact closure не вводится.
 
 Owner-boundary и post-plan capability gate выполняются до writable Implementer.
 Tool-backed `GIT`, `PROJECT_PYTHON`, `NODE` и `JEST` считаются available только
@@ -498,7 +517,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a20` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a21` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 

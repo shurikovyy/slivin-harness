@@ -1539,7 +1539,7 @@ def checks_summary(results: list[CheckResult], *, output_limit: int = 8_000) -> 
 def validate_plan_artifact(
     plan: dict, *, workspace: Path, task_contract: dict
 ) -> None:
-    """Compatibility entry point backed by the planner.v4 validator."""
+    """Compatibility entry point backed by the planner.v5 validator."""
     validate_planner_artifact(
         plan,
         workspace=workspace,

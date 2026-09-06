@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
-PLANNER_PROTOCOL_VERSION = "planner.v4"
+PLANNER_PROTOCOL_VERSION = "planner.v5"
 EVALUATOR_PROTOCOL_VERSION = "evaluator.v5"
 MANIFEST_VERSION = 2
 

@@ -63,6 +63,7 @@ from task_runner import (
 
 EXPECTED_MAIN_DOCS = {
     "ARCHITECTURE.md",
+    "AUTONOMOUS_ENGINEERING_CONTRACT.md",
     "HISTORY.md",
     "PHASE4_EXECUTION.md",
     "PHASE5_CONTRACT_RUNTIME.md",
@@ -117,9 +118,9 @@ def _check_one_h1(path: Path) -> None:
 
 
 def main() -> int:
-    _assert(__version__ == "0.8.0a20", f"Unexpected Harness version: {__version__}")
+    _assert(__version__ == "0.8.0a21", f"Unexpected Harness version: {__version__}")
     _assert(MANIFEST_VERSION == 2, f"Unexpected manifest version: {MANIFEST_VERSION}")
-    _assert(PLANNER_PROTOCOL_VERSION == "planner.v4", PLANNER_PROTOCOL_VERSION)
+    _assert(PLANNER_PROTOCOL_VERSION == "planner.v5", PLANNER_PROTOCOL_VERSION)
     _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v3", IMPLEMENTATION_CONTRACT_VERSION)
     _assert(EVALUATOR_PROTOCOL_VERSION == "evaluator.v5", EVALUATOR_PROTOCOL_VERSION)
     _assert(IMPLEMENTER_PROTOCOL_VERSION == "implementer.v3", IMPLEMENTER_PROTOCOL_VERSION)
@@ -181,10 +182,10 @@ def main() -> int:
         for path in [ROOT / "README.md", docs_dir / "ARCHITECTURE.md", docs_dir / "QUALITY_MODEL.md"]
     )
     for marker in (
-        "0.8.0a20",
+        "0.8.0a21",
         "version = 2",
         "task-contract.v1",
-        "planner.v4",
+        "planner.v5",
         "implementer.v3",
         "implementation-contract.v3",
         "verification-plan.v1",

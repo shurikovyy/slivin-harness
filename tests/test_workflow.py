@@ -111,7 +111,7 @@ class WorkflowDefinitionTests(unittest.TestCase):
         self.assertIn("runtime_verification", encoded)
         self.assertIn("CANDIDATE_CHANGED_AFTER_EVALUATION", encoded)
         self.assertEqual(len(snapshot["stages"]), 8)
-        self.assertEqual(snapshot["contract_versions"]["planner"], "planner.v4")
+        self.assertEqual(snapshot["contract_versions"]["planner"], "planner.v5")
 
     def test_rendered_workflow_is_understandable_and_generated(self) -> None:
         rendered = render_workflow_markdown(harness_version="test")

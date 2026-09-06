@@ -15,7 +15,7 @@ from slivin_harness.implementer import IMPLEMENTER_PROTOCOL_VERSION
 from slivin_harness.planner import PlannerCapabilityInfeasible
 from slivin_harness.protocol import EVALUATOR_PROTOCOL_VERSION
 from slivin_harness.workflow import StageResultCode, StageState
-from test_protocol import valid_blind_audit, valid_pass, valid_plan, valid_task_contract
+from test_protocol import valid_blind_audit, valid_pass, valid_plan, valid_task_contract, write_plan_evidence
 
 
 def git(repo: Path, *args: str) -> str:
@@ -54,7 +54,7 @@ class TaskRunnerWorkflowIntegrationTests(unittest.TestCase):
         git(repo, "init")
         git(repo, "config", "user.name", "Test")
         git(repo, "config", "user.email", "test@example.invalid")
-        (repo / "target.txt").write_text("before\n", encoding="utf-8")
+        write_plan_evidence(repo)
         git(repo, "add", "-A")
         git(repo, "commit", "-m", "baseline")
         return repo
@@ -360,7 +360,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a20")
+        self.assertEqual(build_identity["version"], "0.8.0a21")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from slivin_harness.planner import (
     run_planner,
 )
 from slivin_harness.verification import available_capabilities
-from test_protocol import valid_plan, valid_task_contract
+from test_protocol import valid_plan, valid_task_contract, write_plan_evidence
 
 
 class _FakeCodex:
@@ -43,10 +44,16 @@ def _plan_with_capability(capability: str, *, level: str = "LOCAL_DETERMINISTIC"
 
 
 class PlannerCapabilityNegotiationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="slivin-planner-")
+        self.addCleanup(temporary.cleanup)
+        self.workspace = Path(temporary.name)
+        write_plan_evidence(self.workspace)
+
     def _run(self, codex: _FakeCodex, available: list[str]) -> dict:
         return run_planner(
             codex,  # type: ignore[arg-type]
-            workspace=Path.cwd(),
+            workspace=self.workspace,
             task_prompt="Change target.txt.",
             task_contract=valid_task_contract(),
             preflight={"status": "READY"},
@@ -105,6 +112,20 @@ class PlannerCapabilityNegotiationTests(unittest.TestCase):
             raised.exception.unavailable_capabilities, ("PROJECT_PYTHON",)
         )
         self.assertEqual(len(codex.turns), 2)
+
+    def test_corrective_turn_updates_both_copies_of_consumer_proof(self) -> None:
+        first, corrected = valid_plan(), valid_plan()
+        for plan, capabilities in ((first, ["PROJECT_PYTHON"]), (corrected, ["JEST", "NODE"])):
+            plan["affected_consumers"][0]["required_proof"]["capabilities"] = list(capabilities)
+            plan["impact_closure"]["in_scope_consumers"][0]["required_proof"]["capabilities"] = list(reversed(capabilities))
+        codex = _FakeCodex([first, corrected])
+        result = self._run(codex, ["JEST", "NODE"])
+        self.assertEqual(result, corrected)
+        self.assertEqual(len(codex.turns), 2)
+        contract = build_implementation_contract(result, task_contract=valid_task_contract())
+        self.assertNotIn("PROJECT_PYTHON", json.dumps(contract))
+        consumer = next(row for row in contract["items"] if row["type"] == "consumer")
+        self.assertEqual(consumer["required_proof"]["profiles"][0]["capabilities"], ["JEST", "NODE"])
 
     def test_corrective_blocked_plan_is_preserved(self) -> None:
         blocked = copy.deepcopy(valid_plan())

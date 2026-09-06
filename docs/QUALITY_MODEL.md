@@ -1,4 +1,10 @@
-# Модель качества Slivin Harness 0.8.0a20 — Phase 7
+# Модель качества Slivin Harness 0.8.0a21 — Phase 7
+
+Нормативный autonomy contract: **[AUTONOMOUS_ENGINEERING_CONTRACT.md](AUTONOMOUS_ENGINEERING_CONTRACT.md)**.
+User scope задаёт observable результат и explicit ограничения; technical impact
+radius определяет обязательное исследование последствий найденной причины;
+patch size — минимальные изменения после impact closure. Эти понятия не равны.
+«Минимальный patch» не означает «исследовать минимальное количество файлов».
 
 ## Основная формула
 
@@ -66,7 +72,22 @@ agent-provided `receipt_id` Controller authority.
 
 ### Planner
 
-`planner.v4` характеризует current behavior, existing contract, root cause/extension point, consumers, state model, risks и evidence plan. Planner не доказывает корректность future candidate. Controller заранее сообщает только подтверждённые executors; READY proof не может стохастически потребовать отсутствующую capability. Первый overreach получает один corrective turn в том же thread, повторный блокируется до Contract compiler.
+`planner.v5` характеризует current behavior, existing contract, root cause/extension point, consumers, state model, risks и evidence plan. Planner не доказывает корректность future candidate. Controller заранее сообщает только подтверждённые executors; READY proof не может стохастически потребовать отсутствующую capability. Первый overreach получает один corrective turn в том же thread, повторный блокируется до Contract compiler.
+
+До `READY` обязательный typed `impact_closure` фиксирует changed contracts,
+concrete consumers, классификации IN_SCOPE / NOT_AFFECTED / RELATED_OUT_OF_SCOPE,
+search evidence и closure summary. Paths должны быть безопасными существующими
+repo-relative файлами; symbols называют конкретные identifiers. Controller требует
+взаимно однозначное соответствие IN_SCOPE ↔ affected_consumers с тем же required
+behavior и proof. Проверка выполняется для initial plan, corrective turn и replan.
+
+NOT_AFFECTED требует repository evidence и не становится obligation. Независимые
+RELATED_OUT_OF_SCOPE findings сохраняются с follow-up в Planner artifact. Для
+нетехнической задачи допустим обоснованный `applicable=false` без fake consumers;
+mechanical eligibility и границы этой проверки определены в normative contract.
+Обычный behavioral code change не может обойти closure пустым false-ledger.
+Один локальный extension point не даёт Planner права сокращать impact radius.
+Полная ledger не доказывает истинность evidence или корректность future patch.
 
 ### Implementation Contract
 
@@ -308,14 +329,17 @@ historical benchmark не раскрывает другие refs/objects/held-ou
 успешный CI/deployment/production rollout;
 ```
 
-Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects. После Windows self-check `0.8.0a20` первый такой checkpoint — historical `_90`.
+Практическая надёжность измеряется по нескольким clean trials и реальным escaped defects.
+Planner Impact Closure проверяется synthetic Harness tests. Historical benchmark
+служит независимым checkpoint после согласованного набора autonomy изменений;
+его hidden scenarios не используются для проектирования этого механизма.
 
 ## Версии
 
 ```text
 manifest version = 2
 task-contract.v1
-planner.v4
+planner.v5
 implementer.v3
 implementation-contract.v3
 verification-plan.v1

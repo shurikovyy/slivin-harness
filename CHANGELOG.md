@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.0a21 — Autonomous Planner Impact Closure
+
+- Upgraded only Planner to `planner.v5`, with mandatory strict typed `impact_closure`: changed contracts, concrete consumers, scope classifications, search evidence and closure summary before READY.
+- Added Controller checks for existing safe repository evidence paths, concrete symbols, evidence-backed dispositions and exact IN_SCOPE-to-affected-consumer behavior/proof correspondence before Contract compilation. Removed the eight-consumer schema cap; every material obligation is retained.
+- Added a conservative evidence-backed non-applicable route for prose tasks without fabricated consumers; behavioral obligations or runtime proofs cannot use that route.
+- Published the normative Autonomous Engineering Contract, separating user intent, technical impact radius and patch size, and prohibiting benchmark coaching with hidden edge cases or reference solutions.
+- Preserved capability-aware planning, read-only Planner, existing Contract compiler/expansion, Implementer COMPLETE, Evaluator PASS and integrity/Final Gate semantics. Related independent findings remain in Planner artifacts with follow-up guidance.
+- Added synthetic repository regression coverage and synchronized package/documentation version to `0.8.0a21`; manifest, `workflow.v6`, `candidate.v1`, `implementer.v3` and `evaluator.v5` retain their versions.
+
 ## 0.8.0a20 — UTF-8 Implementer self-verification output
 
 - Harness-owned generated `self_verify.py` now reconfigures its own stdout/stderr to UTF-8 before emitting check output, so Unicode Jest diagnostics cannot crash the runner under legacy Windows console encodings such as CP1251.

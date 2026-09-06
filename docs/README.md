@@ -1,9 +1,10 @@
-# Документация Slivin Harness 0.8.0a20
+# Документация Slivin Harness 0.8.0a21
 
-Актуальная версия: **0.8.0a20 — UTF-8 Implementer self-verification output**.
+Актуальная версия: **0.8.0a21 — Autonomous Planner Impact Closure**.
 
 Основные документы:
 
+- **[`AUTONOMOUS_ENGINEERING_CONTRACT.md`](AUTONOMOUS_ENGINEERING_CONTRACT.md) — нормативный autonomy contract; прочитайте первым.** Пользователь задаёт intent, агент сам исследует impact radius и не получает hidden benchmark подсказки;
 - [`WORKFLOW.md`](WORKFLOW.md) — понятная Step 0–7 схема, генерируемая из кода;
 - [`workflow.v6.json`](workflow.v6.json) — та же state machine в machine-readable виде;
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — ownership, artifacts и связи модулей;
@@ -32,7 +33,7 @@
 
 ```text
 task-contract.v1
-planner.v4
+planner.v5
 implementer.v3
 implementation-contract.v3
 verification-plan.v1

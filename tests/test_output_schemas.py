@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from slivin_harness.app_server import CodexAppServer
+from slivin_harness.planner import PLANNER_SCHEMA
 from slivin_harness.output_schema import (
     StrictOutputSchemaError,
     production_output_schemas,
@@ -21,6 +22,19 @@ def strict_object(**properties: dict) -> dict:
 
 
 class StrictOutputSchemaTests(unittest.TestCase):
+    def test_planner_v5_requires_strict_typed_impact_closure(self) -> None:
+        self.assertEqual(PLANNER_SCHEMA["properties"]["protocol_version"]["enum"], ["planner.v5"])
+        self.assertIn("impact_closure", PLANNER_SCHEMA["required"])
+        closure = PLANNER_SCHEMA["properties"]["impact_closure"]
+        self.assertEqual(set(closure["required"]), {
+            "applicable", "changed_contracts", "in_scope_consumers", "not_affected_consumers",
+            "related_out_of_scope", "search_evidence", "closure_summary",
+        })
+        validate_strict_output_schema(PLANNER_SCHEMA)
+        consumer = closure["properties"]["in_scope_consumers"]["items"]
+        self.assertIn("required_proof", consumer["required"])
+        self.assertNotIn("maxItems", PLANNER_SCHEMA["properties"]["affected_consumers"])
+
     def test_every_production_app_server_output_schema_is_strict(self) -> None:
         schemas = production_output_schemas()
         self.assertEqual(
