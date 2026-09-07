@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.0a23 — Post-patch Implementer Impact Closure
+
+- Upgraded Implementer to `implementer.v4` with required strict `post_patch_impact` before COMPLETE: actual changed contracts, consumer dispositions, new risks, exact changed-path review, search evidence and summary.
+- Added deterministic reconciliation with Planner contracts, IN_SCOPE and NOT_AFFECTED consumers, and related follow-ups. Discoveries map one-to-one to existing consumer/risk Contract expansion; final COMPLETE closes new items after continuation and fresh self-verification.
+- Connected Implementer technical-model divergence to the existing semantic reset/fresh Planner/fresh Implementer path. FAST engineering tasks require autonomous closure; the owner-backed prose-only exception remains conservative.
+- Added Controller-owned `implementation-impact-closure.v1`, bound to candidate, Plan/Contract fingerprints, changed paths and revisions. Repairs require fresh closure and receipt; deleted-file candidates remain supported.
+- Added generic synthetic regression/integration coverage. Raised Harness to `0.8.0a23`; Planner, Contract, Verification Plan, Evaluator, workflow and candidate protocols retain their versions. Independent Evaluator impact challenge and mandatory follow-up surfacing remain future work.
+
 ## 0.8.0a22 — Owner-backed Planner impact applicability
 
 - Hardened the existing `planner.v5` non-applicable READY exception: a non-empty Controller-owned manifest `allowed_paths` boundary must consist entirely of existing safe regular prose files (`.md`, `.rst`, `.txt`, `.adoc`), with canonical targets inside the workspace and prose extensions. Search evidence must stay within those exact owner paths.

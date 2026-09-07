@@ -462,6 +462,7 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
     from slivin_harness.execution import EXECUTION_BROKER_VERSION
     from slivin_harness.implementer import (
         IMPLEMENTATION_CONTRACT_VERSION,
+        IMPLEMENTATION_IMPACT_CLOSURE_VERSION,
         IMPLEMENTER_PROTOCOL_VERSION,
     )
     from slivin_harness.phase5 import (
@@ -504,6 +505,7 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
             "planner": PLANNER_PROTOCOL_VERSION,
             "implementer": IMPLEMENTER_PROTOCOL_VERSION,
             "implementation_contract": IMPLEMENTATION_CONTRACT_VERSION,
+            "implementation_impact_closure": IMPLEMENTATION_IMPACT_CLOSURE_VERSION,
             "verification_plan": VERIFICATION_PLAN_VERSION,
             "evaluator": EVALUATOR_PROTOCOL_VERSION,
             "blind_audit": BLIND_AUDIT_VERSION,
@@ -701,7 +703,8 @@ machine-readable workflow и versioned Run State
 + PLANNER planner.v5
 + IMPLEMENTATION CONTRACT implementation-contract.v3
 + typed VERIFICATION PLAN verification-plan.v1
-+ IMPLEMENTER implementer.v3
++ IMPLEMENTER implementer.v4
++ candidate-bound implementation-impact-closure.v1 before Implementer completion
 + transactional Contract / Verification Plan expansion
 + canonical .worktreeinclude exposure policy
 + strict static toolchain preflight before semantic baseline and agent stages

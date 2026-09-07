@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a22 — Phase 7
+# Архитектура Slivin Harness 0.8.0a23 — Phase 7
 
 ## Назначение
 
-`0.8.0a22` требует typed impact closure в `planner.v5` до `READY`, сохраняет
+`0.8.0a23` требует typed impact closure в `planner.v5` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a22
+Harness                     0.8.0a23
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -48,7 +48,7 @@ Controller plane            controller-plane.v1
 Execution Broker            execution-broker.v1
 Task Contract               task-contract.v1
 Planner                     planner.v5
-Implementer                 implementer.v3
+Implementer                 implementer.v4
 Implementation Contract     implementation-contract.v3
 Verification Plan           verification-plan.v1
 Project runtime             project-runtime.v1
@@ -224,7 +224,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a22`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a23`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -280,8 +280,8 @@ Compiler сохраняет по obligation на каждый `affected_consumer
 соответствие IN_SCOPE доказано Planner validator. `not_affected_consumers` и
 `related_out_of_scope` не конвертируются в obligations. Последние остаются с
 `suggested_follow_up` в полном `plan_*.json` / `replan_*.json` artifact.
-Существующие open-world expansion, Implementer COMPLETE и Evaluator PASS semantics
-сохраняются; post-patch impact closure не вводится.
+Open-world expansion и Evaluator PASS semantics сохраняются. Implementer COMPLETE
+дополнительно требует post-patch impact closure.
 
 Owner-boundary и post-plan capability gate выполняются до writable Implementer.
 Tool-backed `GIT`, `PROJECT_PYTHON`, `NODE` и `JEST` считаются available только
@@ -293,13 +293,32 @@ contract expansion, registered checks и действительно новые r
 
 ## 6. Step 3 — Implementer
 
-`implementer.v3` получает Task Contract, compact Planner context, active Contract и trusted capabilities.
+`implementer.v4` получает Task Contract, compact Planner context, active Contract и trusted capabilities.
+
+Planner context включает полный `impact_closure`, diagnosis, assumptions и non-blocking
+unknowns. Actual patch проверяется через `post_patch_impact`: contracts и Planner IN_SCOPE
+сохраняют semantics/proofs, NOT_AFFECTED подтверждаются либо становятся DISCOVERED,
+follow-ups сохраняются. Каждый changed path reviewed exactly once, включая удаления.
+Остальные evidence paths — safe existing workspace files. Общая owner-backed prose-only
+policy распространяется на FULL и FAST; engineering FAST сам обнаруживает consumers.
+
+`stabilize_implementer_report()` валидирует impact до expansion, закрывает новые
+consumer/risk obligations через тот же thread, затем требует current private receipt
+и создаёт authoritative `implementation_impact_closure_NN.json`. Artifact
+`implementation-impact-closure.v1` содержит candidate_id, plan_fingerprint (null для
+FAST), implementation_contract_fingerprint, exact changed_paths, post_patch_impact,
+revision_binding и stable fingerprint. Его binding проверяется перед downstream gates;
+новый candidate/Contract/Plan требует свежий report. Artifact входит в stage evidence.
+
+Implementer technical-model divergence возвращает REPLAN_REQUIRED с evidence и
+использует тот же semantic reset/fresh Planner/fresh Implementer path, что Evaluator.
+Evaluator `evaluator.v5` не получает новых PASS/Blind Audit требований в этом patch.
 
 Перед любым App Server `turn/start` Controller рекурсивно проверяет production
 `outputSchema`: каждый object с `properties` обязан иметь
 `additionalProperties=false` и `required`, в точности равный набору properties.
 Проверка охватывает nested objects, array items и composition branches. Для
-`implementer.v3` все поля обязательны на wire-level, но semantic completeness
+`implementer.v4` все поля обязательны на wire-level, но semantic completeness
 остаётся status-dependent: non-COMPLETE status передаёт пустые ledgers, а не
 фиктивное закрытие Contract. Agent всегда возвращает пустой `receipt_id`;
 Controller-private self-verification receipt остаётся единственной authority.
@@ -527,7 +546,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a22` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a23` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 

@@ -26,7 +26,7 @@ from slivin_harness.workflow import (
     WORKFLOW_PHASE,
     WORKFLOW_VERSION,
 )
-from test_protocol import valid_blind_audit, valid_pass, valid_plan, valid_task_contract, write_plan_evidence
+from test_protocol import attach_post_patch_impact, valid_blind_audit, valid_pass, valid_plan, valid_task_contract, write_plan_evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -195,8 +195,13 @@ timeout_seconds = 30
             (workspace / "target.txt").write_text("after\n", encoding="utf-8")
             command = list(kwargs["self_verify_command"])
             subprocess.run(command, cwd=workspace, check=True)
+            self.assertTrue(task_runner.verify_self_verification_stamp(
+                workspace=workspace, stamp_path=Path(kwargs["stamp_path"]),
+                control_plane=kwargs.get("control_plane"), run_state=kwargs.get("run_state"),
+                check_registry_digest=kwargs.get("check_registry_digest"),
+            ))
             contract = kwargs["implementation_contract"]
-            return {
+            return attach_post_patch_impact({
                 "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
                 "status": "COMPLETE",
                 "summary": "candidate ready",
@@ -217,7 +222,7 @@ timeout_seconds = 30
                 "registered_checks": [],
                 "discovered_obligations": [],
                 "blockers": [],
-            }
+            }, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace))
 
         evaluator_seen_runtime: list[str] = []
 
@@ -442,8 +447,13 @@ timeout_seconds = 30
             (workspace / "target.txt").write_text("after\n", encoding="utf-8")
             command = list(kwargs["self_verify_command"])
             subprocess.run(command, cwd=workspace, check=True)
+            self.assertTrue(task_runner.verify_self_verification_stamp(
+                workspace=workspace, stamp_path=Path(kwargs["stamp_path"]),
+                control_plane=kwargs.get("control_plane"), run_state=kwargs.get("run_state"),
+                check_registry_digest=kwargs.get("check_registry_digest"),
+            ))
             contract = kwargs["implementation_contract"]
-            return {
+            return attach_post_patch_impact({
                 "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
                 "status": "COMPLETE",
                 "summary": "candidate ready",
@@ -464,7 +474,7 @@ timeout_seconds = 30
                 "registered_checks": [],
                 "discovered_obligations": [],
                 "blockers": [],
-            }
+            }, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace))
 
         def fake_evaluator(*_args, **kwargs):
             self.assertEqual(

@@ -2,7 +2,7 @@
 
 > Этот файл генерируется из `slivin_harness/workflow.py`. Не редактируйте таблицы вручную; запустите `./py tools/render_workflow_docs.py`.
 
-- Harness: **0.8.0a22**
+- Harness: **0.8.0a23**
 - Workflow schema: **workflow.v6**
 - Реализуемая фаза: **phase7-final-gate-delivery-benchmark**
 
@@ -104,7 +104,8 @@ machine-readable workflow и versioned Run State
 + PLANNER planner.v5
 + IMPLEMENTATION CONTRACT implementation-contract.v3
 + typed VERIFICATION PLAN verification-plan.v1
-+ IMPLEMENTER implementer.v3
++ IMPLEMENTER implementer.v4
++ candidate-bound implementation-impact-closure.v1 before Implementer completion
 + transactional Contract / Verification Plan expansion
 + canonical .worktreeinclude exposure policy
 + strict static toolchain preflight before semantic baseline and agent stages

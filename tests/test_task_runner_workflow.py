@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
 import json
 import subprocess
@@ -15,7 +16,7 @@ from slivin_harness.implementer import IMPLEMENTER_PROTOCOL_VERSION
 from slivin_harness.planner import PlannerCapabilityInfeasible
 from slivin_harness.protocol import EVALUATOR_PROTOCOL_VERSION
 from slivin_harness.workflow import StageResultCode, StageState
-from test_protocol import valid_blind_audit, valid_pass, valid_plan, valid_task_contract, write_plan_evidence
+from test_protocol import attach_post_patch_impact, valid_blind_audit, valid_pass, valid_plan, valid_task_contract, write_plan_evidence
 
 
 def git(repo: Path, *args: str) -> str:
@@ -55,6 +56,7 @@ class TaskRunnerWorkflowIntegrationTests(unittest.TestCase):
         git(repo, "config", "user.name", "Test")
         git(repo, "config", "user.email", "test@example.invalid")
         write_plan_evidence(repo)
+        (repo / "reader_b.py").write_text("from reader import read_target\n\ndef read_summary():\n    return 'Value: ' + read_target()\n", encoding="utf-8")
         git(repo, "add", "-A")
         git(repo, "commit", "-m", "baseline")
         return repo
@@ -69,6 +71,7 @@ class TaskRunnerWorkflowIntegrationTests(unittest.TestCase):
         with_replan: bool = False,
         benchmark_fail: bool = False,
         owner_allowed_paths: list[str] | None = None,
+        with_check_repair: bool = False,
     ) -> Path:
         heldout_command = (
             "import sys; print('ORACLE_REACHED'); sys.exit(1)"
@@ -95,7 +98,7 @@ project = "demo"
 workspace_mode = "git_worktree"
 result_mode = "keep_worktree"
 risk = "{risk}"
-max_fix_cycles = 0
+max_fix_cycles = {1 if with_check_repair else 0}
 max_replan_cycles = {1 if with_replan else 0}
 turn_timeout_seconds = 60
 require_clean_git = true
@@ -128,6 +131,11 @@ timeout_seconds = 30
         projected_jest: bool = False,
         planner_exception: PlannerCapabilityInfeasible | None = None,
         owner_allowed_paths: list[str] | None = None,
+        promote_not_affected: bool = False,
+        discovery_risk: bool = False,
+        implementer_replan: bool = False,
+        check_repair: bool = False,
+        reuse_old_impact: bool = False,
     ) -> tuple[int, Path, str]:
         root = Path(tempfile.mkdtemp(prefix="slivin-main-workflow-"))
         repo = self.make_repo(root)
@@ -140,9 +148,10 @@ timeout_seconds = 30
             repo,
             benchmark=benchmark,
             risk=risk,
-            with_replan=with_replan,
+            with_replan=with_replan or implementer_replan,
             benchmark_fail=benchmark_fail,
             owner_allowed_paths=owner_allowed_paths,
+            with_check_repair=check_repair,
         )
         run_root = root / "run"
 
@@ -157,7 +166,14 @@ timeout_seconds = 30
         def fake_planner(*_args, **_kwargs):
             if planner_exception is not None:
                 raise planner_exception
-            return valid_plan()
+            plan = valid_plan()
+            if promote_not_affected:
+                plan["impact_closure"]["not_affected_consumers"] = [{
+                    "name": "Integration sibling", "paths": ["reader_b.py"], "symbols": ["read_summary"],
+                    "why_considered": "The sibling calls the shared reader.", "reason": "Initially assumed to use only a static title.",
+                    "evidence": ["reader_b.py read_summary needs post-patch reachability review."],
+                }]
+            return plan
 
         evaluator_calls = 0
 
@@ -185,13 +201,14 @@ timeout_seconds = 30
 
         implementer_calls = 0
         implementer_threads: list[str] = []
+        previous_impact = None
 
         def fake_implementer_report(*_args, **kwargs):
-            nonlocal implementer_calls
+            nonlocal implementer_calls, previous_impact
             implementer_calls += 1
             workspace = Path(kwargs["workspace"])
             implementer_threads.append(str(kwargs["thread_id"]))
-            if with_replan and implementer_calls == 2:
+            if (with_replan or implementer_replan) and implementer_calls == 2:
                 self.assertEqual(
                     (workspace / "target.txt").read_text(encoding="utf-8"),
                     "before\n",
@@ -202,7 +219,13 @@ timeout_seconds = 30
                     implementer_threads[1],
                     "Semantic replan must start a fresh Implementer thread",
                 )
+            elif implementer_calls > 1:
+                self.assertEqual(implementer_threads[-1], implementer_threads[0])
+                self.assertFalse(Path(kwargs["stamp_path"]).exists(), "Continuation must invalidate the previous self-verify stamp")
             (workspace / "target.txt").write_text("after\n", encoding="utf-8")
+            if check_repair and implementer_calls > 1:
+                reader = workspace / "reader.py"
+                reader.write_text(reader.read_text(encoding="utf-8") + "\n# Reader reviewed during repair.\n", encoding="utf-8")
             command = list(kwargs["self_verify_command"])
             subprocess.run(command, cwd=workspace, check=True)
             self.assertTrue(
@@ -235,7 +258,7 @@ timeout_seconds = 30
                 "additional_check_paths": [],
                 "blockers": [],
             }
-            if (with_discovery or with_runtime_discovery) and implementer_calls == 1:
+            if with_discovery or with_runtime_discovery or promote_not_affected or discovery_risk:
                 report["registered_checks"] = (
                     [{"kind": "check_id", "value": "git.diff-check"}]
                     if with_discovery
@@ -243,7 +266,7 @@ timeout_seconds = 30
                 )
                 report["discovered_obligations"] = [
                     {
-                        "kind": "consumer",
+                        "kind": "risk" if discovery_risk else "consumer",
                         "name": "Integration sibling",
                         "reason": "Uses the same target state.",
                         "required_behavior": "Existing behavior remains unchanged.",
@@ -264,7 +287,27 @@ timeout_seconds = 30
             else:
                 report["registered_checks"] = []
                 report["discovered_obligations"] = []
+            attach_post_patch_impact(report, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace))
+            for row in report["post_patch_impact"]["in_scope_consumers"] + report["post_patch_impact"]["new_risks"]:
+                if row["name"] == "Integration sibling":
+                    row.update(paths=["reader_b.py"], symbols=["read_summary"])
+            if promote_not_affected:
+                report["post_patch_impact"]["not_affected_consumers"] = []
+            if implementer_replan and implementer_calls == 1:
+                report.update(status="REPLAN_REQUIRED", reason="The actual patch requires a fresh technical model.", evidence=["reader.py assumptions must be rechecked from baseline."])
+            if reuse_old_impact and previous_impact is not None:
+                report["post_patch_impact"] = previous_impact
+            previous_impact = copy.deepcopy(report["post_patch_impact"])
             return report
+
+        original_run_checks = task_runner.run_checks
+
+        def controller_checks(*args, **kwargs):
+            results = original_run_checks(*args, **kwargs)
+            if check_repair and kwargs.get("label") == "CHECKS #1":
+                results[0].returncode = 1
+                results[0].output = "A synthetic Controller assertion requires the reader to be reviewed."
+            return results
 
         output = io.StringIO()
         local_config = {
@@ -297,6 +340,7 @@ timeout_seconds = 30
             mock.patch.object(task_runner, "validate_planner_artifact", wraps=task_runner.validate_planner_artifact) as planner_validation,
             mock.patch.object(task_runner, "run_evaluator", side_effect=fake_evaluator),
             mock.patch.object(task_runner, "run_implementer_report", side_effect=fake_implementer_report),
+            mock.patch.object(task_runner, "run_checks", side_effect=controller_checks),
             contextlib.redirect_stdout(output),
             contextlib.redirect_stderr(output),
         ):
@@ -369,7 +413,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a22")
+        self.assertEqual(build_identity["version"], "0.8.0a23")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)
@@ -571,6 +615,55 @@ timeout_seconds = 30
         self.assertEqual(state["terminal"]["result_code"], StageResultCode.HARNESS_TASK_PASS.value)
         self.assertIn("=== REPLAN #1 ===", output)
 
+    def test_post_patch_promoted_consumer_expands_in_same_thread(self) -> None:
+        result, root, output = self.run_case(benchmark=False, risk="medium", promote_not_affected=True)
+        self.assertEqual(result, 0, output)
+        self.assertFalse((root / "implementation_impact_closure_01.json").exists())
+        artifact = json.loads((root / "implementation_impact_closure_02.json").read_text(encoding="utf-8"))
+        self.assertEqual(artifact["schema_version"], "implementation-impact-closure.v1")
+        self.assertEqual(artifact["post_patch_impact"]["not_affected_consumers"], [])
+        final = json.loads((root / "implementation_report_02.json").read_text(encoding="utf-8"))
+        self.assertTrue(any(row["item_id"] == "CONSUMER-DISCOVERED-1" and row["status"] == "VERIFIED" for row in final["contract_evidence"]))
+        self.assertEqual(len(list(root.glob("contract_expansion_*.json"))), 1)
+
+    def test_post_patch_new_risk_expands_before_final_complete(self) -> None:
+        result, root, output = self.run_case(benchmark=False, risk="medium", discovery_risk=True)
+        self.assertEqual(result, 0, output)
+        final = json.loads((root / "implementation_report_02.json").read_text(encoding="utf-8"))
+        self.assertTrue(any(row["item_id"] == "RISK-DISCOVERED-1" for row in final["contract_evidence"]))
+        self.assertTrue((root / "implementation_impact_closure_02.json").is_file())
+
+    def test_fast_discovered_consumer_expands_before_final_complete(self) -> None:
+        result, root, output = self.run_case(benchmark=False, risk="low")
+        self.assertEqual(result, 0, output)
+        artifact = json.loads((root / "implementation_impact_closure_02.json").read_text(encoding="utf-8"))
+        self.assertIsNone(artifact["plan_fingerprint"])
+        self.assertEqual(artifact["post_patch_impact"]["in_scope_consumers"][0]["source"], "DISCOVERED")
+        state = json.loads((root / "run_state.json").read_text(encoding="utf-8"))
+        self.assertIn("implementation_impact_closure_02.json", json.dumps(state["stages"]["implementer"]))
+
+    def test_implementer_model_divergence_uses_fresh_semantic_replan(self) -> None:
+        result, root, output = self.run_case(benchmark=False, risk="medium", implementer_replan=True)
+        self.assertEqual(result, 0, output)
+        self.assertTrue((root / "replan_01_reset.json").exists())
+        self.assertFalse((root / "implementation_impact_closure_01.json").exists())
+        final = json.loads((root / "implementation_impact_closure_02.json").read_text(encoding="utf-8"))
+        self.assertEqual(final["revision_binding"]["attempt_id"], 2)
+
+    def test_controller_repair_requires_new_candidate_impact_artifact(self) -> None:
+        result, root, output = self.run_case(benchmark=False, risk="medium", check_repair=True)
+        self.assertEqual(result, 0, output)
+        before = json.loads((root / "implementation_impact_closure_01.json").read_text(encoding="utf-8"))
+        after = json.loads((root / "implementation_impact_closure_02.json").read_text(encoding="utf-8"))
+        self.assertNotEqual(before["candidate_id"], after["candidate_id"])
+        self.assertEqual(after["changed_paths"], ["reader.py", "target.txt"])
+
+    def test_controller_rejects_repair_with_reused_pre_repair_impact(self) -> None:
+        result, root, output = self.run_case(benchmark=False, risk="medium", check_repair=True, reuse_old_impact=True)
+        self.assertEqual(result, 1, output)
+        self.assertIn("Every Controller changed path", output)
+        self.assertFalse((root / "implementation_impact_closure_02.json").exists())
+
     def test_project_profile_builds_and_uses_worktree_local_python_runtime(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="slivin-project-runtime-workflow-"))
         repo = self.make_repo(root)
@@ -638,8 +731,13 @@ timeout_seconds = 30
             (workspace / "target.txt").write_text("after\n", encoding="utf-8")
             command = list(kwargs["self_verify_command"])
             subprocess.run(command, cwd=workspace, check=True)
+            self.assertTrue(task_runner.verify_self_verification_stamp(
+                workspace=workspace, stamp_path=Path(kwargs["stamp_path"]),
+                control_plane=kwargs.get("control_plane"), run_state=kwargs.get("run_state"),
+                check_registry_digest=kwargs.get("check_registry_digest"),
+            ))
             contract = kwargs["implementation_contract"]
-            return {
+            return attach_post_patch_impact({
                 "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
                 "status": "COMPLETE",
                 "summary": "candidate ready in project runtime",
@@ -660,7 +758,7 @@ timeout_seconds = 30
                 "registered_checks": [],
                 "discovered_obligations": [],
                 "blockers": [],
-            }
+            }, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace))
 
         output = io.StringIO()
         with (

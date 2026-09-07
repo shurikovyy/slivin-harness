@@ -36,7 +36,7 @@ from slivin_harness.runtime_projection import (
     RuntimeProjectionIntegrityManager,
 )
 from slivin_harness.workspace import RuntimeProjection, WorkspaceSession
-from test_protocol import proof, valid_plan, valid_task_contract
+from test_protocol import attach_post_patch_impact, write_plan_evidence, proof, valid_plan, valid_task_contract
 
 
 def git(repo: Path, *args: str) -> str:
@@ -48,11 +48,18 @@ def git(repo: Path, *args: str) -> str:
 
 
 class ImplementerContractTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="slivin-report-evidence-")
+        self.addCleanup(temporary.cleanup)
+        self.workspace = Path(temporary.name)
+        write_plan_evidence(self.workspace)
+
     def make_repo(self) -> Path:
         repo = Path(tempfile.mkdtemp(prefix="slivin-implementer-"))
         git(repo, "init")
         git(repo, "config", "user.name", "Test")
         git(repo, "config", "user.email", "test@example.invalid")
+        write_plan_evidence(repo)
         (repo / "src").mkdir()
         (repo / "tests").mkdir()
         (repo / "src" / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -70,7 +77,7 @@ class ImplementerContractTests(unittest.TestCase):
     def canonical_report(self, status: str) -> dict:
         contract = self.contract()
         complete = status == "COMPLETE"
-        return {
+        return attach_post_patch_impact({
             "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
             "status": status,
             "summary": "completed" if complete else f"{status.lower()} outcome",
@@ -90,12 +97,12 @@ class ImplementerContractTests(unittest.TestCase):
             "registered_checks": [],
             "discovered_obligations": [],
             "blockers": [] if complete else ["concrete terminal blocker"],
-        }
+        }, plan=valid_plan(), changed_paths=[])
 
     def test_canonical_complete_report_passes_semantic_validation(self) -> None:
         validate_implementation_report(
             self.canonical_report("COMPLETE"),
-            contract=self.contract(),
+            workspace=self.workspace, plan=valid_plan(), contract=self.contract(),
             changed_paths=[],
             self_verification_ok=True,
             documentation_paths=[],
@@ -106,7 +113,7 @@ class ImplementerContractTests(unittest.TestCase):
             with self.subTest(status=status):
                 validate_implementation_report(
                     self.canonical_report(status),
-                    contract=self.contract(),
+                    workspace=self.workspace, plan=valid_plan(), contract=self.contract(),
                     changed_paths=[],
                     self_verification_ok=False,
                     documentation_paths=[],
@@ -119,7 +126,7 @@ class ImplementerContractTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "evidence before receipt issuance"):
             validate_implementation_report(
                 report,
-                contract=self.contract(),
+                workspace=self.workspace, plan=valid_plan(), contract=self.contract(),
                 changed_paths=[],
                 self_verification_ok=True,
                 documentation_paths=[],
@@ -140,7 +147,7 @@ class ImplementerContractTests(unittest.TestCase):
         repo = self.make_repo()
         contract = self.contract()
         (repo / "src" / "a.py").write_text("VALUE = 2\n", encoding="utf-8")
-        report = {
+        report = attach_post_patch_impact({
             "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
             "status": "COMPLETE",
             "summary": "done",
@@ -151,21 +158,21 @@ class ImplementerContractTests(unittest.TestCase):
             "self_verification": {"status": "PASS", "command": "self", "evidence": ["PASS"]},
             "additional_check_paths": [],
             "blockers": [],
-        }
+        }, plan=valid_plan(), changed_paths=["src/a.py"])
         validate_implementation_report(
-            report, contract=contract, changed_paths=["src/a.py"],
+            report, workspace=repo, plan=valid_plan(), contract=contract, changed_paths=["src/a.py"],
             self_verification_ok=True, documentation_paths=[]
         )
         report["contract_evidence"].pop()
         with self.assertRaisesRegex(RuntimeError, "every Implementation Contract item"):
             validate_implementation_report(
-                report, contract=contract, changed_paths=["src/a.py"],
+                report, workspace=repo, plan=valid_plan(), contract=contract, changed_paths=["src/a.py"],
                 self_verification_ok=True, documentation_paths=[]
             )
 
     def test_not_affected_is_only_allowed_for_consumers(self) -> None:
         contract = self.contract()
-        report = {
+        report = attach_post_patch_impact({
             "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
             "status": "COMPLETE",
             "summary": "done",
@@ -176,11 +183,11 @@ class ImplementerContractTests(unittest.TestCase):
             "self_verification": {"status": "PASS", "command": "self", "evidence": ["PASS"]},
             "additional_check_paths": [],
             "blockers": [],
-        }
+        }, plan=valid_plan(), changed_paths=[])
         report["contract_evidence"][0]["status"] = "NOT_AFFECTED"
         with self.assertRaisesRegex(RuntimeError, "cannot be NOT_AFFECTED"):
             validate_implementation_report(
-                report, contract=contract, changed_paths=[], self_verification_ok=True,
+                report, workspace=self.workspace, plan=valid_plan(), contract=contract, changed_paths=[], self_verification_ok=True,
                 documentation_paths=[]
             )
         consumer_index = next(
@@ -189,7 +196,7 @@ class ImplementerContractTests(unittest.TestCase):
         report["contract_evidence"][0]["status"] = "VERIFIED"
         report["contract_evidence"][consumer_index]["status"] = "NOT_AFFECTED"
         validate_implementation_report(
-            report, contract=contract, changed_paths=[], self_verification_ok=True,
+            report, workspace=self.workspace, plan=valid_plan(), contract=contract, changed_paths=[], self_verification_ok=True,
             documentation_paths=[]
         )
 
@@ -219,7 +226,7 @@ class ImplementerContractTests(unittest.TestCase):
         repo = self.make_repo()
         plan = valid_plan()
         contract = self.contract(plan)
-        report = {
+        report = attach_post_patch_impact({
             "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
             "status": "BLOCKED",
             "summary": "blocked after continuation",
@@ -230,7 +237,7 @@ class ImplementerContractTests(unittest.TestCase):
             "self_verification": {"status": "NOT_RUN", "command": "self", "evidence": ["not run"]},
             "additional_check_paths": [],
             "blockers": ["real blocker"],
-        }
+        }, plan=valid_plan(), changed_paths=[])
 
         class FakeCodex:
             def __init__(self): self.calls = []
@@ -251,7 +258,7 @@ class ImplementerContractTests(unittest.TestCase):
         self.assertEqual(len(codex.calls), 2)
         self.assertEqual(codex.calls[0]["thread_id"], codex.calls[1]["thread_id"])
         self.assertEqual(codex.calls[1]["timeout"], 300)
-        self.assertIn("НЕ начинай исследование заново", codex.calls[1]["prompt"])
+        self.assertIn("обнови impact sweep", codex.calls[1]["prompt"])
 
     def test_self_verify_stamp_is_bound_to_current_candidate(self) -> None:
         repo = self.make_repo()
@@ -409,7 +416,7 @@ class ImplementerContractTests(unittest.TestCase):
             toolchain={"project_python": sys.executable},
         )
         contract = self.contract()
-        report = {
+        report = attach_post_patch_impact({
             "protocol_version": IMPLEMENTER_PROTOCOL_VERSION,
             "status": "COMPLETE",
             "summary": "done",
@@ -424,7 +431,7 @@ class ImplementerContractTests(unittest.TestCase):
             },
             "additional_check_paths": [],
             "blockers": [],
-        }
+        }, plan=valid_plan(), changed_paths=[])
 
         class FakeCodex:
             def run_turn(self, **_kwargs):

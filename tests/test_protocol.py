@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import tempfile
 import unittest
 from pathlib import Path
@@ -33,6 +34,69 @@ from task_runner import (
     validate_evaluation_artifact,
     validate_plan_artifact,
 )
+
+
+def empty_post_patch_impact() -> dict:
+    return {
+        "applicable": False, "changed_contracts": [], "in_scope_consumers": [],
+        "not_affected_consumers": [], "related_out_of_scope": [], "new_risks": [],
+        "changed_path_review": [], "search_evidence": [], "closure_summary": "",
+    }
+
+
+def attach_post_patch_impact(report: dict, *, plan: dict | None, changed_paths: list[str]) -> dict:
+    """Synthetic report fixture; never used by production artifact construction."""
+    closure = empty_post_patch_impact()
+    report["post_patch_impact"] = closure
+    if report["status"] != "COMPLETE":
+        return report
+    expected = (plan or valid_plan())["impact_closure"]
+    closure["applicable"] = expected["applicable"]
+    closure["changed_contracts"] = [{
+        "name": row["name"], "before": row["before"], "after": row["after"],
+        "paths": list(row["evidence_paths"]), "symbols": list(row["evidence_symbols"]),
+        "evidence": [f"Post-patch inspection confirms {row['after']}"],
+    } for row in expected["changed_contracts"]]
+    closure["in_scope_consumers"] = [dict(copy.deepcopy(row), source="PLANNER") for row in expected["in_scope_consumers"]]
+    closure["not_affected_consumers"] = copy.deepcopy(expected["not_affected_consumers"])
+    closure["related_out_of_scope"] = copy.deepcopy(expected["related_out_of_scope"])
+    discoveries = report.setdefault("discovered_obligations", [])
+    if plan is None:
+        for row in closure["in_scope_consumers"]:
+            row["source"] = "DISCOVERED"
+            if not any(item["kind"] == "consumer" and item["name"] == row["name"] for item in discoveries):
+                discoveries.append({
+                    "kind": "consumer", "name": row["name"], "reason": row["why_affected"],
+                    "required_behavior": row["required_behavior"], "required_proof": copy.deepcopy(row["required_proof"]),
+                    "evidence": list(row["evidence"]),
+                })
+    for item in discoveries:
+        if item["kind"] == "consumer" and any(row["name"] == item["name"] for row in closure["in_scope_consumers"]):
+            continue
+        row = {
+            "name": item["name"], "paths": ["reader.py"], "symbols": ["read_target"],
+            "evidence": list(item["evidence"]), "required_proof": copy.deepcopy(item["required_proof"]),
+        }
+        if item["kind"] == "consumer":
+            row.update(source="DISCOVERED", why_affected=item["reason"], required_behavior=item["required_behavior"])
+            closure["in_scope_consumers"].append(row)
+        else:
+            row.update(reason=item["reason"], failure_mode=item["required_behavior"])
+            closure["new_risks"].append(row)
+    closure["changed_path_review"] = [{
+        "path": path, "role": "DOCUMENTATION" if not closure["applicable"] else "IMPLEMENTATION",
+        "reason": "The candidate updates this file to satisfy the requested behavior.",
+        "evidence": [f"Post-patch diff review of {path} accounts for the complete file change."],
+    } for path in changed_paths]
+    closure["search_evidence"] = [{
+        "target": row["target"], "method": "Inspect final symbols, trace callers and compare the actual diff with the initial model.",
+        "evidence_paths": list(row["evidence_paths"]),
+        "conclusion": "Post-patch review confirms the classified consumers and checks for additional dependencies.",
+    } for row in expected["search_evidence"]]
+    closure["closure_summary"] = "The actual patch, readers and sibling consumers were revisited; all changed files and discovered obligations are accounted for."
+    if not closure["applicable"]:
+        closure["closure_summary"] = "README.md remains explanatory prose with no executable state, runtime contract or behavioral obligations after the editorial correction."
+    return report
 
 
 def proof(claim: str, *, level: str = "LOCAL_DETERMINISTIC", capabilities=None) -> dict:

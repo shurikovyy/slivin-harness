@@ -11,8 +11,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from slivin_harness.verification import validate_proof_target
+from slivin_harness.implementer import IMPLEMENTER_PROTOCOL_VERSION, POST_PATCH_IMPACT_SCHEMA
 
-IMPLEMENTER_PROTOCOL_VERSION = "implementer.v3"
 CHECK_REGISTRY_VERSION = "check-registry.v1"
 CONTROLLER_CHECKS_VERSION = "controller-checks.v1"
 WATCHDOG_VERSION = "activity-watchdog.v1"
@@ -430,6 +430,7 @@ def validate_implementer_report(
     active_contract_items: Sequence[Mapping[str, Any]],
     require_receipt: bool = True,
 ) -> dict[str, Any]:
+    """Validate ledger/receipt structure; the v4 Controller also reconciles impact."""
     if report.get("protocol_version") != IMPLEMENTER_PROTOCOL_VERSION:
         raise Phase4ContractError(
             f"protocol_version must be {IMPLEMENTER_PROTOCOL_VERSION!r}"
@@ -442,6 +443,9 @@ def validate_implementer_report(
     summary = report.get("summary")
     if not isinstance(summary, str) or not summary.strip():
         raise Phase4ContractError("Implementer summary must be non-empty")
+    impact = report.get("post_patch_impact")
+    if not isinstance(impact, Mapping) or set(impact) != set(POST_PATCH_IMPACT_SCHEMA["required"]):
+        raise Phase4ContractError("implementer.v4 requires the complete post_patch_impact wire object")
 
     if status is not ImplementerStatus.COMPLETE:
         reason = report.get("reason")

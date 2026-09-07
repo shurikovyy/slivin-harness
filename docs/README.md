@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a22
+# Документация Slivin Harness 0.8.0a23
 
-Актуальная версия: **0.8.0a22 — Owner-backed Impact Applicability**.
+Актуальная версия: **0.8.0a23 — Post-patch Implementer Impact Closure**.
 
 Основные документы:
 
@@ -34,7 +34,7 @@
 ```text
 task-contract.v1
 planner.v5
-implementer.v3
+implementer.v4
 implementation-contract.v3
 verification-plan.v1
 project-runtime.v1

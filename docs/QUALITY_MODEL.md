@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a22 — Phase 7
+# Модель качества Slivin Harness 0.8.0a23 — Phase 7
 
 Нормативный autonomy contract: **[AUTONOMOUS_ENGINEERING_CONTRACT.md](AUTONOMOUS_ENGINEERING_CONTRACT.md)**.
 User scope задаёт observable результат и explicit ограничения; technical impact
@@ -112,7 +112,21 @@ DOCS optional
 
 ### Implementer self verification
 
-`implementer.v3` использует trusted check registry и worktree-local project runtime, чтобы исправляться до сдачи. Controller-private receipt связан с candidate, revisions, runtime environment, attempt и registry digest.
+`implementer.v4` использует trusted check registry и worktree-local project runtime, чтобы исправляться до сдачи. Controller-private receipt связан с candidate, revisions, runtime environment, attempt и registry digest.
+
+COMPLETE дополнительно требует `post_patch_impact` по actual diff: reconciliation
+Planner changed contracts/IN_SCOPE, повторный disposition NOT_AFFECTED, сохранение
+RELATED_OUT_OF_SCOPE и exact changed-path review. DISCOVERED consumers и новые risks
+совпадают с discovered obligations и проходят Controller Contract expansion до
+final COMPLETE. Изменившаяся technical model требует REPLAN_REQUIRED.
+FAST подчиняется тому же owner-backed prose-only исключению; отсутствие Planner
+не освобождает от engineering impact sweep. После repair sweep и self-verify повторяются.
+
+Controller-normalized `implementation-impact-closure.v1` привязан к candidate,
+Planner/Contract fingerprints, changed paths и revision binding. Это доказательство
+структуры, согласованности и актуальности declarations; оно не доказывает истинность
+semantic evidence или исчерпывающий discovery. Независимое усиление Evaluator closure
+и обязательный final surfacing follow-ups ещё не реализованы.
 
 Self-verify остаётся assertion builder-а, а не финальным authority.
 
@@ -346,7 +360,7 @@ Planner Impact Closure проверяется synthetic Harness tests. Historica
 manifest version = 2
 task-contract.v1
 planner.v5
-implementer.v3
+implementer.v4
 implementation-contract.v3
 verification-plan.v1
 project-runtime.v1

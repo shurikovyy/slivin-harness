@@ -43,10 +43,12 @@ from slivin_harness.evaluator import (
 from slivin_harness.implementer import (
     IMPLEMENTER_REPORT_SCHEMA,
     build_implementation_contract,
+    build_implementation_impact_closure,
     compact_plan_context,
     parse_implementation_report,
     validate_implementation_contract,
     validate_implementation_report,
+    validate_implementation_impact_closure,
 )
 from slivin_harness.planner import (
     PlannerCapabilityInfeasible,
@@ -188,16 +190,50 @@ IMPLEMENTER_INSTRUCTIONS = """
 - typed Verification Plan задаёт обязательный уровень доказательства; не подменяй runtime proof локальным тестом;
 - если при исследовании найдены дополнительные существующие test files, зарегистрируй их как typed `registered_checks`/`additional_check_paths`; trusted check ID сейчас только `git.diff-check`, произвольные/неизвестные Controller команды и IDs запрещены;
 - если найден material consumer/risk вне active Contract, верни его в `discovered_obligations`; не ослабляй и не редактируй Contract самостоятельно;
+- Planner impact_closure — исходная техническая гипотеза, а не граница исследования.
+  После реализации исследуй фактический candidate/diff: реально изменённые contracts,
+  shared symbols/state/API, writers/readers/decision points и sibling consumers.
+  Выполни новый post-patch sweep, сопоставь его с Planner model, найди новые consumers/risks,
+  и только затем запускай final SELF_VERIFY_COMMAND. Конкретный search tool не предписан.
+- COMPLETE требует post_patch_impact: changed contracts, concrete post-patch paths/symbols/
+  evidence, consumer dispositions, new_risks, changed_path_review, search_evidence и summary.
+  Changed contracts обязаны совпадать с Planner по normalized name и before/after semantics.
+  Все Planner IN_SCOPE повтори как source=PLANNER с прежними why_affected/required_behavior/proof.
+  Другой/additional semantic contract, неверный root cause или consumer behavior требуют
+  REPLAN_REQUIRED с reason/evidence; нельзя молча менять technical model через COMPLETE.
+- Каждый Planner NOT_AFFECTED пересмотри: сохрани с post-patch evidence либо переведи в
+  DISCOVERED IN_SCOPE. Каждый DISCOVERED consumer и new risk одновременно повтори один-к-одному
+  в discovered_obligations: name, reason=why_affected (для risk reason), required_behavior=
+  required_behavior (для risk failure_mode), proof и evidence. Controller расширит Contract,
+  продолжит тот же thread и потребует новое evidence/self-verify для новых items.
+  В следующих reports сохраняй уже зарегистрированные discoveries; это idempotent.
+- Сохраняй все Planner RELATED_OUT_OF_SCOPE relation/reason/evidence/follow-up и добавляй
+  новые отдельные findings туда же. Они не являются Contract obligations.
+- changed_path_review содержит ровно одну осмысленную строку на каждый реально changed path,
+  включая удаления; OTHER_JUSTIFIED требует конкретного reason и evidence с указанием path.
+  Остальные evidence paths должны существовать в final workspace. Search evidence должен
+  описывать новый sweep реального patch, а не копировать Planner prose.
+- Planner applicable=true нельзя переключить в false. При Planner applicable=false обнаруженный
+  behavioral impact требует REPLAN_REQUIRED. FAST без Planner самостоятельно строит closure,
+  а material consumers/risks проводит через DISCOVERED и Controller expansion.
+  applicable=false требует непустой owner allowed_paths только из существующих regular prose
+  files .md/.rst/.txt/.adoc, safe и canonical внутри workspace. Search и changed paths — subset
+  этой owner boundary; directory/glob/code/config/mixed/escaping boundary запрещает исключение.
+  Нет behavioral/state/runtime obligations; summary объясняет отсутствие impact с evidence path.
+- После каждого repair заново исследуй actual patch и верни новый post_patch_impact.
+  Предыдущее closure/receipt не доказывает новый candidate или новую Contract revision.
 - temp/cache размещай в .harness_tmp;
 - если две разные попытки записи завершаются Permission denied/Access denied, не повторяй их: зафиксируй инфраструктурную блокировку;
 - не ослабляй тесты ради PASS;
 - финальный ответ — structured Implementation Report. Все wire-level поля schema обязательны;
   для неприменимых полей используй пустую строку/массив, а `self_verification.receipt_id`
   всегда оставляй пустым — Controller выдаёт receipt независимо. COMPLETE допустим только
-  после self-verification PASS и проверки всего Implementation Contract.
+  после self-verification PASS, проверки всего Implementation Contract и post-patch impact closure.
   REPLAN_REQUIRED/BLOCKED/NEEDS_USER_DECISION требуют одну конкретную reason + evidence,
   пустые contract_evidence/discovered_obligations/registered_checks допустимы и не должны
   превращаться в искусственный ledger по каждому item.
+  post_patch_impact wire fields остаются обязательными, но при non-COMPLETE его arrays
+  могут быть пустыми/частичными; не фабрикуй findings ради формы.
 """.strip()
 
 TOP_LEVEL_FIELDS = {
@@ -1620,7 +1656,8 @@ runtime/external proof локальным тестом. Затем запуст�
 typed registered_checks/additional_check_paths; Controller сам выберет trusted runner.
 Новые material consumers/risks передавай через discovered_obligations. Для
 REPLAN_REQUIRED/BLOCKED/NEEDS_USER_DECISION дай reason и evidence; полный Contract ledger
-нужен только для COMPLETE.
+нужен только для COMPLETE. До final self-verify выполни новый post-patch impact sweep;
+COMPLETE требует post_patch_impact и review каждого changed path. Planner closure — гипотеза.
 """.strip()
 
 def _repair_contract_block(
@@ -1634,6 +1671,8 @@ Implementation Contract остаётся обязательным после rep
 {_display_command(self_verify_command)}
 
 После изменений заново дай evidence по КАЖДОМУ contract item в structured report.
+Заново исследуй post-patch impact до final self-verification; предыдущий closure stale.
+Technical-model divergence требует REPLAN_REQUIRED, а новые consumers/risks — discovery mapping.
 """.strip()
 
 
@@ -1646,12 +1685,14 @@ def build_implementation_continuation_prompt(
 ) -> str:
     return f"""
 {reason} Уже внесённые изменения в workspace сохранены, thread и исходный task остаются теми же.
-НЕ начинай исследование заново и не откатывай подтверждённую работу.
+Не откатывай подтверждённую работу; обнови impact sweep по фактическому patch.
 
 1. Сначала посмотри текущий `git diff`/status и продолжи только незавершённые пункты.
 2. Особое внимание удели ещё не доказанным risks/consumers из Implementation Contract.
-3. Запусти актуальный SELF_VERIFY_COMMAND.
-4. Верни COMPLETE только после evidence по каждому contract item; иначе BLOCKED с реальной причиной.
+3. Пересмотри post_patch_impact, сохрани Planner dispositions и все уже expanded discoveries.
+4. Запусти актуальный SELF_VERIFY_COMMAND после impact sweep.
+5. Верни COMPLETE только после evidence по каждому item и полного post-patch closure;
+   technical-model divergence требует REPLAN_REQUIRED с evidence.
 
 Implementation Contract:
 {json.dumps(implementation_contract, ensure_ascii=False, indent=2)}
@@ -1950,6 +1991,7 @@ def run_implementer_report(
     workspace: Path,
     stamp_path: Path,
     plan: dict | None,
+    owner_allowed_paths: list[str] | None = None,
     control_plane: ControllerPlane | None = None,
     run_state: RunState | None = None,
     check_registry_digest: str | None = None,
@@ -2097,6 +2139,9 @@ def run_implementer_report(
         changed_paths=changed_paths,
         self_verification_ok=self_verification_ok,
         documentation_paths=[],
+        workspace=workspace,
+        plan=plan,
+        owner_allowed_paths=owner_allowed_paths or (),
     )
     print("=== IMPLEMENTATION REPORT ===")
     print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -2932,6 +2977,13 @@ def main(argv: list[str] | None = None) -> int:
             print("=== VERIFICATION PLAN ===")
             print(json.dumps(verification_plan, ensure_ascii=False, indent=2))
 
+            fix_cycles = 0
+            replan_cycles = 0
+            repair_progress_history: list[tuple[str, str]] = []
+            replan_progress_history: list[tuple[str, str]] = []
+            evaluation_index = 0
+            check_index = 0
+            first_evaluation_pass: bool | None = None
             dynamic_specs: list[dict] = []
             dynamic_notes: list[str] = []
             implementation_report_index = 0
@@ -2943,6 +2995,8 @@ def main(argv: list[str] | None = None) -> int:
             runtime_verification_index = 0
             active_contract_closure: dict | None = None
             active_contract_closure_artifact: str | None = None
+            active_implementation_impact: dict | None = None
+            active_implementation_impact_artifact: str | None = None
             active_runtime_evidence: dict = {
                 "protocol_version": "runtime-evidence.v1",
                 "status": StageResultCode.RUNTIME_VERIFICATION_SKIPPED.value,
@@ -3244,6 +3298,7 @@ def main(argv: list[str] | None = None) -> int:
                     workspace=workspace,
                     stamp_path=next_stamp,
                     plan=plan,
+                    owner_allowed_paths=allowed_paths,
                     control_plane=recorder.control_plane,
                     run_state=run_state,
                     check_registry_digest=check_registry.digest(),
@@ -3302,12 +3357,439 @@ def main(argv: list[str] | None = None) -> int:
                     + ". Previous self-verification is stale."
                 )
 
+            def replan_implementation(reason: str) -> tuple[dict, str]:
+                """Shared semantic reset/replan path for Implementer and Evaluator."""
+                nonlocal replan_cycles, plan, dynamic_specs, dynamic_notes, runtime_state, project_runtime_index
+                nonlocal active_contract_closure, active_contract_closure_artifact, active_runtime_evidence, active_runtime_artifact
+                nonlocal implementation_contract, implementation_contract_index, verification_plan, verification_plan_index
+                nonlocal active_contract_artifact, active_verification_artifact, capability_gate_index, active_capability_artifact
+                nonlocal implementer_thread, implementation_report_index, stamp_path, self_verify_command
+                nonlocal active_implementation_impact, active_implementation_impact_artifact
+                active_implementation_impact = None
+                active_implementation_impact_artifact = None
+                if _phase4_loop_stalled(
+                    replan_progress_history,
+                    candidate_id=plan_fingerprint(plan) if plan is not None else "NO_PLAN",
+                    failure_signature=reason,
+                ):
+                    raise RuntimeError(
+                        "REPLAN_STALLED: the same plan was rejected for the same reason"
+                    )
+                replan_cycles += 1
+                run_state.invalidate(
+                    InvalidationTrigger.REPLAN_REQUIRED,
+                    detail=reason,
+                )
+                print(f"=== REPLAN #{replan_cycles} ===")
+
+                # Preserve the rejected implementation for audit, then remove
+                # it from the repository view seen by the fresh Planner. A
+                # semantic replan acknowledges that the previous technical
+                # model was wrong; keeping its diff visible would anchor the
+                # replacement agents to the rejected solution.
+                rejected_candidate = observe_candidate(
+                    f"REPLAN_{replan_cycles}_REJECTED_CANDIDATE"
+                )
+                rejected_patch_artifact = (
+                    f"replan_{replan_cycles:02d}_rejected_candidate.patch"
+                )
+                recorder.write_bytes(
+                    rejected_patch_artifact,
+                    build_candidate_patch(
+                        session,
+                        scratch_root=recorder.private_root / "candidate_indexes",
+                    ),
+                )
+                replan_reset = reset_workspace_for_semantic_replan(
+                    workspace=workspace,
+                    baseline_sha=session.base_sha or preflight["head_sha"],
+                )
+                replan_reset_artifact = f"replan_{replan_cycles:02d}_reset.json"
+                recorder.write_authoritative_json(
+                    replan_reset_artifact, replan_reset
+                )
+                clean_candidate = observe_candidate(
+                    f"REPLAN_{replan_cycles}_CLEAN_BASELINE"
+                )
+                if clean_candidate.changed_paths:
+                    raise RuntimeError(
+                        "Semantic replan did not start from a clean candidate"
+                    )
+
+                # Task-specific checks and evidence belonged to the rejected
+                # attempt. Project gates remain in repair_specs and are
+                # recompiled into the new Verification Plan.
+                check_registry.reset()
+                dynamic_specs = []
+                dynamic_notes = []
+                active_contract_closure = None
+                active_contract_closure_artifact = None
+                active_runtime_evidence = {
+                    "protocol_version": "runtime-evidence.v1",
+                    "status": StageResultCode.RUNTIME_VERIFICATION_SKIPPED.value,
+                    "candidate_id": None,
+                    "verification_plan_fingerprint": None,
+                    "scenarios": [],
+                    "reason_code": "INVALIDATED_BY_SEMANTIC_REPLAN",
+                }
+                active_runtime_artifact = None
+
+                # Clear role scratch so the new agents see repository facts,
+                # not temporary probes from the rejected attempt.
+                for role in (
+                    ExecutionRole.PLANNER,
+                    ExecutionRole.IMPLEMENTER,
+                    ExecutionRole.EVALUATOR,
+                ):
+                    scratch = execution_broker.scratch_root(role)
+                    shutil.rmtree(scratch, ignore_errors=True)
+                    scratch.mkdir(parents=True, exist_ok=True)
+
+                # Restore the authoritative project environment to the clean
+                # baseline as well. Replan is intentionally expensive and
+                # rare; reproducibility is more important than reusing a venv
+                # potentially mutated under the rejected implementation.
+                if runtime_manager is not None:
+                    runtime_state = integrity_coordinator.run_read_only(
+                        f"PROJECT_RUNTIME_REBUILD:{replan_cycles}",
+                        lambda: runtime_manager.build(clean=True),
+                    )
+                    project_runtime_index += 1
+                    runtime_artifact = (
+                        f"project_runtime_replan_{replan_cycles:02d}.json"
+                    )
+                    recorder.write_authoritative_json(
+                        runtime_artifact, runtime_state.to_dict()
+                    )
+                    run_state.bump_revision(
+                        RevisionKind.RUNTIME_ENVIRONMENT,
+                        artifact=runtime_artifact,
+                    )
+                    toolchain["project_python"] = runtime_state.project_python
+                    validate_toolchain(toolchain)
+                    tool_probe_registry.toolchain["project_python"] = (
+                        runtime_state.project_python
+                    )
+                    tool_probe_registry.invalidate_runtime_environment_evidence()
+
+                run_state.begin_stage(StageId.PLANNER)
+                replan_available_capabilities = available_capabilities(
+                    toolchain=toolchain,
+                    configured=declared_capabilities,
+                    runtime=runtime_available_capabilities(runtime_scenarios),
+                    verified_tool_capabilities=tool_probe_registry.verified_capabilities,
+                )
+                try:
+                    plan = integrity_coordinator.run_read_only(
+                        f"PLANNER_REPLAN:{replan_cycles}",
+                        lambda: run_planner(
+                            codex,
+                            workspace=workspace,
+                            task_prompt=manifest["prompt"],
+                            task_contract=task_contract,
+                            preflight=preflight,
+                            owner_allowed_paths=allowed_paths,
+                            available_verification_capabilities=sorted(
+                                replan_available_capabilities
+                            ),
+                            manifest_repair_evidence=planner_repair_evidence,
+                            replan_context=(
+                                "The previous technical model was rejected. "
+                                "Observed reason (not a reference implementation):\n"
+                                + reason
+                            ),
+                            on_heartbeat=make_heartbeat(f"REPLAN #{replan_cycles}"),
+                            on_thread_started=_thread_recorder(
+                                recorder, f"planner_replan_{replan_cycles}"
+                            ),
+                            timeout=timeout,
+                        ),
+                    )
+                except PlannerCapabilityInfeasible as exc:
+                    plan = exc.plan
+                    replan_artifact = f"replan_{replan_cycles:02d}.json"
+                    recorder.write_authoritative_json(replan_artifact, plan)
+                    run_state.bump_revision(
+                        RevisionKind.PLAN, artifact=replan_artifact
+                    )
+                    run_state.route_stage(
+                        StageId.PLANNER,
+                        outcome=WorkflowOutcome.BLOCKED,
+                        result_code=StageResultCode.BLOCKED,
+                        reason_code=exc.reason_code,
+                        artifacts=(replan_artifact,),
+                    )
+                    print(
+                        "HARNESS_TASK_STOPPED: PLANNER_CAPABILITY_INFEASIBLE",
+                        ", ".join(exc.unavailable_capabilities),
+                    )
+                    raise HarnessControlledStop("SEMANTIC_REPLAN_BLOCKED")
+                validate_plan_artifact(
+                    plan, workspace=workspace, task_contract=task_contract,
+                    owner_allowed_paths=allowed_paths,
+                )
+                remaining_replan_gaps = planner_capability_gaps(
+                    plan, available=replan_available_capabilities
+                )
+                if remaining_replan_gaps:
+                    replan_artifact = f"replan_{replan_cycles:02d}.json"
+                    recorder.write_authoritative_json(replan_artifact, plan)
+                    run_state.bump_revision(
+                        RevisionKind.PLAN, artifact=replan_artifact
+                    )
+                    run_state.route_stage(
+                        StageId.PLANNER,
+                        outcome=WorkflowOutcome.BLOCKED,
+                        result_code=StageResultCode.BLOCKED,
+                        reason_code="PLANNER_CAPABILITY_INFEASIBLE",
+                        artifacts=(replan_artifact,),
+                    )
+                    print(
+                        "HARNESS_TASK_STOPPED: PLANNER_CAPABILITY_INFEASIBLE",
+                        ", ".join(remaining_replan_gaps),
+                    )
+                    raise HarnessControlledStop("SEMANTIC_REPLAN_BLOCKED")
+                replan_artifact = f"replan_{replan_cycles:02d}.json"
+                recorder.write_authoritative_json(replan_artifact, plan)
+                run_state.bump_revision(RevisionKind.PLAN, artifact=replan_artifact)
+                if plan["status"] != PlannerStatus.READY.value:
+                    if plan["status"] == PlannerStatus.BLOCKED.value:
+                        outcome = WorkflowOutcome.BLOCKED
+                        result_code = StageResultCode.BLOCKED
+                        reason_code = "PLANNER_BLOCKED_AFTER_REPLAN"
+                    elif plan["status"] == PlannerStatus.TASK_CONTRACT_INVALID.value:
+                        outcome = WorkflowOutcome.INVALID
+                        result_code = StageResultCode.INVALID
+                        reason_code = "TASK_CONTRACT_INVALID_AFTER_REPLAN"
+                    else:
+                        outcome = WorkflowOutcome.NEEDS_USER_DECISION
+                        result_code = StageResultCode.NEEDS_USER_DECISION
+                        reason_code = "PLANNER_NEEDS_USER_DECISION_AFTER_REPLAN"
+                    run_state.route_stage(
+                        StageId.PLANNER,
+                        outcome=outcome,
+                        result_code=result_code,
+                        reason_code=reason_code,
+                        artifacts=(replan_artifact,),
+                    )
+                    print("HARNESS_TASK_STOPPED:", plan["status"])
+                    raise HarnessControlledStop("SEMANTIC_REPLAN_BLOCKED")
+                run_state.pass_stage(
+                    StageId.PLANNER,
+                    StageResultCode.PLANNER_READY,
+                    artifacts=(
+                        replan_artifact,
+                        replan_reset_artifact,
+                        rejected_patch_artifact,
+                    ),
+                )
+                run_state.begin_stage(StageId.IMPLEMENTATION_CONTRACT)
+                implementation_contract = build_implementation_contract(
+                    plan, task_contract=task_contract
+                )
+                validate_implementation_contract(implementation_contract)
+                implementation_contract_index += 1
+                contract_artifact = (
+                    f"implementation_contract_{implementation_contract_index:02d}_"
+                    f"replan_{replan_cycles:02d}.json"
+                )
+                recorder.write_authoritative_json(
+                    contract_artifact, implementation_contract
+                )
+                run_state.bump_revision(
+                    RevisionKind.IMPLEMENTATION_CONTRACT,
+                    artifact=contract_artifact,
+                )
+                verification_plan = compile_verification_plan(
+                    implementation_contract,
+                    project_checks=repair_specs,
+                    task_checks=active_task_check_keys(),
+                )
+                validate_verification_plan(verification_plan)
+                verification_plan_index += 1
+                verification_artifact = (
+                    f"verification_plan_{verification_plan_index:02d}_"
+                    f"replan_{replan_cycles:02d}.json"
+                )
+                recorder.write_authoritative_json(
+                    verification_artifact, verification_plan
+                )
+                run_state.bump_revision(
+                    RevisionKind.VERIFICATION_PLAN,
+                    artifact=verification_artifact,
+                )
+                active_contract_artifact = contract_artifact
+                active_verification_artifact = verification_artifact
+                replan_tool_probes = tool_probe_registry.ensure_capabilities(
+                    verification_plan["required_capabilities"],
+                    batch_id=f"post-replan-capability-gate-{replan_cycles:02d}",
+                )
+                current_capabilities = available_capabilities(
+                    toolchain=toolchain,
+                    configured=declared_capabilities,
+                    runtime=runtime_available_capabilities(runtime_scenarios),
+                    verified_tool_capabilities=tool_probe_registry.verified_capabilities,
+                )
+                missing = required_capability_gaps(
+                    verification_plan,
+                    available=current_capabilities,
+                )
+                runtime_gaps = runtime_requirement_gaps(
+                    verification_plan, runtime_scenarios
+                )
+                runtime_env_gaps = runtime_environment_gaps(
+                    runtime_scenarios,
+                    verification_plan=verification_plan,
+                    execution_broker=execution_broker,
+                )
+                runtime_cmd_gaps = runtime_command_gaps(
+                    verification_plan,
+                    runtime_scenarios,
+                    workspace=workspace,
+                    toolchain=toolchain,
+                )
+                capability_gate_index += 1
+                capability_artifact = (
+                    f"capability_gate_{capability_gate_index:02d}_"
+                    f"replan_{replan_cycles:02d}.json"
+                )
+                capability_record = {
+                    "schema_version": "capability-gate.v1",
+                    "declared": declared_capabilities,
+                    "available": sorted(current_capabilities),
+                    "required": list(verification_plan["required_capabilities"]),
+                    "tool_probe_evidence": replan_tool_probes.public_dict(),
+                    "missing": missing,
+                    "runtime_requirement_gaps": runtime_gaps,
+                    "runtime_environment_gaps": runtime_env_gaps,
+                    "runtime_command_gaps": runtime_cmd_gaps,
+                }
+                recorder.write_authoritative_json(
+                    capability_artifact, capability_record
+                )
+                active_capability_artifact = capability_artifact
+                if not plan["owner_boundary_assessment"]["compatible"]:
+                    run_state.route_stage(
+                        StageId.IMPLEMENTATION_CONTRACT,
+                        outcome=WorkflowOutcome.BLOCKED,
+                        result_code=StageResultCode.BLOCKED,
+                        reason_code="OWNER_BOUNDARY_CONFLICT_AFTER_REPLAN",
+                        artifacts=(
+                            contract_artifact,
+                            verification_artifact,
+                            capability_artifact,
+                        ),
+                    )
+                    print("HARNESS_TASK_STOPPED: OWNER_BOUNDARY_CONFLICT")
+                    raise HarnessControlledStop("SEMANTIC_REPLAN_BLOCKED")
+                if missing or runtime_gaps or runtime_env_gaps or runtime_cmd_gaps:
+                    run_state.route_stage(
+                        StageId.IMPLEMENTATION_CONTRACT,
+                        outcome=WorkflowOutcome.BLOCKED,
+                        result_code=StageResultCode.BLOCKED,
+                        reason_code="REQUIRED_CAPABILITY_MISSING_AFTER_REPLAN",
+                        artifacts=(
+                            contract_artifact,
+                            verification_artifact,
+                            capability_artifact,
+                        ),
+                    )
+                    print(
+                        "HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING",
+                        ", ".join([
+                            *missing, *runtime_gaps, *runtime_env_gaps, *runtime_cmd_gaps
+                        ]),
+                    )
+                    raise HarnessControlledStop("SEMANTIC_REPLAN_BLOCKED")
+                run_state.pass_stage(
+                    StageId.IMPLEMENTATION_CONTRACT,
+                    StageResultCode.IMPLEMENTATION_CONTRACT_READY,
+                    artifacts=(
+                        contract_artifact,
+                        verification_artifact,
+                        capability_artifact,
+                    ),
+                )
+                active_runtime_evidence["verification_plan_fingerprint"] = (
+                    verification_plan["fingerprint"]
+                )
+                current_specs = active_repair_specs()
+                _, stamp_path, self_verify_command = prepare_self_verify_runner(
+                    workspace=workspace,
+                    specs=current_specs,
+                    toolchain=toolchain,
+                )
+                implementation_report_index += 1
+                implementer_thread = codex.start_thread(
+                    cwd=workspace,
+                    sandbox="workspace-write",
+                    developer_instructions=IMPLEMENTER_INSTRUCTIONS,
+                    on_started=_thread_recorder(
+                        recorder, f"implementer_replan_{replan_cycles}"
+                    ),
+                )
+                run_state.begin_stage(StageId.IMPLEMENTER)
+                report = run_implementer_report(
+                    codex,
+                    thread_id=implementer_thread,
+                    prompt=build_implementation_prompt(
+                        manifest["prompt"],
+                        plan,
+                        task_contract=task_contract,
+                        implementation_contract=implementation_contract,
+                        verification_plan=verification_plan,
+                        self_verify_command=self_verify_command,
+                        toolchain=toolchain,
+                        allowed_paths=allowed_paths,
+                    ),
+                    timeout=timeout,
+                    label=f"IMPLEMENT REPLAN #{replan_cycles}",
+                    implementation_contract=implementation_contract,
+                    self_verify_command=self_verify_command,
+                    workspace=workspace,
+                    stamp_path=stamp_path,
+                    plan=plan,
+                    owner_allowed_paths=allowed_paths,
+                    control_plane=recorder.control_plane,
+                    run_state=run_state,
+                    check_registry_digest=check_registry.digest(),
+                    runtime_integrity_manager=runtime_integrity_manager,
+                    git_integrity_manager=git_integrity_manager,
+                    execution_broker=execution_broker,
+                )
+                report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
+                recorder.write_json(report_artifact, report)
+                observe_candidate("IMPLEMENTER_REPLAN")
+                return report, report_artifact
+
             def stabilize_implementer_report(report: dict, *, label: str) -> tuple[dict, str]:
                 """Close discoveries, checks and runtime drift before accepting COMPLETE."""
 
                 nonlocal implementation_report_index
+                nonlocal active_implementation_impact, active_implementation_impact_artifact
+                active_implementation_impact = None
+                active_implementation_impact_artifact = None
                 artifact = f"implementation_report_{implementation_report_index:02d}.json"
-                while report.get("status") == ImplementerStatus.COMPLETE.value:
+                while True:
+                    if report.get("status") == ImplementerStatus.REPLAN_REQUIRED.value:
+                        _phase4_route_implementer_terminal(
+                            run_state=run_state, report=report, artifacts=(artifact, "candidate_identity_current.json"),
+                        )
+                        reason = str(report.get("reason") or report["summary"])
+                        reason += "\nRepository evidence:\n" + "\n".join(report.get("evidence", []))
+                        report, artifact = replan_implementation(reason)
+                        continue
+                    if report.get("status") != ImplementerStatus.COMPLETE.value:
+                        return report, artifact
+                    # Validate before discovery expansion as well as afterwards:
+                    # declarations cannot create obligations without post-patch evidence.
+                    validate_implementation_report(
+                        report, workspace=workspace, plan=plan, contract=implementation_contract,
+                        changed_paths=collect_changed_paths(workspace), owner_allowed_paths=allowed_paths,
+                        self_verification_ok=verify_self_verification_stamp(
+                            workspace=workspace, stamp_path=stamp_path, issue_receipt=False,
+                        ),
+                    )
                     registry_changed = register_report_checks(report)
                     discoveries = list(report.get("discovered_obligations", []))
                     definition_changed = recompile_active_definition(
@@ -3366,8 +3848,21 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         continue
 
+                    candidate = observe_candidate("IMPLEMENTATION_IMPACT_CLOSURE")
+                    binding = run_state.verification_binding(
+                        candidate_id=candidate.candidate_id, check_registry_digest=check_registry.digest(),
+                    )
+                    active_implementation_impact = build_implementation_impact_closure(
+                        report, workspace=workspace, plan=plan, contract=implementation_contract,
+                        candidate_id=candidate.candidate_id, changed_paths=collect_changed_paths(workspace),
+                        owner_allowed_paths=allowed_paths, revision_binding=binding,
+                        self_verification_ok=recorder.control_plane.verify_self_verify_receipt(
+                            binding=SelfVerifyBinding(**binding),
+                        ),
+                    )
+                    active_implementation_impact_artifact = f"implementation_impact_closure_{implementation_report_index:02d}.json"
+                    recorder.write_authoritative_json(active_implementation_impact_artifact, active_implementation_impact)
                     return report, artifact
-                return report, artifact
             _, stamp_path, self_verify_command = prepare_self_verify_runner(
                 workspace=workspace,
                 specs=active_repair_specs(),
@@ -3394,6 +3889,7 @@ def main(argv: list[str] | None = None) -> int:
                 workspace=workspace,
                 stamp_path=stamp_path,
                 plan=plan,
+                owner_allowed_paths=allowed_paths,
                 control_plane=recorder.control_plane,
                 run_state=run_state,
                 check_registry_digest=check_registry.digest(),
@@ -3416,7 +3912,7 @@ def main(argv: list[str] | None = None) -> int:
             run_state.pass_stage(
                 StageId.IMPLEMENTER,
                 StageResultCode.IMPLEMENTATION_COMPLETE,
-                artifacts=(report_artifact, "candidate_identity_current.json"),
+                artifacts=(active_implementation_impact_artifact, report_artifact, "candidate_identity_current.json"),
             )
 
             initial_changed_paths = collect_changed_paths(workspace)
@@ -3425,17 +3921,17 @@ def main(argv: list[str] | None = None) -> int:
                 initial_changed_paths,
             )
 
-            fix_cycles = 0
-            replan_cycles = 0
-            repair_progress_history: list[tuple[str, str]] = []
-            replan_progress_history: list[tuple[str, str]] = []
-            evaluation_index = 0
-            check_index = 0
-            first_evaluation_pass: bool | None = None
             while True:
                 changed_paths = collect_changed_paths(workspace)
                 enforce_allowed_paths(changed_paths, allowed_paths)
                 closure_candidate = observe_candidate("CONTRACT_CLOSURE")
+                validate_implementation_impact_closure(
+                    active_implementation_impact, candidate_id=closure_candidate.candidate_id,
+                    plan=plan, contract=implementation_contract, changed_paths=changed_paths,
+                    revision_binding=run_state.verification_binding(
+                        candidate_id=closure_candidate.candidate_id, check_registry_digest=check_registry.digest(),
+                    ),
+                )
                 contract_closure_index += 1
                 active_contract_closure = build_contract_closure_record(
                     implementation_contract=implementation_contract,
@@ -3569,6 +4065,7 @@ def main(argv: list[str] | None = None) -> int:
                         workspace=workspace,
                         stamp_path=stamp_path,
                         plan=plan,
+                        owner_allowed_paths=allowed_paths,
                         control_plane=recorder.control_plane,
                         run_state=run_state,
                         check_registry_digest=check_registry.digest(),
@@ -3594,7 +4091,7 @@ def main(argv: list[str] | None = None) -> int:
                     run_state.pass_stage(
                         StageId.IMPLEMENTER,
                         StageResultCode.IMPLEMENTATION_COMPLETE,
-                        artifacts=(report_artifact, "candidate_identity_current.json"),
+                        artifacts=(active_implementation_impact_artifact, report_artifact, "candidate_identity_current.json"),
                     )
                     continue
 
@@ -3702,6 +4199,7 @@ def main(argv: list[str] | None = None) -> int:
                         workspace=workspace,
                         stamp_path=stamp_path,
                         plan=plan,
+                        owner_allowed_paths=allowed_paths,
                         control_plane=recorder.control_plane,
                         run_state=run_state,
                         check_registry_digest=check_registry.digest(),
@@ -3733,7 +4231,7 @@ def main(argv: list[str] | None = None) -> int:
                     run_state.pass_stage(
                         StageId.IMPLEMENTER,
                         StageResultCode.IMPLEMENTATION_COMPLETE,
-                        artifacts=(
+                        artifacts=(active_implementation_impact_artifact,
                             report_artifact,
                             "candidate_identity_current.json",
                         ),
@@ -3935,6 +4433,7 @@ def main(argv: list[str] | None = None) -> int:
                         workspace=workspace,
                         stamp_path=stamp_path,
                         plan=plan,
+                        owner_allowed_paths=allowed_paths,
                         control_plane=recorder.control_plane,
                         run_state=run_state,
                         check_registry_digest=check_registry.digest(),
@@ -3960,7 +4459,7 @@ def main(argv: list[str] | None = None) -> int:
                     run_state.pass_stage(
                         StageId.IMPLEMENTER,
                         StageResultCode.IMPLEMENTATION_COMPLETE,
-                        artifacts=(report_artifact, "candidate_identity_current.json"),
+                        artifacts=(active_implementation_impact_artifact, report_artifact, "candidate_identity_current.json"),
                     )
                     continue
                 if evaluation["status"] == EvaluatorStatus.REPLAN_REQUIRED.value:
@@ -3971,398 +4470,7 @@ def main(argv: list[str] | None = None) -> int:
                         reason_code="EVALUATOR_REPLAN_REQUIRED",
                         artifacts=(evaluation_artifact, "candidate_identity_current.json"),
                     )
-                    if _phase4_loop_stalled(
-                        replan_progress_history,
-                        candidate_id=plan_fingerprint(plan) if plan is not None else "NO_PLAN",
-                        failure_signature=evaluation["reason"],
-                    ):
-                        raise RuntimeError(
-                            "REPLAN_STALLED: the same plan was rejected for the same reason"
-                        )
-                    replan_cycles += 1
-                    run_state.invalidate(
-                        InvalidationTrigger.REPLAN_REQUIRED,
-                        detail=evaluation["reason"],
-                    )
-                    print(f"=== REPLAN #{replan_cycles} ===")
-
-                    # Preserve the rejected implementation for audit, then remove
-                    # it from the repository view seen by the fresh Planner. A
-                    # semantic replan acknowledges that the previous technical
-                    # model was wrong; keeping its diff visible would anchor the
-                    # replacement agents to the rejected solution.
-                    rejected_candidate = observe_candidate(
-                        f"REPLAN_{replan_cycles}_REJECTED_CANDIDATE"
-                    )
-                    rejected_patch_artifact = (
-                        f"replan_{replan_cycles:02d}_rejected_candidate.patch"
-                    )
-                    recorder.write_bytes(
-                        rejected_patch_artifact,
-                        build_candidate_patch(
-                            session,
-                            scratch_root=recorder.private_root / "candidate_indexes",
-                        ),
-                    )
-                    replan_reset = reset_workspace_for_semantic_replan(
-                        workspace=workspace,
-                        baseline_sha=session.base_sha or preflight["head_sha"],
-                    )
-                    replan_reset_artifact = f"replan_{replan_cycles:02d}_reset.json"
-                    recorder.write_authoritative_json(
-                        replan_reset_artifact, replan_reset
-                    )
-                    clean_candidate = observe_candidate(
-                        f"REPLAN_{replan_cycles}_CLEAN_BASELINE"
-                    )
-                    if clean_candidate.changed_paths:
-                        raise RuntimeError(
-                            "Semantic replan did not start from a clean candidate"
-                        )
-
-                    # Task-specific checks and evidence belonged to the rejected
-                    # attempt. Project gates remain in repair_specs and are
-                    # recompiled into the new Verification Plan.
-                    check_registry.reset()
-                    dynamic_specs = []
-                    dynamic_notes = []
-                    active_contract_closure = None
-                    active_contract_closure_artifact = None
-                    active_runtime_evidence = {
-                        "protocol_version": "runtime-evidence.v1",
-                        "status": StageResultCode.RUNTIME_VERIFICATION_SKIPPED.value,
-                        "candidate_id": None,
-                        "verification_plan_fingerprint": None,
-                        "scenarios": [],
-                        "reason_code": "INVALIDATED_BY_SEMANTIC_REPLAN",
-                    }
-                    active_runtime_artifact = None
-
-                    # Clear role scratch so the new agents see repository facts,
-                    # not temporary probes from the rejected attempt.
-                    for role in (
-                        ExecutionRole.PLANNER,
-                        ExecutionRole.IMPLEMENTER,
-                        ExecutionRole.EVALUATOR,
-                    ):
-                        scratch = execution_broker.scratch_root(role)
-                        shutil.rmtree(scratch, ignore_errors=True)
-                        scratch.mkdir(parents=True, exist_ok=True)
-
-                    # Restore the authoritative project environment to the clean
-                    # baseline as well. Replan is intentionally expensive and
-                    # rare; reproducibility is more important than reusing a venv
-                    # potentially mutated under the rejected implementation.
-                    if runtime_manager is not None:
-                        runtime_state = integrity_coordinator.run_read_only(
-                            f"PROJECT_RUNTIME_REBUILD:{replan_cycles}",
-                            lambda: runtime_manager.build(clean=True),
-                        )
-                        project_runtime_index += 1
-                        runtime_artifact = (
-                            f"project_runtime_replan_{replan_cycles:02d}.json"
-                        )
-                        recorder.write_authoritative_json(
-                            runtime_artifact, runtime_state.to_dict()
-                        )
-                        run_state.bump_revision(
-                            RevisionKind.RUNTIME_ENVIRONMENT,
-                            artifact=runtime_artifact,
-                        )
-                        toolchain["project_python"] = runtime_state.project_python
-                        validate_toolchain(toolchain)
-                        tool_probe_registry.toolchain["project_python"] = (
-                            runtime_state.project_python
-                        )
-                        tool_probe_registry.invalidate_runtime_environment_evidence()
-
-                    run_state.begin_stage(StageId.PLANNER)
-                    replan_available_capabilities = available_capabilities(
-                        toolchain=toolchain,
-                        configured=declared_capabilities,
-                        runtime=runtime_available_capabilities(runtime_scenarios),
-                        verified_tool_capabilities=tool_probe_registry.verified_capabilities,
-                    )
-                    try:
-                        plan = integrity_coordinator.run_read_only(
-                            f"PLANNER_REPLAN:{replan_cycles}",
-                            lambda: run_planner(
-                                codex,
-                                workspace=workspace,
-                                task_prompt=manifest["prompt"],
-                                task_contract=task_contract,
-                                preflight=preflight,
-                                owner_allowed_paths=allowed_paths,
-                                available_verification_capabilities=sorted(
-                                    replan_available_capabilities
-                                ),
-                                manifest_repair_evidence=planner_repair_evidence,
-                                replan_context=(
-                                    "Current candidate was rejected by a blind Evaluator. "
-                                    "Observed reason (not a reference implementation):\n"
-                                    + evaluation["reason"]
-                                ),
-                                on_heartbeat=make_heartbeat(f"REPLAN #{replan_cycles}"),
-                                on_thread_started=_thread_recorder(
-                                    recorder, f"planner_replan_{replan_cycles}"
-                                ),
-                                timeout=timeout,
-                            ),
-                        )
-                    except PlannerCapabilityInfeasible as exc:
-                        plan = exc.plan
-                        replan_artifact = f"replan_{replan_cycles:02d}.json"
-                        recorder.write_authoritative_json(replan_artifact, plan)
-                        run_state.bump_revision(
-                            RevisionKind.PLAN, artifact=replan_artifact
-                        )
-                        run_state.route_stage(
-                            StageId.PLANNER,
-                            outcome=WorkflowOutcome.BLOCKED,
-                            result_code=StageResultCode.BLOCKED,
-                            reason_code=exc.reason_code,
-                            artifacts=(replan_artifact,),
-                        )
-                        print(
-                            "HARNESS_TASK_STOPPED: PLANNER_CAPABILITY_INFEASIBLE",
-                            ", ".join(exc.unavailable_capabilities),
-                        )
-                        return 2
-                    validate_plan_artifact(
-                        plan, workspace=workspace, task_contract=task_contract,
-                        owner_allowed_paths=allowed_paths,
-                    )
-                    remaining_replan_gaps = planner_capability_gaps(
-                        plan, available=replan_available_capabilities
-                    )
-                    if remaining_replan_gaps:
-                        replan_artifact = f"replan_{replan_cycles:02d}.json"
-                        recorder.write_authoritative_json(replan_artifact, plan)
-                        run_state.bump_revision(
-                            RevisionKind.PLAN, artifact=replan_artifact
-                        )
-                        run_state.route_stage(
-                            StageId.PLANNER,
-                            outcome=WorkflowOutcome.BLOCKED,
-                            result_code=StageResultCode.BLOCKED,
-                            reason_code="PLANNER_CAPABILITY_INFEASIBLE",
-                            artifacts=(replan_artifact,),
-                        )
-                        print(
-                            "HARNESS_TASK_STOPPED: PLANNER_CAPABILITY_INFEASIBLE",
-                            ", ".join(remaining_replan_gaps),
-                        )
-                        return 2
-                    replan_artifact = f"replan_{replan_cycles:02d}.json"
-                    recorder.write_authoritative_json(replan_artifact, plan)
-                    run_state.bump_revision(RevisionKind.PLAN, artifact=replan_artifact)
-                    if plan["status"] != PlannerStatus.READY.value:
-                        if plan["status"] == PlannerStatus.BLOCKED.value:
-                            outcome = WorkflowOutcome.BLOCKED
-                            result_code = StageResultCode.BLOCKED
-                            reason_code = "PLANNER_BLOCKED_AFTER_REPLAN"
-                        elif plan["status"] == PlannerStatus.TASK_CONTRACT_INVALID.value:
-                            outcome = WorkflowOutcome.INVALID
-                            result_code = StageResultCode.INVALID
-                            reason_code = "TASK_CONTRACT_INVALID_AFTER_REPLAN"
-                        else:
-                            outcome = WorkflowOutcome.NEEDS_USER_DECISION
-                            result_code = StageResultCode.NEEDS_USER_DECISION
-                            reason_code = "PLANNER_NEEDS_USER_DECISION_AFTER_REPLAN"
-                        run_state.route_stage(
-                            StageId.PLANNER,
-                            outcome=outcome,
-                            result_code=result_code,
-                            reason_code=reason_code,
-                            artifacts=(replan_artifact,),
-                        )
-                        print("HARNESS_TASK_STOPPED:", plan["status"])
-                        return 2
-                    run_state.pass_stage(
-                        StageId.PLANNER,
-                        StageResultCode.PLANNER_READY,
-                        artifacts=(
-                            replan_artifact,
-                            replan_reset_artifact,
-                            rejected_patch_artifact,
-                        ),
-                    )
-                    run_state.begin_stage(StageId.IMPLEMENTATION_CONTRACT)
-                    implementation_contract = build_implementation_contract(
-                        plan, task_contract=task_contract
-                    )
-                    validate_implementation_contract(implementation_contract)
-                    implementation_contract_index += 1
-                    contract_artifact = (
-                        f"implementation_contract_{implementation_contract_index:02d}_"
-                        f"replan_{replan_cycles:02d}.json"
-                    )
-                    recorder.write_authoritative_json(
-                        contract_artifact, implementation_contract
-                    )
-                    run_state.bump_revision(
-                        RevisionKind.IMPLEMENTATION_CONTRACT,
-                        artifact=contract_artifact,
-                    )
-                    verification_plan = compile_verification_plan(
-                        implementation_contract,
-                        project_checks=repair_specs,
-                        task_checks=active_task_check_keys(),
-                    )
-                    validate_verification_plan(verification_plan)
-                    verification_plan_index += 1
-                    verification_artifact = (
-                        f"verification_plan_{verification_plan_index:02d}_"
-                        f"replan_{replan_cycles:02d}.json"
-                    )
-                    recorder.write_authoritative_json(
-                        verification_artifact, verification_plan
-                    )
-                    run_state.bump_revision(
-                        RevisionKind.VERIFICATION_PLAN,
-                        artifact=verification_artifact,
-                    )
-                    active_contract_artifact = contract_artifact
-                    active_verification_artifact = verification_artifact
-                    replan_tool_probes = tool_probe_registry.ensure_capabilities(
-                        verification_plan["required_capabilities"],
-                        batch_id=f"post-replan-capability-gate-{replan_cycles:02d}",
-                    )
-                    current_capabilities = available_capabilities(
-                        toolchain=toolchain,
-                        configured=declared_capabilities,
-                        runtime=runtime_available_capabilities(runtime_scenarios),
-                        verified_tool_capabilities=tool_probe_registry.verified_capabilities,
-                    )
-                    missing = required_capability_gaps(
-                        verification_plan,
-                        available=current_capabilities,
-                    )
-                    runtime_gaps = runtime_requirement_gaps(
-                        verification_plan, runtime_scenarios
-                    )
-                    runtime_env_gaps = runtime_environment_gaps(
-                        runtime_scenarios,
-                        verification_plan=verification_plan,
-                        execution_broker=execution_broker,
-                    )
-                    runtime_cmd_gaps = runtime_command_gaps(
-                        verification_plan,
-                        runtime_scenarios,
-                        workspace=workspace,
-                        toolchain=toolchain,
-                    )
-                    capability_gate_index += 1
-                    capability_artifact = (
-                        f"capability_gate_{capability_gate_index:02d}_"
-                        f"replan_{replan_cycles:02d}.json"
-                    )
-                    capability_record = {
-                        "schema_version": "capability-gate.v1",
-                        "declared": declared_capabilities,
-                        "available": sorted(current_capabilities),
-                        "required": list(verification_plan["required_capabilities"]),
-                        "tool_probe_evidence": replan_tool_probes.public_dict(),
-                        "missing": missing,
-                        "runtime_requirement_gaps": runtime_gaps,
-                        "runtime_environment_gaps": runtime_env_gaps,
-                        "runtime_command_gaps": runtime_cmd_gaps,
-                    }
-                    recorder.write_authoritative_json(
-                        capability_artifact, capability_record
-                    )
-                    active_capability_artifact = capability_artifact
-                    if not plan["owner_boundary_assessment"]["compatible"]:
-                        run_state.route_stage(
-                            StageId.IMPLEMENTATION_CONTRACT,
-                            outcome=WorkflowOutcome.BLOCKED,
-                            result_code=StageResultCode.BLOCKED,
-                            reason_code="OWNER_BOUNDARY_CONFLICT_AFTER_REPLAN",
-                            artifacts=(
-                                contract_artifact,
-                                verification_artifact,
-                                capability_artifact,
-                            ),
-                        )
-                        print("HARNESS_TASK_STOPPED: OWNER_BOUNDARY_CONFLICT")
-                        return 2
-                    if missing or runtime_gaps or runtime_env_gaps or runtime_cmd_gaps:
-                        run_state.route_stage(
-                            StageId.IMPLEMENTATION_CONTRACT,
-                            outcome=WorkflowOutcome.BLOCKED,
-                            result_code=StageResultCode.BLOCKED,
-                            reason_code="REQUIRED_CAPABILITY_MISSING_AFTER_REPLAN",
-                            artifacts=(
-                                contract_artifact,
-                                verification_artifact,
-                                capability_artifact,
-                            ),
-                        )
-                        print(
-                            "HARNESS_TASK_STOPPED: REQUIRED_CAPABILITY_MISSING",
-                            ", ".join([
-                                *missing, *runtime_gaps, *runtime_env_gaps, *runtime_cmd_gaps
-                            ]),
-                        )
-                        return 2
-                    run_state.pass_stage(
-                        StageId.IMPLEMENTATION_CONTRACT,
-                        StageResultCode.IMPLEMENTATION_CONTRACT_READY,
-                        artifacts=(
-                            contract_artifact,
-                            verification_artifact,
-                            capability_artifact,
-                        ),
-                    )
-                    active_runtime_evidence["verification_plan_fingerprint"] = (
-                        verification_plan["fingerprint"]
-                    )
-                    current_specs = active_repair_specs()
-                    _, stamp_path, self_verify_command = prepare_self_verify_runner(
-                        workspace=workspace,
-                        specs=current_specs,
-                        toolchain=toolchain,
-                    )
-                    implementation_report_index += 1
-                    implementer_thread = codex.start_thread(
-                        cwd=workspace,
-                        sandbox="workspace-write",
-                        developer_instructions=IMPLEMENTER_INSTRUCTIONS,
-                        on_started=_thread_recorder(
-                            recorder, f"implementer_replan_{replan_cycles}"
-                        ),
-                    )
-                    run_state.begin_stage(StageId.IMPLEMENTER)
-                    report = run_implementer_report(
-                        codex,
-                        thread_id=implementer_thread,
-                        prompt=build_implementation_prompt(
-                            manifest["prompt"],
-                            plan,
-                            task_contract=task_contract,
-                            implementation_contract=implementation_contract,
-                            verification_plan=verification_plan,
-                            self_verify_command=self_verify_command,
-                            toolchain=toolchain,
-                            allowed_paths=allowed_paths,
-                        ),
-                        timeout=timeout,
-                        label=f"IMPLEMENT REPLAN #{replan_cycles}",
-                        implementation_contract=implementation_contract,
-                        self_verify_command=self_verify_command,
-                        workspace=workspace,
-                        stamp_path=stamp_path,
-                        plan=plan,
-                        control_plane=recorder.control_plane,
-                        run_state=run_state,
-                        check_registry_digest=check_registry.digest(),
-                        runtime_integrity_manager=runtime_integrity_manager,
-                        git_integrity_manager=git_integrity_manager,
-                        execution_broker=execution_broker,
-                    )
-                    report_artifact = f"implementation_report_{implementation_report_index:02d}.json"
-                    recorder.write_json(report_artifact, report)
-                    observe_candidate("IMPLEMENTER_REPLAN")
+                    report, report_artifact = replan_implementation(evaluation["reason"])
                     report, report_artifact = stabilize_implementer_report(
                         report, label=f"IMPLEMENT REPLAN #{replan_cycles}"
                     )
@@ -4378,7 +4486,7 @@ def main(argv: list[str] | None = None) -> int:
                     run_state.pass_stage(
                         StageId.IMPLEMENTER,
                         StageResultCode.IMPLEMENTATION_COMPLETE,
-                        artifacts=(report_artifact, "candidate_identity_current.json"),
+                        artifacts=(active_implementation_impact_artifact, report_artifact, "candidate_identity_current.json"),
                     )
                     continue
 

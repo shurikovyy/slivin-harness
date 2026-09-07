@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
-from slivin_harness.protocol import ArtifactContractError, ensure_exact_keys, safe_repo_relative, stable_fingerprint
+from slivin_harness.protocol import ArtifactContractError, ensure_exact_keys, plan_fingerprint, require_string_list, require_type, safe_repo_relative, stable_fingerprint
+from slivin_harness.impact import impact_error, impact_paths, impact_text, safe_impact_path, validate_owner_prose_boundary
 from slivin_harness.task_contract import validate_task_contract
 from slivin_harness.verification import (
     PROOF_TARGET_SCHEMA,
@@ -14,10 +16,43 @@ from slivin_harness.verification import (
 )
 from slivin_harness.workflow import ImplementerStatus, enum_values
 
-IMPLEMENTER_PROTOCOL_VERSION = "implementer.v3"
+IMPLEMENTER_PROTOCOL_VERSION = "implementer.v4"
+IMPLEMENTATION_IMPACT_CLOSURE_VERSION = "implementation-impact-closure.v1"
 IMPLEMENTATION_CONTRACT_VERSION = "implementation-contract.v3"
 CONTRACT_ITEM_TYPES = {"acceptance", "preservation", "state", "consumer", "risk", "documentation"}
 CONTRACT_ITEM_SOURCES = {"USER", "PLANNER", "USER+PLANNER", "DISCOVERED"}
+
+
+def _impact_rows(*, text: Sequence[str], lists: Sequence[str] = (), proof: bool = False, enums: Mapping[str, Sequence[str]] | None = None) -> dict:
+    properties = {key: {"type": "string"} for key in text}
+    properties.update({key: {"type": "array", "items": {"type": "string"}} for key in lists})
+    if proof:
+        properties["required_proof"] = PROOF_TARGET_SCHEMA
+    properties.update({key: {"type": "string", "enum": list(values)} for key, values in (enums or {}).items()})
+    return {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": properties, "required": list(properties)}}
+
+
+POST_PATCH_IMPACT_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "applicable": {"type": "boolean"},
+        "changed_contracts": _impact_rows(text=("name", "before", "after"), lists=("paths", "symbols", "evidence")),
+        "in_scope_consumers": _impact_rows(
+            text=("name", "why_affected", "required_behavior"), lists=("paths", "symbols", "evidence"),
+            proof=True, enums={"source": ("PLANNER", "DISCOVERED")},
+        ),
+        "not_affected_consumers": _impact_rows(text=("name", "why_considered", "reason"), lists=("paths", "symbols", "evidence")),
+        "related_out_of_scope": _impact_rows(text=("name", "relation", "reason", "suggested_follow_up"), lists=("paths", "symbols", "evidence")),
+        "new_risks": _impact_rows(text=("name", "reason", "failure_mode"), lists=("paths", "symbols", "evidence"), proof=True),
+        "changed_path_review": _impact_rows(
+            text=("path", "reason"), lists=("evidence",),
+            enums={"role": ("IMPLEMENTATION", "REGRESSION_TEST", "DOCUMENTATION", "DEPENDENCY", "GENERATED", "OTHER_JUSTIFIED")},
+        ),
+        "search_evidence": _impact_rows(text=("target", "method", "conclusion"), lists=("evidence_paths",)),
+        "closure_summary": {"type": "string"},
+    },
+    "required": ["applicable", "changed_contracts", "in_scope_consumers", "not_affected_consumers", "related_out_of_scope", "new_risks", "changed_path_review", "search_evidence", "closure_summary"],
+}
 
 IMPLEMENTER_REPORT_SCHEMA = {
     "type": "object",
@@ -88,6 +123,7 @@ IMPLEMENTER_REPORT_SCHEMA = {
                 ],
             },
         },
+        "post_patch_impact": POST_PATCH_IMPACT_SCHEMA,
         "blockers": {"type": "array", "items": {"type": "string"}},
     },
     # Structured Outputs requires every wire property. Status-specific semantic
@@ -104,6 +140,7 @@ IMPLEMENTER_REPORT_SCHEMA = {
         "additional_check_paths",
         "registered_checks",
         "discovered_obligations",
+        "post_patch_impact",
         "blockers",
     ],
 }
@@ -356,7 +393,240 @@ def compact_plan_context(plan: dict[str, Any] | None) -> dict[str, Any] | None:
         "diagnosis": plan["diagnosis"],
         "assumptions": plan["assumptions"],
         "unknowns": [item for item in plan["unknowns"] if item["kind"] == "NON_BLOCKING"],
+        "impact_closure": plan["impact_closure"],
     }
+
+
+def _impact_name(row: Mapping[str, Any]) -> str:
+    return impact_text(row["name"], field="name").casefold()
+
+
+def _same_impact_text(left: str, right: str) -> bool:
+    return " ".join(left.split()) == " ".join(right.split())
+
+
+def _same_impact_proof(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    return (
+        _same_impact_text(left["claim"], right["claim"])
+        and left["level"] == right["level"]
+        and set(left["capabilities"]) == set(right["capabilities"])
+    )
+
+
+def _evidence_set(values: Sequence[str]) -> set[str]:
+    return {" ".join(value.split()) for value in values}
+
+
+def _impact_mismatch(code: str, message: str, actual: object) -> None:
+    impact_error(code, field="post_patch_impact", message=message, actual=actual)
+
+
+def validate_post_patch_impact(
+    report: Mapping[str, Any], *, workspace: Path, changed_paths: Sequence[str],
+    plan: dict[str, Any] | None, contract: Mapping[str, Any],
+    owner_allowed_paths: Sequence[str] = (), require_expanded: bool = False,
+) -> None:
+    """Reconcile actual-patch evidence; only Controller facts authorize COMPLETE."""
+    closure = report.get("post_patch_impact")
+    require_type(closure, dict, field="post_patch_impact")
+    properties = POST_PATCH_IMPACT_SCHEMA["properties"]
+    ensure_exact_keys(closure, allowed=properties, required=properties, field="post_patch_impact")
+    require_type(closure["applicable"], bool, field="post_patch_impact.applicable")
+    require_type(closure["closure_summary"], str, field="post_patch_impact.closure_summary")
+    by_group: dict[str, dict[str, Any]] = {}
+    search_paths: list[str] = []
+    reviewed: list[str] = []
+    for group, schema in properties.items():
+        if schema["type"] != "array":
+            continue
+        field = f"post_patch_impact.{group}"
+        require_type(closure[group], list, field=field)
+        by_group[group] = {}
+        for index, row in enumerate(closure[group]):
+            row_field = f"{field}[{index}]"
+            require_type(row, dict, field=row_field)
+            fields = schema["items"]["properties"]
+            ensure_exact_keys(row, allowed=fields, required=fields, field=row_field)
+            for key, kind in fields.items():
+                value = row[key]
+                key_field = f"{row_field}.{key}"
+                if key == "required_proof":
+                    validate_proof_target(value, field=key_field)
+                elif kind["type"] == "string":
+                    impact_text(value, field=key_field)
+                    if "enum" in kind and value not in kind["enum"]:
+                        _impact_mismatch("POST_PATCH_ENUM", f"Invalid {key_field}", value)
+                else:
+                    values = require_string_list(value, field=key_field)
+                    if not values:
+                        _impact_mismatch("IMPACT_EVIDENCE_EMPTY", f"{key_field} requires concrete evidence", value)
+                    for entry in values:
+                        impact_text(entry, field=key_field)
+                    if key in {"paths", "evidence_paths"}:
+                        paths = impact_paths(values, field=key_field, workspace=workspace)
+                        if group == "search_evidence":
+                            search_paths.extend(paths)
+                    if key == "symbols" and any(any(char.isspace() for char in entry) or not any(char.isalnum() for char in entry) for entry in values):
+                        _impact_mismatch("IMPACT_SYMBOL_GENERIC", "Post-patch symbols must name concrete identifiers", values)
+            if "name" in row:
+                name = _impact_name(row)
+                if name in by_group[group]:
+                    _impact_mismatch("POST_PATCH_DUPLICATE", f"Duplicate {group} name", name)
+                by_group[group][name] = row
+            if group == "changed_contracts" and _same_impact_text(row["before"], row["after"]):
+                _impact_mismatch("IMPACT_CONTRACT_UNCHANGED", "Actual changed contract requires distinct before/after semantics", row)
+            if group == "changed_path_review":
+                # A Controller-known deletion legitimately has no final file.
+                path = safe_impact_path(row["path"], field=f"{row_field}.path")
+                reviewed.append(path)
+                if row["role"] == "OTHER_JUSTIFIED" and (
+                    len(row["reason"].replace(path, "").split()) < 6
+                    or not any(path in evidence for evidence in row["evidence"])
+                ):
+                    _impact_mismatch("POST_PATCH_OTHER_UNJUSTIFIED", "OTHER_JUSTIFIED needs a specific explanation and path-linked evidence", row)
+
+    if report.get("status") != ImplementerStatus.COMPLETE.value:
+        return
+    impact_text(closure["closure_summary"], field="post_patch_impact.closure_summary")
+    actual_paths = {safe_impact_path(path, field="changed_paths") for path in changed_paths}
+    if len(reviewed) != len(set(reviewed)) or set(reviewed) != actual_paths:
+        _impact_mismatch("POST_PATCH_PATH_COVERAGE", "Every Controller changed path must be reviewed exactly once", {"actual": sorted(actual_paths), "reviewed": reviewed})
+    if not closure["search_evidence"]:
+        _impact_mismatch("POST_PATCH_SEARCH_MISSING", "COMPLETE requires a post-patch repository impact sweep", [])
+
+    consumers = by_group["in_scope_consumers"]
+    unaffected = by_group["not_affected_consumers"]
+    related = by_group["related_out_of_scope"]
+    if set(consumers) & set(unaffected) or set(consumers) & set(related) or set(unaffected) & set(related) or set(related) & set(by_group["new_risks"]):
+        _impact_mismatch("POST_PATCH_CLASSIFICATION_CONFLICT", "Consumer dispositions must be disjoint", closure)
+    expected = plan["impact_closure"] if plan is not None else None
+    if expected is not None:
+        if closure["applicable"] != expected["applicable"]:
+            _impact_mismatch("POST_PATCH_MODEL_DIVERGENCE", "Planner applicability changed; return REPLAN_REQUIRED with evidence", closure["applicable"])
+        contracts = {_impact_name(row): row for row in expected["changed_contracts"]}
+        actual_contracts = by_group["changed_contracts"]
+        if contracts.keys() != actual_contracts.keys() or any(
+            not _same_impact_text(source[key], actual_contracts[name][key])
+            for name, source in contracts.items() for key in ("before", "after")
+        ):
+            _impact_mismatch("POST_PATCH_MODEL_DIVERGENCE", "Changed contract model differs from Planner; return REPLAN_REQUIRED", actual_contracts)
+        planned = {_impact_name(row): row for row in expected["in_scope_consumers"]}
+        declared = {name: row for name, row in consumers.items() if row["source"] == "PLANNER"}
+        if planned.keys() != declared.keys():
+            _impact_mismatch("POST_PATCH_PLANNER_CONSUMERS", "Every Planner IN_SCOPE consumer must be retained as PLANNER", declared)
+        for name, source in planned.items():
+            target = declared[name]
+            if any(not _same_impact_text(source[key], target[key]) for key in ("why_affected", "required_behavior")) or not _same_impact_proof(source["required_proof"], target["required_proof"]):
+                _impact_mismatch("POST_PATCH_MODEL_DIVERGENCE", "Planner consumer behavior/proof changed; return REPLAN_REQUIRED", target)
+        discovered_names = {name for name, row in consumers.items() if row["source"] == "DISCOVERED"}
+        if any(_impact_name(row) not in set(unaffected) | discovered_names for row in expected["not_affected_consumers"]):
+            _impact_mismatch("POST_PATCH_NOT_AFFECTED_MISSING", "Every Planner NOT_AFFECTED consumer must be reconsidered or promoted", unaffected)
+        for source in expected["related_out_of_scope"]:
+            target = related.get(_impact_name(source))
+            if target is None or any(not _same_impact_text(source[key], target[key]) for key in ("relation", "reason", "suggested_follow_up")) or not _evidence_set(source["evidence"]).issubset(_evidence_set(target["evidence"])):
+                _impact_mismatch("POST_PATCH_FOLLOW_UP_MISSING", "Planner related findings and follow-up evidence must be preserved", source)
+    elif any(row["source"] == "PLANNER" for row in consumers.values()):
+        _impact_mismatch("POST_PATCH_PLANNER_CONSUMERS", "FAST has no Planner consumers; material consumers are DISCOVERED", consumers)
+
+    discoveries = report.get("discovered_obligations", [])
+    require_type(discoveries, list, field="discovered_obligations")
+    from slivin_harness.phase5 import _canonical_discovery, _discovery_requirement
+
+    discovery_rows: dict[tuple[str, str], dict] = {}
+    for index, raw in enumerate(discoveries):
+        require_type(raw, dict, field=f"discovered_obligations[{index}]")
+        row = _canonical_discovery(raw, index=index)
+        key = (row["kind"], _impact_name(row))
+        if key in discovery_rows:
+            _impact_mismatch("POST_PATCH_DUPLICATE", "Discovered obligations must be one-to-one", key)
+        discovery_rows[key] = row
+    expected_discoveries = {
+        ("consumer", name): row for name, row in consumers.items() if row["source"] == "DISCOVERED"
+    }
+    expected_discoveries.update({("risk", name): row for name, row in by_group["new_risks"].items()})
+    if discovery_rows.keys() != expected_discoveries.keys():
+        _impact_mismatch("POST_PATCH_DISCOVERY_MISMATCH", "Post-patch discoveries and discovered obligations must correspond one-to-one", sorted(discovery_rows))
+    for key, source in expected_discoveries.items():
+        target = discovery_rows[key]
+        reason_key, behavior_key = ("why_affected", "required_behavior") if key[0] == "consumer" else ("reason", "failure_mode")
+        if (
+            not _same_impact_text(source[reason_key], target["reason"])
+            or not _same_impact_text(source[behavior_key], target["required_behavior"])
+            or not _same_impact_proof(source["required_proof"], target["required_proof"])
+            or _evidence_set(source["evidence"]) != _evidence_set(target["evidence"])
+        ):
+            _impact_mismatch("POST_PATCH_DISCOVERY_MISMATCH", "Discovered reason/behavior/proof/evidence must match", target)
+
+    # Retain previous discoveries after expansion, including their proof. The
+    # existing compiler owns items; the report cannot drop or silently weaken one.
+    active_discoveries = {(row["type"], " ".join(row["requirement"].split())): row for row in contract["items"] if row["source"] == "DISCOVERED"}
+    reported_items = {(row["kind"], " ".join(_discovery_requirement(row).split())): row for row in discovery_rows.values()}
+    if not active_discoveries.keys() <= reported_items.keys() or (require_expanded and active_discoveries.keys() != reported_items.keys()):
+        _impact_mismatch("POST_PATCH_DISCOVERY_CONTRACT", "Every discovery must remain in the report and be expanded before final COMPLETE", sorted(reported_items))
+    for key, item in active_discoveries.items():
+        row = reported_items[key]
+        proof = merged_required_proof([row["required_proof"]], fallback_claim=row["required_behavior"])
+        if item["required_proof"] != proof:
+            _impact_mismatch("POST_PATCH_DISCOVERY_CONTRACT", "Existing discovered proof cannot be silently changed", row)
+
+    if closure["applicable"]:
+        if not closure["changed_contracts"]:
+            _impact_mismatch("POST_PATCH_CONTRACTS_MISSING", "Engineering COMPLETE requires actual changed contracts", [])
+    else:
+        validate_owner_prose_boundary(owner_allowed_paths, workspace=workspace, search_paths=[*search_paths, *actual_paths], field="post_patch_impact")
+        explanation = closure["closure_summary"]
+        for path in search_paths:
+            explanation = explanation.replace(path, "")
+        behavioral = any(closure[group] for group in ("changed_contracts", "in_scope_consumers", "not_affected_consumers", "related_out_of_scope", "new_risks"))
+        behavioral = behavioral or any(item["type"] in {"state", "consumer", "risk"} or any(
+            proof["level"] != "LOCAL_DETERMINISTIC" or set(proof["capabilities"]) - {"GIT", "DOCS_SYNC"}
+            for proof in item["required_proof"]["profiles"]
+        ) for item in contract["items"])
+        if behavioral or len(explanation.split()) < 6 or not any(path in closure["closure_summary"] for path in search_paths):
+            _impact_mismatch("IMPACT_NOT_APPLICABLE_UNJUSTIFIED", "Prose exception requires concrete explanation and no behavioral/state/runtime obligations", closure)
+
+
+def build_implementation_impact_closure(
+    report: dict[str, Any], *, workspace: Path, changed_paths: list[str], candidate_id: str,
+    plan: dict[str, Any] | None, contract: dict[str, Any], self_verification_ok: bool,
+    owner_allowed_paths: Sequence[str] = (), revision_binding: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    validate_implementation_report(
+        report, contract=contract, changed_paths=changed_paths, self_verification_ok=self_verification_ok,
+        workspace=workspace, plan=plan, owner_allowed_paths=owner_allowed_paths, require_expanded=True,
+    )
+    if report["status"] != ImplementerStatus.COMPLETE.value:
+        _impact_mismatch("POST_PATCH_NOT_COMPLETE", "Only final validated COMPLETE can mint an impact artifact", report["status"])
+    artifact = {
+        "schema_version": IMPLEMENTATION_IMPACT_CLOSURE_VERSION, "status": "PASS",
+        "candidate_id": candidate_id, "plan_fingerprint": plan_fingerprint(plan) if plan is not None else None,
+        "implementation_contract_fingerprint": contract["fingerprint"],
+        "changed_paths": sorted(safe_impact_path(path, field="changed_paths") for path in changed_paths),
+        "post_patch_impact": copy.deepcopy(report["post_patch_impact"]),
+        "revision_binding": dict(revision_binding or {}),
+    }
+    artifact["fingerprint"] = stable_fingerprint(artifact, length=64)
+    return artifact
+
+
+def validate_implementation_impact_closure(
+    artifact: Mapping[str, Any], *, candidate_id: str, plan: dict[str, Any] | None,
+    contract: Mapping[str, Any], changed_paths: Sequence[str], revision_binding: Mapping[str, Any] | None = None,
+) -> None:
+    keys = {"schema_version", "status", "candidate_id", "plan_fingerprint", "implementation_contract_fingerprint", "changed_paths", "post_patch_impact", "revision_binding", "fingerprint"}
+    ensure_exact_keys(dict(artifact), allowed=keys, required=keys, field="implementation_impact_closure")
+    expected = stable_fingerprint({key: value for key, value in artifact.items() if key != "fingerprint"}, length=64)
+    if artifact["fingerprint"] != expected:
+        _impact_mismatch("POST_PATCH_ARTIFACT_FINGERPRINT", "Impact artifact fingerprint mismatch", artifact["fingerprint"])
+    if (
+        artifact["schema_version"] != IMPLEMENTATION_IMPACT_CLOSURE_VERSION or artifact["status"] != "PASS"
+        or artifact["candidate_id"] != candidate_id
+        or artifact["plan_fingerprint"] != (plan_fingerprint(plan) if plan is not None else None)
+        or artifact["implementation_contract_fingerprint"] != contract["fingerprint"]
+        or artifact["changed_paths"] != sorted(safe_impact_path(path, field="changed_paths") for path in changed_paths)
+        or artifact["revision_binding"] != dict(revision_binding or {})
+    ):
+        _impact_mismatch("POST_PATCH_ARTIFACT_STALE", "Impact artifact does not bind the current candidate/plan/contract/revisions", artifact)
 
 
 def validate_implementation_report(
@@ -366,8 +636,12 @@ def validate_implementation_report(
     changed_paths: list[str],
     self_verification_ok: bool,
     documentation_paths: list[str] | None = None,
+    workspace: Path,
+    plan: dict[str, Any] | None = None,
+    owner_allowed_paths: Sequence[str] = (),
+    require_expanded: bool = False,
 ) -> None:
-    """Validate implementer.v3 while retaining legacy-shaped BLOCKED compatibility.
+    """Validate implementer.v4 against the active definition and actual candidate.
 
     COMPLETE is strict and must close every active item. Non-complete terminal
     statuses need one concrete reason/evidence package, not a fabricated row for
@@ -386,6 +660,7 @@ def validate_implementation_report(
     summary = report.get("summary")
     if not isinstance(summary, str) or not summary.strip():
         raise RuntimeError("Implementer summary must be a non-empty string")
+    require_type(report.get("post_patch_impact"), dict, field="post_patch_impact")
 
     # Validate paths regardless of terminal status; report data must not escape
     # the repository even when the agent is blocked.
@@ -417,6 +692,10 @@ def validate_implementation_report(
             raise RuntimeError(f"{status_value} requires a concrete reason")
         if not evidence:
             raise RuntimeError(f"{status_value} requires concrete evidence")
+        validate_post_patch_impact(
+            report, workspace=workspace, changed_paths=changed_paths, plan=plan, contract=contract,
+            owner_allowed_paths=owner_allowed_paths,
+        )
         return
 
     from .phase4 import validate_implementer_report as validate_phase4_report
@@ -430,6 +709,10 @@ def validate_implementation_report(
         raise RuntimeError(
             "Implementer COMPLETE requires trusted self-verification PASS on the current candidate"
         )
+    validate_post_patch_impact(
+        report, workspace=workspace, changed_paths=changed_paths, plan=plan, contract=contract,
+        owner_allowed_paths=owner_allowed_paths, require_expanded=require_expanded,
+    )
 
 
 

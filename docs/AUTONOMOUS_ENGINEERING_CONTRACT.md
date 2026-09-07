@@ -172,9 +172,51 @@ Implementation Contract остаётся open-world: найденные material
 добавляются через существующий Controller-owned expansion, а не теряются.
 Technical evidence не создаёт новый explicit user intent.
 
-`implementer.v3` COMPLETE semantics и существующие правила self-verification
-сохраняются. Отдельный post-patch Implementer impact closure этим механизмом
-Planner не вводится и не считается уже выполненным.
+Planner impact closure is a hypothesis to verify against the actual patch.
+В `implementer.v4` COMPLETE требует обязательный `post_patch_impact`: новый sweep
+фактического candidate/diff после реализации и до final self-verification.
+Planner closure задаёт starting technical model, но не границу исследования.
+Implementer проверяет реально изменённые contracts/shared symbols/state/API,
+их writers/readers/decision points, sibling consumers и новые material risks.
+
+Changed contracts должны совпадать с Planner по normalized name и before/after
+semantics. Все Planner IN_SCOPE consumers сохраняются с `source=PLANNER`, прежними
+why_affected/required_behavior и proof claim/level/capabilities. Paths/symbols/evidence
+описывают final workspace. Изменение или добавление semantic contract, неполный
+root cause либо неверное required behavior требуют `REPLAN_REQUIRED` с evidence.
+Controller использует общий semantic reset → fresh Planner → новый Contract → fresh
+Implementer; такое расхождение не устраняется молчаливым редактированием Contract.
+
+Каждый Planner NOT_AFFECTED consumer либо подтверждается post-patch evidence,
+либо становится DISCOVERED IN_SCOPE. Новый consumer и каждый `new_risks` entry
+соответствуют один-к-одному `discovered_obligations` consumer/risk по name,
+reason, required behavior/failure mode, proof и evidence. Controller расширяет
+Contract и Verification Plan, инвалидирует self-verification и продолжает тот же
+Implementer thread. COMPLETE закрывает все новые items; повторные discoveries
+idempotent и сохраняются в последующих reports. RELATED_OUT_OF_SCOPE findings,
+включая Planner relation/reason/evidence/follow-up, сохраняются отдельно и не
+становятся obligations.
+
+Каждый фактически changed path reviewed exactly once в `changed_path_review`.
+Для Controller-known deletion existence не требуется; остальные evidence paths
+обязаны существовать и оставаться внутри workspace. `OTHER_JUSTIFIED` требует
+конкретного объяснения и path-linked evidence. Summary не заменяет structured rows.
+
+FULL сохраняет Planner applicability. Если Planner считал impact неприменимым,
+обнаруженный behavioral impact требует REPLAN_REQUIRED. FAST без Planner сам
+строит closure и проводит material consumers/risks через DISCOVERED expansion.
+Исключение `applicable=false` использует ту же owner-backed prose-only policy:
+search и actual changed paths являются subset непустой safe regular-prose-file
+boundary. Behavioral/state/runtime obligations не допускаются. Non-COMPLETE
+reports требуют reason/evidence, но могут оставлять impact arrays пустыми/частичными.
+
+После validated final COMPLETE Controller сохраняет private authoritative
+`implementation_impact_closure_NN.json` (`implementation-impact-closure.v1`),
+связывающий candidate_id, Planner/Contract fingerprints, exact changed paths,
+post_patch_impact и текущий revision binding стабильным fingerprint. Artifact
+входит в Implementer stage evidence. Изменение candidate/Plan/Contract/revisions
+делает его stale: после repair требуется новый report, sweep и self-verification.
+Current Controller-private receipt и все integrity checks остаются обязательными.
 
 ## Evaluator obligations
 
@@ -182,7 +224,7 @@ Evaluator независимо проверяет candidate и достаточ�
 необнаруженных consumers, достижимые регрессии и false-green assertions. Наличие
 Planner ledger не доказывает корректность реализации и не заменяет blind audit.
 `evaluator.v5` PASS semantics сохраняются; отдельное усиление evaluator impact
-closure не считается реализованным только благодаря `planner.v5`.
+closure и mandatory final surfacing являются следующей подзадачей и ещё не реализованы.
 
 ## Definition of COMPLETE
 

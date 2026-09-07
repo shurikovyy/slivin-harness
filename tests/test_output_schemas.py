@@ -5,6 +5,7 @@ from pathlib import Path
 
 from slivin_harness.app_server import CodexAppServer
 from slivin_harness.planner import PLANNER_SCHEMA
+from slivin_harness.implementer import IMPLEMENTER_REPORT_SCHEMA
 from slivin_harness.output_schema import (
     StrictOutputSchemaError,
     production_output_schemas,
@@ -22,6 +23,19 @@ def strict_object(**properties: dict) -> dict:
 
 
 class StrictOutputSchemaTests(unittest.TestCase):
+    def test_implementer_v4_requires_strict_post_patch_impact(self) -> None:
+        self.assertEqual(IMPLEMENTER_REPORT_SCHEMA["properties"]["protocol_version"]["enum"], ["implementer.v4"])
+        self.assertIn("post_patch_impact", IMPLEMENTER_REPORT_SCHEMA["required"])
+        closure = IMPLEMENTER_REPORT_SCHEMA["properties"]["post_patch_impact"]
+        self.assertEqual(set(closure["required"]), {
+            "applicable", "changed_contracts", "in_scope_consumers", "not_affected_consumers",
+            "related_out_of_scope", "new_risks", "changed_path_review", "search_evidence", "closure_summary",
+        })
+        validate_strict_output_schema(IMPLEMENTER_REPORT_SCHEMA)
+        consumers = closure["properties"]["in_scope_consumers"]["items"]
+        self.assertEqual(consumers["properties"]["source"]["enum"], ["PLANNER", "DISCOVERED"])
+        self.assertIn("required_proof", closure["properties"]["new_risks"]["items"]["required"])
+
     def test_planner_v5_requires_strict_typed_impact_closure(self) -> None:
         self.assertEqual(PLANNER_SCHEMA["properties"]["protocol_version"]["enum"], ["planner.v5"])
         self.assertIn("impact_closure", PLANNER_SCHEMA["required"])

@@ -6,12 +6,20 @@ Phase 4 connects the approved Step 3 and Step 4 contracts to the executable Harn
 It does not add another model role. It strengthens the writable implementation loop and
 moves authoritative verification state into the Controller private plane.
 
+Current `implementer.v4` COMPLETE also requires post-patch impact closure against the
+actual candidate. The report reconciles Planner contracts/consumers, reviews every
+changed path (including deletions), preserves related follow-ups and maps all newly
+discovered consumers/risks to Controller Contract expansion. A technical-model
+divergence requires REPLAN_REQUIRED. After any repair the impact sweep and final
+self-verification run again; previous candidate evidence is stale. Controller records
+the validated result as candidate-bound `implementation-impact-closure.v1`.
+
 ## Canonical flow
 
 ```text
 IMPLEMENTATION_CONTRACT_READY
         ↓
-IMPLEMENTER v2 (historical Phase 4 protocol; current release uses implementer.v3)
+IMPLEMENTER v2 (historical Phase 4 protocol; current release uses implementer.v4)
         │
         ├─ COMPLETE
         ├─ REPLAN_REQUIRED
