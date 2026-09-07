@@ -164,6 +164,15 @@ Capability-aware planning сохраняется: Controller сообщает т
 полный artifact, сохраняя closure и синхронизируя proof в обеих consumer arrays.
 Повторный невыполнимый READY даёт `PLANNER_CAPABILITY_INFEASIBLE` до compiler.
 
+Semantic preservation requirement и proof route не равны. `PRESERVE-1` сохраняет
+обязательное user behavior; `evidence_plan.preservation` выбирает способ доказать его
+и не расширяет product scope до исправления всего baseline debt. Absolute PASS broad
+suite допустим как hard proof только для owner-configured project gate либо при
+concrete evidence зелёного baseline именно этого suite. При baseline-red или неизвестном
+baseline нужны targeted contract/consumer regressions или другой достаточный proof.
+Assertions проверяют affected observable behavior, а не только соседний helper.
+Baseline-red не доказывает, что failing consumer unrelated: impact sweep остаётся полным.
+
 ## Implementer obligations
 
 Implementer реализует все acceptance, preservation, state, consumer и risk
@@ -172,8 +181,40 @@ Implementation Contract остаётся open-world: найденные material
 добавляются через существующий Controller-owned expansion, а не теряются.
 Technical evidence не создаёт новый explicit user intent.
 
+`implementer.v5` требует `terminal_reason_kind` с точным соответствием status:
+
+| Status | terminal_reason_kind |
+| --- | --- |
+| COMPLETE | NONE |
+| REPLAN_REQUIRED | TECHNICAL_MODEL_DIVERGENCE или PROOF_MODEL_DIVERGENCE |
+| BLOCKED | INFRASTRUCTURE_BLOCKED |
+| NEEDS_USER_DECISION | USER_DECISION_REQUIRED |
+
+Planner proof plan is a hypothesis. Доказанно непригодный Planner-derived proof route
+из-за pre-existing unrelated baseline failures требует `REPLAN_REQUIRED` с
+`PROOF_MODEL_DIVERGENCE`, concrete reason и evidence: route, baseline facts, независимость
+failing area от текущего impact, target regression и owner-check results. Semantic model
+может оставаться верной. Нельзя исправлять unrelated code/tests ради green proof, объявлять
+preservation выполненным без evidence или возвращать `BLOCKED` из-за плохого proof route.
+`INFRASTRUCTURE_BLOCKED` означает недоступную обязательную capability/операцию/system,
+которую autonomous repair/replan не может восстановить.
+
+Controller использует существующий clean semantic reset → fresh Planner → новый
+Contract/Verification Plan → fresh Implementer. Planner получает только terminal
+reason kind/reason/evidence, перепроверяет их на baseline и сохраняет user product intent.
+Rejected patch и остальной Implementer report не передаются как solution hint.
+Owner-configured checks остаются обязательными даже при baseline-red. IN_SCOPE
+regressions и semantic preservation не становятся advisory. Независимые baseline defects
+сохраняются как RELATED_OUT_OF_SCOPE в текущей final model и доставляются через user handoff.
+
+Existing tests регистрируются только как material evidence для active Contract
+consumer/risk/state/acceptance requirement.
+Exploratory broad suites, baseline-red unrelated tests и RELATED_OUT_OF_SCOPE diagnostics
+не продвигаются в authoritative `registered_checks`. Changed/new regressions по-прежнему
+требуют trusted verification.
+
 Planner impact closure is a hypothesis to verify against the actual patch.
-В `implementer.v4` COMPLETE требует обязательный `post_patch_impact`: новый sweep
+В `implementer.v5` COMPLETE требует обязательный `post_patch_impact`: новый sweep
 фактического candidate/diff после реализации и до final self-verification.
 Planner closure задаёт starting technical model, но не границу исследования.
 Implementer проверяет реально изменённые contracts/shared symbols/state/API,

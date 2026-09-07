@@ -1,4 +1,4 @@
-# Практическая работа с Slivin Harness 0.8.0a20
+# Практическая работа с Slivin Harness 0.8.0a27
 
 ## Установка и self-check
 
@@ -11,8 +11,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемый финал:
 
 ```text
-0.8.0a20
-DOCS_SYNC_PASS harness=0.8.0a20 ...
+0.8.0a27
+DOCS_SYNC_PASS harness=0.8.0a27 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -40,9 +40,9 @@ repair-попытки не помогли, run останавливается к
    → historical semantic baseline gate (если configured)
    → User Task Contract
 
-1. fresh Planner v4
+1. fresh Planner v5
 2. Implementation Contract v3 + Verification Plan v1
-3. Implementer v3 + Contract/check expansion + SELF VERIFY
+3. Implementer v5 + Contract/check expansion + SELF VERIFY
 4. independent Controller deterministic checks
 5. Runtime Verification when the active proof requires it
 6A. fresh blind evaluator discovery
@@ -98,6 +98,17 @@ reason = NO_RUNTIME_PROOF_REQUIRED
 
 A runtime proof is executed only when a Contract item requires `LIVE_LOCAL`,
 `TEST_EXTERNAL` or `PROD_OBSERVE`.
+
+## Proof-model replan
+
+Если выбранный Planner broad suite уже baseline-red из-за доказанной independent
+проблемы, Implementer возвращает `REPLAN_REQUIRED` с
+`terminal_reason_kind=PROOF_MODEL_DIVERGENCE`, exact route и baseline evidence.
+Controller сбрасывает rejected candidate и запускает fresh Planner с неизменным
+Task Contract. Новый targeted proof обязан проверять affected consumers и preservation;
+owner checks остаются обязательными. Это не требует от пользователя разрешения на
+исправление unrelated debt. Такая проблема сохраняется для отдельного user follow-up.
+Exploratory unrelated tests не нужно регистрировать как authoritative checks.
 
 ## Project Python runtime
 

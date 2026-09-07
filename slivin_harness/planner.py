@@ -327,6 +327,21 @@ Proofs только LOCAL_DETERMINISTIC с capabilities из GIT/DOCS_SYNC ил�
   путях новый owner contract;
 - documentation.required=true только когда final semantics требуют синхронизации docs.
 
+Semantic preservation requirement и выбранный proof route — разные сущности.
+evidence_plan.preservation не расширяет product scope: «preserve unrelated behavior»
+не означает «every test in a broad repository suite must be green» без основания.
+Absolute green broad suite допустим как mandatory proof только для owner-configured
+project gate либо при concrete evidence, что этот exact suite является green baseline
+proof route. При baseline-red или неизвестном baseline status не делай exploratory suite
+абсолютным hard proof: выбери targeted contract/consumer regressions либо другой
+достаточный evidence route. Targeted assertions должны проверять actual affected behavior,
+а не только соседний helper. Доказанные независимые baseline defects классифицируй
+RELATED_OUT_OF_SCOPE с evidence и follow-up; baseline failure сам по себе не доказывает,
+что failing consumer unrelated. Все IN_SCOPE obligations остаются обязательными.
+Owner-configured checks/gates не ослабляй и не делай advisory, даже если baseline-red.
+При PROOF_MODEL_DIVERGENCE самостоятельно перепроверь reason/baseline evidence и выбери
+валидный proof route, сохраняя USER TASK CONTRACT и semantic preservation requirements.
+
 READY запрещён при LOW diagnosis confidence, blocking unknowns, product-semantic ambiguity,
 неподтверждённом compatibility-narrowing assumption или конфликте owner boundary.
 READY plan может требовать только capabilities из Controller-owned

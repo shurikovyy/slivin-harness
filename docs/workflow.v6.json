@@ -1,6 +1,6 @@
 {
   "schema_version": "workflow.v6",
-  "harness_version": "0.8.0a26",
+  "harness_version": "0.8.0a27",
   "phase": "phase7-final-gate-delivery-benchmark",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",
@@ -9,7 +9,7 @@
   "contract_versions": {
     "task_contract": "task-contract.v1",
     "planner": "planner.v5",
-    "implementer": "implementer.v4",
+    "implementer": "implementer.v5",
     "implementation_contract": "implementation-contract.v3",
     "implementation_impact_closure": "implementation-impact-closure.v1",
     "verification_plan": "verification-plan.v1",

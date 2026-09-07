@@ -192,7 +192,21 @@ IMPLEMENTER_INSTRUCTIONS = """
 - добавь contract-oriented regression tests, а не проверку конкретной формы patch;
 - обязательно запусти перед завершением Harness-owned SELF_VERIFY_COMMAND: он использует тот же trusted toolchain и те же repair checks, что затем независимо повторит Controller;
 - typed Verification Plan задаёт обязательный уровень доказательства; не подменяй runtime proof локальным тестом;
-- если при исследовании найдены дополнительные существующие test files, зарегистрируй их как typed `registered_checks`/`additional_check_paths`; trusted check ID сейчас только `git.diff-check`, произвольные/неизвестные Controller команды и IDs запрещены;
+- регистрируй existing tests как typed `registered_checks`/`additional_check_paths` только когда
+  они являются material evidence для active Contract consumer/risk/state/acceptance requirement.
+  Exploratory broad-suite tests, baseline-red unrelated tests и RELATED_OUT_OF_SCOPE diagnostics
+  не превращай в authoritative registered_checks. Changed/new regression tests по-прежнему
+  должны быть покрыты trusted verification. Trusted check ID сейчас только `git.diff-check`;
+  произвольные/неизвестные Controller команды и IDs запрещены;
+- Planner proof plan — гипотеза. Если Planner-derived proof route доказанно непригоден
+  из-за pre-existing unrelated baseline failures, не меняй unrelated code/tests ради green
+  proof и не возвращай BLOCKED. Верни REPLAN_REQUIRED с
+  terminal_reason_kind=PROOF_MODEL_DIVERGENCE и concrete reason/evidence: exact proof route,
+  baseline failure facts, почему failing area вне actual impact scope, результаты target
+  contract regressions и owner checks. Baseline-red сам по себе не доказывает unrelatedness.
+  Product intent, PRESERVE-1 и owner-configured checks остаются обязательными; replan меняет
+  негодный Planner-derived proof, а не отменяет semantic obligations или owner gates.
+  RELATED_OUT_OF_SCOPE baseline defect сохрани как follow-up в последующей final model;
 - если найден material consumer/risk вне active Contract, верни его в `discovered_obligations`; не ослабляй и не редактируй Contract самостоятельно;
 - Planner impact_closure — исходная техническая гипотеза, а не граница исследования.
   После реализации исследуй фактический candidate/diff: реально изменённые contracts,
@@ -234,7 +248,12 @@ IMPLEMENTER_INSTRUCTIONS = """
   всегда оставляй пустым — Controller выдаёт receipt независимо. COMPLETE допустим только
   после self-verification PASS, проверки всего Implementation Contract и post-patch impact closure.
   REPLAN_REQUIRED/BLOCKED/NEEDS_USER_DECISION требуют одну конкретную reason + evidence,
-  пустые contract_evidence/discovered_obligations/registered_checks допустимы и не должны
+  terminal_reason_kind строго соответствует status: COMPLETE → NONE; REPLAN_REQUIRED →
+  TECHNICAL_MODEL_DIVERGENCE или PROOF_MODEL_DIVERGENCE; BLOCKED → INFRASTRUCTURE_BLOCKED;
+  NEEDS_USER_DECISION → USER_DECISION_REQUIRED. INFRASTRUCTURE_BLOCKED означает физически
+  недоступную обязательную capability/операцию/external system, которую autonomous
+  repair/replan не может восстановить; unrelated baseline-red suite к этому не относится.
+  Пустые contract_evidence/discovered_obligations/registered_checks допустимы и не должны
   превращаться в искусственный ledger по каждому item.
   post_patch_impact wire fields остаются обязательными, но при non-COMPLETE его arrays
   могут быть пустыми/частичными; не фабрикуй findings ради формы.
@@ -1663,10 +1682,14 @@ runtime/external proof локальным тестом. Затем запуст�
 
 Дополнительные test paths для materially affected consumers можно передать только через
 typed registered_checks/additional_check_paths; Controller сам выберет trusted runner.
+Exploratory unrelated diagnostics не регистрируй как обязательные checks.
 Новые material consumers/risks передавай через discovered_obligations. Для
 REPLAN_REQUIRED/BLOCKED/NEEDS_USER_DECISION дай reason и evidence; полный Contract ledger
 нужен только для COMPLETE. До final self-verify выполни новый post-patch impact sweep;
 COMPLETE требует post_patch_impact и review каждого changed path. Planner closure — гипотеза.
+Непригодный Planner-derived proof route из-за доказанного unrelated baseline debt требует
+REPLAN_REQUIRED + terminal_reason_kind=PROOF_MODEL_DIVERGENCE, а не BLOCKED.
+Owner checks и semantic preservation остаются обязательными.
 """.strip()
 
 def _repair_contract_block(
@@ -1682,6 +1705,9 @@ Implementation Contract остаётся обязательным после rep
 После изменений заново дай evidence по КАЖДОМУ contract item в structured report.
 Заново исследуй post-patch impact до final self-verification; предыдущий closure stale.
 Technical-model divergence требует REPLAN_REQUIRED, а новые consumers/risks — discovery mapping.
+Негодный Planner-derived proof при доказанном unrelated baseline failure требует
+REPLAN_REQUIRED + terminal_reason_kind=PROOF_MODEL_DIVERGENCE с reason/evidence.
+Это не разрешает пропускать owner checks, affected regressions или preservation proof.
 """.strip()
 
 
@@ -1701,7 +1727,8 @@ def build_implementation_continuation_prompt(
 3. Пересмотри post_patch_impact, сохрани Planner dispositions и все уже expanded discoveries.
 4. Запусти актуальный SELF_VERIFY_COMMAND после impact sweep.
 5. Верни COMPLETE только после evidence по каждому item и полного post-patch closure;
-   technical-model divergence требует REPLAN_REQUIRED с evidence.
+   technical/proof-model divergence требует REPLAN_REQUIRED с соответствующим
+   terminal_reason_kind и evidence; owner checks и semantic obligations сохраняются.
 
 Implementation Contract:
 {json.dumps(implementation_contract, ensure_ascii=False, indent=2)}
@@ -3505,7 +3532,10 @@ def main(argv: list[str] | None = None) -> int:
                             ),
                             manifest_repair_evidence=planner_repair_evidence,
                             replan_context=(
-                                "The previous technical model was rejected. "
+                                "The previous technical/proof model was rejected. "
+                                "USER TASK CONTRACT and product intent are unchanged; "
+                                "owner-configured gates remain mandatory. "
+                                "Independently verify these reported facts from the clean baseline. "
                                 "Observed reason (not a reference implementation):\n"
                                 + reason
                             ),
@@ -3786,8 +3816,13 @@ def main(argv: list[str] | None = None) -> int:
                         _phase4_route_implementer_terminal(
                             run_state=run_state, report=report, artifacts=(artifact, "candidate_identity_current.json"),
                         )
-                        reason = str(report.get("reason") or report["summary"])
-                        reason += "\nRepository evidence:\n" + "\n".join(report.get("evidence", []))
+                        # Only the validated terminal diagnosis reaches Planner;
+                        # rejected patch, solution prose and impact ledger stay out.
+                        reason = json.dumps({
+                            "terminal_reason_kind": report["terminal_reason_kind"],
+                            "reason": str(report.get("reason") or report["summary"]),
+                            "evidence": report.get("evidence", []),
+                        }, ensure_ascii=False, indent=2)
                         report, artifact = replan_implementation(reason)
                         continue
                     if report.get("status") != ImplementerStatus.COMPLETE.value:

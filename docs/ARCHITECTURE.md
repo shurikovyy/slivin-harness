@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a26 — Phase 7
+# Архитектура Slivin Harness 0.8.0a27 — Phase 7
 
 ## Назначение
 
-`0.8.0a26` требует typed impact closure в `planner.v5` до `READY`, сохраняет
+`0.8.0a27` требует typed impact closure в `planner.v5` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a26
+Harness                     0.8.0a27
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -48,7 +48,7 @@ Controller plane            controller-plane.v1
 Execution Broker            execution-broker.v1
 Task Contract               task-contract.v1
 Planner                     planner.v5
-Implementer                 implementer.v4
+Implementer                 implementer.v5
 Implementation Contract     implementation-contract.v3
 Verification Plan           verification-plan.v1
 Project runtime             project-runtime.v1
@@ -225,7 +225,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a26`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a27`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -294,7 +294,7 @@ contract expansion, registered checks и действительно новые r
 
 ## 6. Step 3 — Implementer
 
-`implementer.v4` получает Task Contract, compact Planner context, active Contract и trusted capabilities.
+`implementer.v5` получает Task Contract, compact Planner context, active Contract и trusted capabilities.
 
 Planner context включает полный `impact_closure`, diagnosis, assumptions и non-blocking
 unknowns. Actual patch проверяется через `post_patch_impact`: contracts и Planner IN_SCOPE
@@ -313,13 +313,21 @@ revision_binding и stable fingerprint. Его binding проверяется п
 
 Implementer technical-model divergence возвращает REPLAN_REQUIRED с evidence и
 использует тот же semantic reset/fresh Planner/fresh Implementer path, что Evaluator.
+`terminal_reason_kind` различает TECHNICAL_MODEL_DIVERGENCE и PROOF_MODEL_DIVERGENCE;
+обе причины допустимы только с REPLAN_REQUIRED. Непригодный Planner-derived proof
+при доказанном unrelated baseline-red suite меняет proof model через этот же reset.
+Fresh Planner получает projection terminal_reason_kind/reason/evidence и неизменный
+Task Contract; rejected diff остаётся audit artifact вне Planner context. Owner project
+gates сохраняются в repair specs; exploratory unrelated tests не регистрируются.
+COMPLETE требует NONE, BLOCKED — INFRASTRUCTURE_BLOCKED, NEEDS_USER_DECISION —
+USER_DECISION_REQUIRED. Все несовместимые пары Controller отклоняет.
 Evaluator `evaluator.v6` независимо проверяет эти impact artifacts после blind Phase A.
 
 Перед любым App Server `turn/start` Controller рекурсивно проверяет production
 `outputSchema`: каждый object с `properties` обязан иметь
 `additionalProperties=false` и `required`, в точности равный набору properties.
 Проверка охватывает nested objects, array items и composition branches. Для
-`implementer.v4` все поля обязательны на wire-level, но semantic completeness
+`implementer.v5` все поля обязательны на wire-level, но semantic completeness
 остаётся status-dependent: non-COMPLETE status передаёт пустые ledgers, а не
 фиктивное закрытие Contract. Agent всегда возвращает пустой `receipt_id`;
 Controller-private self-verification receipt остаётся единственной authority.
@@ -577,7 +585,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a26` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a27` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 

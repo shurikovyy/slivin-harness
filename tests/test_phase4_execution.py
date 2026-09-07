@@ -23,7 +23,7 @@ from slivin_harness.phase4 import (
 )
 
 
-class ImplementerProtocolV4Tests(unittest.TestCase):
+class ImplementerProtocolV5Tests(unittest.TestCase):
     def setUp(self) -> None:
         self.items = [
             {"id": "ACCEPTANCE-1", "kind": "acceptance", "allow_not_affected": False},
@@ -32,7 +32,7 @@ class ImplementerProtocolV4Tests(unittest.TestCase):
 
     def test_complete_requires_full_contract_and_receipt(self) -> None:
         report = {
-            "protocol_version": "implementer.v4",
+            "protocol_version": "implementer.v5",
             "post_patch_impact": empty_post_patch_impact(),
             "status": "COMPLETE",
             "summary": "done",
@@ -54,7 +54,7 @@ class ImplementerProtocolV4Tests(unittest.TestCase):
             ImplementerStatus.NEEDS_USER_DECISION.value,
         ):
             report = {
-                "protocol_version": "implementer.v4",
+                "protocol_version": "implementer.v5",
                 "post_patch_impact": empty_post_patch_impact(),
                 "status": status,
                 "summary": "cannot finish",
@@ -65,7 +65,7 @@ class ImplementerProtocolV4Tests(unittest.TestCase):
 
     def test_non_consumer_cannot_be_not_affected(self) -> None:
         report = {
-            "protocol_version": "implementer.v4",
+            "protocol_version": "implementer.v5",
             "post_patch_impact": empty_post_patch_impact(),
             "status": "COMPLETE",
             "summary": "done",

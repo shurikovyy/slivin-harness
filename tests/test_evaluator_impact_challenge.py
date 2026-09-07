@@ -113,7 +113,7 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
 
     def build_impact(self):
         report = attach_post_patch_impact({
-            "protocol_version": "implementer.v4", "status": "COMPLETE", "summary": "Entry reads corrected.",
+            "protocol_version": "implementer.v5", "status": "COMPLETE", "summary": "Entry reads corrected.",
             "reason": "", "evidence": [], "blockers": [], "additional_check_paths": [], "registered_checks": [],
             "discovered_obligations": [],
             "contract_evidence": [{"item_id": row["id"], "status": "VERIFIED", "evidence": ["The configured regression passed."]} for row in self.contract["items"]],
@@ -590,7 +590,7 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
             if continuing and not repair and not contract_gap:
                 observed["expanded_items"] = copy.deepcopy(contract["items"])
                 report = attach_post_patch_impact({
-                    "protocol_version": "implementer.v4", "status": "BLOCKED", "summary": "The new reader obligation remains unresolved.",
+                    "protocol_version": "implementer.v5", "status": "BLOCKED", "summary": "The new reader obligation remains unresolved.",
                     "reason": "The material sibling defect has not been corrected.", "evidence": ["reader_b.py still reads active alone."],
                     "contract_evidence": [], "self_verification": {"status": "NOT_RUN", "command": "", "evidence": [], "receipt_id": ""},
                     "additional_check_paths": [], "registered_checks": [], "discovered_obligations": [], "blockers": [],
@@ -612,7 +612,7 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
                 finding = observed["finding"]
                 discoveries = [{"kind": "consumer", "name": finding["title"], "reason": finding["failure_mode"], "required_behavior": finding["required_action"], "required_proof": finding["required_proof"], "evidence": finding["evidence"]}]
             report = attach_post_patch_impact({
-                "protocol_version": "implementer.v4", "status": "COMPLETE", "summary": "Configured entry regression passed.",
+                "protocol_version": "implementer.v5", "status": "COMPLETE", "summary": "Configured entry regression passed.",
                 "reason": "", "evidence": [], "blockers": [], "additional_check_paths": [], "registered_checks": [],
                 "discovered_obligations": discoveries,
                 "contract_evidence": [{"item_id": row["id"], "status": "VERIFIED", "evidence": ["Configured regression passed."]} for row in contract["items"]],

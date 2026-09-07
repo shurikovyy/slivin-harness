@@ -1,4 +1,4 @@
-# Slivin Harness 0.8.0a26 — Phase 7
+# Slivin Harness 0.8.0a27 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
@@ -7,12 +7,16 @@ Slivin Harness управляет автономной работой Codex в �
 technical impact radius. Пользователь задаёт observable intent и ограничения;
 перечислять consumers, файлы и regression cases он не обязан.
 
-`0.8.0a26` quality-core требует typed Planner Impact Closure до `READY` в `planner.v5`
-и post-patch Implementer Impact Closure до `COMPLETE` в `implementer.v4`.
+`0.8.0a27` quality-core требует typed Planner Impact Closure до `READY` в `planner.v5`
+и post-patch Implementer Impact Closure до `COMPLETE` в `implementer.v5`.
 Implementer проверяет Planner model по реальному diff, пересматривает consumers,
 добавляет discoveries через Controller expansion и рассматривает каждый changed path.
 Controller сохраняет candidate-bound `implementation-impact-closure.v1`; semantic
 divergence требует fresh Planner через `REPLAN_REQUIRED`.
+Непригодный Planner-derived proof route при доказанном unrelated baseline failure
+также требует `REPLAN_REQUIRED` с `terminal_reason_kind=PROOF_MODEL_DIVERGENCE`.
+User preservation и owner-configured checks остаются обязательными; exploratory
+unrelated suites не становятся authoritative registered checks.
 `evaluator.v6` независимо восстанавливает impact model по actual candidate до раскрытия
 обоих ledgers. Controller immutable-сохраняет `blind-audit.v2`, затем требует evidence-backed
 `impact_challenge` всех contracts/consumers/classifications и changed paths. Согласованные
@@ -41,7 +45,7 @@ VERIFICATION PLAN verification-plan.v1
         ↓
 owner-boundary + post-plan capability gate
         ↓
-IMPLEMENTER implementer.v4
+IMPLEMENTER implementer.v5
         ↓
 transactional Contract / Verification Plan expansion
         ↓
@@ -91,7 +95,7 @@ canonical candidate identity до/после probe batch. Любое измен�
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a26`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a27`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
@@ -345,7 +349,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a26 ...
+DOCS_SYNC_PASS harness=0.8.0a27 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -359,7 +363,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a26` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a27` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.0a27 — Baseline-aware proof model replan
+
+- Added required `implementer.v5` terminal reason classification. Technical/proof-model divergence requires REPLAN_REQUIRED; BLOCKED is reserved for infrastructure limitations, with strict status/reason validation.
+- Reused clean semantic reset and fresh agents for invalid Planner-derived proof routes. Fresh Planner receives terminal reason/evidence while user semantics and owner-configured gates remain mandatory.
+- Distinguished semantic preservation from an unproven broad-suite absolute-green proof. Existing test registration is limited to material active Contract evidence; independent baseline debt remains a separate user follow-up.
+- Added generic executable baseline-red replan, owner-gate and affected-regression protection tests; preserved impact closure, discovery expansion, trusted receipts and Final Gate.
+
 ## 0.8.0a26 — User Follow-up Handoff
 
 - Added Controller-owned `user-follow-up.v1`: current related findings are delivered through private authoritative and public immutable `user_follow_up_report.json`, including zero findings, before held-out checks.

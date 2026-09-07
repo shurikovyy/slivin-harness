@@ -705,7 +705,7 @@ machine-readable workflow и versioned Run State
 + PLANNER planner.v5
 + IMPLEMENTATION CONTRACT implementation-contract.v3
 + typed VERIFICATION PLAN verification-plan.v1
-+ IMPLEMENTER implementer.v4
++ IMPLEMENTER implementer.v5
 + candidate-bound implementation-impact-closure.v1 before Implementer completion
 + transactional Contract / Verification Plan expansion
 + canonical .worktreeinclude exposure policy

@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a26
+# Документация Slivin Harness 0.8.0a27
 
-Актуальная версия: **0.8.0a26 — User Follow-up Handoff**.
+Актуальная версия: **0.8.0a27 — Baseline-aware Proof Model Replan**.
 
 Основные документы:
 
@@ -34,7 +34,7 @@
 ```text
 task-contract.v1
 planner.v5
-implementer.v4
+implementer.v5
 implementation-contract.v3
 verification-plan.v1
 project-runtime.v1

@@ -78,7 +78,7 @@ cached tool evidence before a later gate may reuse it.
 
 ## Open-world Contract transaction
 
-Implementer protocol is now `implementer.v4`. A discovered obligation contains:
+Implementer protocol is now `implementer.v5`. A discovered obligation contains:
 
 ```text
 kind                 consumer | risk
@@ -100,7 +100,7 @@ Existing items are immutable. Exact duplicate discoveries are idempotent and do 
 create obligation explosion. The 14-item size is a soft review threshold; a material
 obligation is never dropped to satisfy the threshold.
 
-Before expansion, `implementer.v4` must map every post-patch DISCOVERED consumer and
+Before expansion, `implementer.v5` must map every post-patch DISCOVERED consumer and
 new risk one-to-one to discovered obligations, including behavior/proof/evidence.
 Planner NOT_AFFECTED consumers promoted by the actual patch use this same route.
 The existing stabilizer recompiles the Contract and Verification Plan, invalidates
@@ -118,6 +118,16 @@ receipt even when candidate bytes did not change. Every accepted reference must 
 before it enters the private registry: test paths need a trusted runner, and the only
 built-in check ID in this alpha is `git.diff-check`. A safe-looking unknown ID is rejected
 instead of becoming non-executable proof metadata.
+
+Register existing tests only as material evidence for active Contract
+consumer/risk/state/acceptance requirements. Exploratory
+broad suites, unrelated baseline-red tests and RELATED_OUT_OF_SCOPE diagnostics do not
+become authoritative registered checks. Changed/new regressions still require trusted
+verification. If a Planner-derived proof route cannot prove preservation because of
+proven independent baseline debt, return REPLAN_REQUIRED with
+terminal_reason_kind=PROOF_MODEL_DIVERGENCE and concrete reason/evidence. The existing
+semantic reset clears attempt-specific checks and recompiles fresh definitions while
+retaining owner-configured gates and user semantic requirements.
 
 ## `.worktreeinclude`
 

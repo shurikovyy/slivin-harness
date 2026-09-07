@@ -6,7 +6,7 @@ Phase 4 connects the approved Step 3 and Step 4 contracts to the executable Harn
 It does not add another model role. It strengthens the writable implementation loop and
 moves authoritative verification state into the Controller private plane.
 
-Current `implementer.v4` COMPLETE also requires post-patch impact closure against the
+Current `implementer.v5` COMPLETE also requires post-patch impact closure against the
 actual candidate. The report reconciles Planner contracts/consumers, reviews every
 changed path (including deletions), preserves related follow-ups and maps all newly
 discovered consumers/risks to Controller Contract expansion. A technical-model
@@ -14,12 +14,20 @@ divergence requires REPLAN_REQUIRED. After any repair the impact sweep and final
 self-verification run again; previous candidate evidence is stale. Controller records
 the validated result as candidate-bound `implementation-impact-closure.v1`.
 
+The strict report also requires `terminal_reason_kind`: COMPLETE → NONE;
+REPLAN_REQUIRED → TECHNICAL_MODEL_DIVERGENCE or PROOF_MODEL_DIVERGENCE;
+BLOCKED → INFRASTRUCTURE_BLOCKED; NEEDS_USER_DECISION → USER_DECISION_REQUIRED.
+Controller rejects every mismatched pair. Non-COMPLETE still requires concrete
+reason/evidence. A Planner-derived proof route invalidated by proven unrelated
+baseline failures requires proof-model replan, not infrastructure BLOCKED.
+Semantic preservation and owner-configured gates remain mandatory.
+
 ## Canonical flow
 
 ```text
 IMPLEMENTATION_CONTRACT_READY
         ↓
-IMPLEMENTER v2 (historical Phase 4 protocol; current release uses implementer.v4)
+IMPLEMENTER v2 (historical Phase 4 protocol; current release uses implementer.v5)
         │
         ├─ COMPLETE
         ├─ REPLAN_REQUIRED

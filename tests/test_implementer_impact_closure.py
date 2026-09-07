@@ -125,7 +125,7 @@ class ImplementerImpactClosureTests(unittest.TestCase):
             self.report = copy.deepcopy(original)
             self.report["post_patch_impact"]["changed_contracts"][0][key] = "Different semantic contract."
             self.reject("POST_PATCH_MODEL_DIVERGENCE")
-            self.report.update(status="REPLAN_REQUIRED", reason="The validity contract differs from the Planner model.", evidence=["state.py actual entry fields contradict the assumed lifecycle."])
+            self.report.update(status="REPLAN_REQUIRED", terminal_reason_kind="TECHNICAL_MODEL_DIVERGENCE", reason="The validity contract differs from the Planner model.", evidence=["state.py actual entry fields contradict the assumed lifecycle."])
             self.validate(self_verify=False)
 
     def test_unplanned_contract_cannot_be_added_under_complete(self):
@@ -385,7 +385,7 @@ class ImplementerImpactClosureTests(unittest.TestCase):
 
     def test_non_complete_can_use_empty_partial_ledger(self):
         for status in ("REPLAN_REQUIRED", "BLOCKED", "NEEDS_USER_DECISION"):
-            self.report.update(status=status, reason="Actual validity ownership requires further investigation.", evidence=["writer.py stores fields outside the assumed lifecycle."], post_patch_impact=empty_post_patch_impact(), contract_evidence=[])
+            self.report.update(status=status, terminal_reason_kind={"REPLAN_REQUIRED": "TECHNICAL_MODEL_DIVERGENCE", "BLOCKED": "INFRASTRUCTURE_BLOCKED", "NEEDS_USER_DECISION": "USER_DECISION_REQUIRED"}[status], reason="Actual validity ownership requires further investigation.", evidence=["writer.py stores fields outside the assumed lifecycle."], post_patch_impact=empty_post_patch_impact(), contract_evidence=[])
             self.validate(self_verify=False)
 
     def test_post_patch_wire_block_is_mandatory(self):

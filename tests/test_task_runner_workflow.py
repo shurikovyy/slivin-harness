@@ -304,7 +304,7 @@ timeout_seconds = 30
             if promote_not_affected:
                 report["post_patch_impact"]["not_affected_consumers"] = []
             if implementer_replan and implementer_calls == 1:
-                report.update(status="REPLAN_REQUIRED", reason="The actual patch requires a fresh technical model.", evidence=["reader.py assumptions must be rechecked from baseline."])
+                report.update(status="REPLAN_REQUIRED", terminal_reason_kind="TECHNICAL_MODEL_DIVERGENCE", reason="The actual patch requires a fresh technical model.", evidence=["reader.py assumptions must be rechecked from baseline."])
             if reuse_old_impact and previous_impact is not None:
                 report["post_patch_impact"] = previous_impact
             previous_impact = copy.deepcopy(report["post_patch_impact"])
@@ -445,7 +445,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a26")
+        self.assertEqual(build_identity["version"], "0.8.0a27")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)

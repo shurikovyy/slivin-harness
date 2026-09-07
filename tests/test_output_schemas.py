@@ -23,9 +23,14 @@ def strict_object(**properties: dict) -> dict:
 
 
 class StrictOutputSchemaTests(unittest.TestCase):
-    def test_implementer_v4_requires_strict_post_patch_impact(self) -> None:
-        self.assertEqual(IMPLEMENTER_REPORT_SCHEMA["properties"]["protocol_version"]["enum"], ["implementer.v4"])
+    def test_implementer_v5_requires_strict_post_patch_impact(self) -> None:
+        self.assertEqual(IMPLEMENTER_REPORT_SCHEMA["properties"]["protocol_version"]["enum"], ["implementer.v5"])
         self.assertIn("post_patch_impact", IMPLEMENTER_REPORT_SCHEMA["required"])
+        self.assertIn("terminal_reason_kind", IMPLEMENTER_REPORT_SCHEMA["required"])
+        self.assertEqual(set(IMPLEMENTER_REPORT_SCHEMA["properties"]["terminal_reason_kind"]["enum"]), {
+            "NONE", "TECHNICAL_MODEL_DIVERGENCE", "PROOF_MODEL_DIVERGENCE",
+            "INFRASTRUCTURE_BLOCKED", "USER_DECISION_REQUIRED",
+        })
         closure = IMPLEMENTER_REPORT_SCHEMA["properties"]["post_patch_impact"]
         self.assertEqual(set(closure["required"]), {
             "applicable", "changed_contracts", "in_scope_consumers", "not_affected_consumers",

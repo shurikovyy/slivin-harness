@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a26 — Phase 7
+# Модель качества Slivin Harness 0.8.0a27 — Phase 7
 
 Нормативный autonomy contract: **[AUTONOMOUS_ENGINEERING_CONTRACT.md](AUTONOMOUS_ENGINEERING_CONTRACT.md)**.
 User scope задаёт observable результат и explicit ограничения; technical impact
@@ -110,9 +110,17 @@ DOCS optional
 
 Каждый item имеет typed required proof в `verification-plan.v1`. Contract open-world: новый material consumer/risk добавляется, а старые obligations не ослабляются.
 
+Semantic obligation и выбранный proof route различны. Broad preservation wording не
+требует абсолютного PASS всего repository suite без owner gate или evidence зелёного
+baseline именно этого suite. При доказанно unrelated baseline-red Planner-derived route
+Implementer возвращает `REPLAN_REQUIRED` + `PROOF_MODEL_DIVERGENCE` с reason/evidence.
+Clean semantic reset запускает fresh Planner и Implementer с новым proof plan, сохраняя
+Task Contract, `PRESERVE-1` semantics и все owner checks. Это не правило «baseline-red
+можно игнорировать»: affected regressions и достаточный preservation proof обязательны.
+
 ### Implementer self verification
 
-`implementer.v4` использует trusted check registry и worktree-local project runtime, чтобы исправляться до сдачи. Controller-private receipt связан с candidate, revisions, runtime environment, attempt и registry digest.
+`implementer.v5` использует trusted check registry и worktree-local project runtime, чтобы исправляться до сдачи. Controller-private receipt связан с candidate, revisions, runtime environment, attempt и registry digest.
 
 COMPLETE дополнительно требует `post_patch_impact` по actual diff: reconciliation
 Planner changed contracts/IN_SCOPE, повторный disposition NOT_AFFECTED, сохранение
@@ -382,7 +390,7 @@ Planner Impact Closure проверяется synthetic Harness tests. Historica
 manifest version = 2
 task-contract.v1
 planner.v5
-implementer.v4
+implementer.v5
 implementation-contract.v3
 verification-plan.v1
 project-runtime.v1

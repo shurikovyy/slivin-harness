@@ -16,7 +16,13 @@ from slivin_harness.verification import (
 )
 from slivin_harness.workflow import ImplementerStatus, enum_values
 
-IMPLEMENTER_PROTOCOL_VERSION = "implementer.v4"
+IMPLEMENTER_PROTOCOL_VERSION = "implementer.v5"
+IMPLEMENTER_TERMINAL_REASONS = {
+    "COMPLETE": ("NONE",),
+    "REPLAN_REQUIRED": ("TECHNICAL_MODEL_DIVERGENCE", "PROOF_MODEL_DIVERGENCE"),
+    "BLOCKED": ("INFRASTRUCTURE_BLOCKED",),
+    "NEEDS_USER_DECISION": ("USER_DECISION_REQUIRED",),
+}
 IMPLEMENTATION_IMPACT_CLOSURE_VERSION = "implementation-impact-closure.v1"
 IMPLEMENTATION_CONTRACT_VERSION = "implementation-contract.v3"
 CONTRACT_ITEM_TYPES = {"acceptance", "preservation", "state", "consumer", "risk", "documentation"}
@@ -60,6 +66,10 @@ IMPLEMENTER_REPORT_SCHEMA = {
     "properties": {
         "protocol_version": {"type": "string", "enum": [IMPLEMENTER_PROTOCOL_VERSION]},
         "status": {"type": "string", "enum": enum_values(ImplementerStatus)},
+        "terminal_reason_kind": {
+            "type": "string",
+            "enum": [kind for kinds in IMPLEMENTER_TERMINAL_REASONS.values() for kind in kinds],
+        },
         "summary": {"type": "string"},
         "reason": {"type": "string"},
         "evidence": {"type": "array", "items": {"type": "string"}},
@@ -132,6 +142,7 @@ IMPLEMENTER_REPORT_SCHEMA = {
     "required": [
         "protocol_version",
         "status",
+        "terminal_reason_kind",
         "summary",
         "reason",
         "evidence",
@@ -641,7 +652,7 @@ def validate_implementation_report(
     owner_allowed_paths: Sequence[str] = (),
     require_expanded: bool = False,
 ) -> None:
-    """Validate implementer.v4 against the active definition and actual candidate.
+    """Validate implementer.v5 against the active definition and actual candidate.
 
     COMPLETE is strict and must close every active item. Non-complete terminal
     statuses need one concrete reason/evidence package, not a fabricated row for
@@ -657,6 +668,11 @@ def validate_implementation_report(
             "Implementer status must be COMPLETE, REPLAN_REQUIRED, BLOCKED, or "
             "NEEDS_USER_DECISION"
         )
+    if report.get("terminal_reason_kind") not in IMPLEMENTER_TERMINAL_REASONS[status_value]:
+        raise RuntimeError(
+            f"{status_value} requires terminal_reason_kind in "
+            f"{IMPLEMENTER_TERMINAL_REASONS[status_value]!r}"
+        )
     summary = report.get("summary")
     if not isinstance(summary, str) or not summary.strip():
         raise RuntimeError("Implementer summary must be a non-empty string")
@@ -670,6 +686,16 @@ def validate_implementation_report(
         safe_repo_relative(raw, field="changed_path")
 
     if status_value != ImplementerStatus.COMPLETE.value:
+        if report["terminal_reason_kind"] == "PROOF_MODEL_DIVERGENCE":
+            # These fields are the allowlisted feedback carried to fresh Planner.
+            # A generic blocker/ledger row cannot substitute for the proof diagnosis.
+            if not isinstance(report.get("reason"), str) or not report["reason"].strip():
+                raise RuntimeError("PROOF_MODEL_DIVERGENCE requires a concrete reason")
+            evidence = report.get("evidence")
+            if not isinstance(evidence, list) or not evidence or any(
+                not isinstance(item, str) or not item.strip() for item in evidence
+            ):
+                raise RuntimeError("PROOF_MODEL_DIVERGENCE requires concrete evidence")
         blockers = report.get("blockers", [])
         reason = report.get("reason")
         if not isinstance(reason, str) or not reason.strip():

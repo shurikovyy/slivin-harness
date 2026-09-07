@@ -46,6 +46,10 @@ def empty_post_patch_impact() -> dict:
 
 def attach_post_patch_impact(report: dict, *, plan: dict | None, changed_paths: list[str]) -> dict:
     """Synthetic report fixture; never used by production artifact construction."""
+    report.setdefault("terminal_reason_kind", {
+        "COMPLETE": "NONE", "REPLAN_REQUIRED": "TECHNICAL_MODEL_DIVERGENCE",
+        "BLOCKED": "INFRASTRUCTURE_BLOCKED", "NEEDS_USER_DECISION": "USER_DECISION_REQUIRED",
+    }[report["status"]])
     closure = empty_post_patch_impact()
     report["post_patch_impact"] = closure
     if report["status"] != "COMPLETE":
