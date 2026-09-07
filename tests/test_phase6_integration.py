@@ -90,11 +90,11 @@ class Phase6ExecutableIntegrationTests(unittest.TestCase):
         self.assertTrue(slivin_harness.__version__.startswith("0.8.0a"))
         self.assertTrue(WORKFLOW_VERSION.startswith("workflow.v"))
         self.assertTrue(WORKFLOW_PHASE.startswith("phase"))
-        self.assertEqual(EVALUATOR_PROTOCOL_VERSION, "evaluator.v5")
+        self.assertEqual(EVALUATOR_PROTOCOL_VERSION, "evaluator.v6")
         self.assertEqual(PHASE6_VERSION, "phase6-runtime-evaluator.v1")
         self.assertEqual(RUNTIME_EVIDENCE_VERSION, "runtime-evidence.v1")
         self.assertEqual(CONTRACT_CLOSURE_VERSION, "contract-closure.v1")
-        self.assertEqual(BLIND_AUDIT_VERSION, "blind-audit.v1")
+        self.assertEqual(BLIND_AUDIT_VERSION, "blind-audit.v2")
 
     def test_task_runner_connects_runtime_and_two_phase_evaluator(self) -> None:
         source = (ROOT / "task_runner.py").read_text(encoding="utf-8")
@@ -229,14 +229,14 @@ timeout_seconds = 30
         def fake_evaluator(*_args, **kwargs):
             evaluator_seen_runtime.append(kwargs["runtime_evidence"]["status"])
             callback = kwargs.get("on_phase_complete")
-            audit = valid_blind_audit()
+            audit = valid_blind_audit(candidate_id=kwargs["candidate_id"], changed_paths=kwargs["changed_paths"])
             blind_callback = kwargs.get("on_blind_audit")
             if blind_callback:
                 blind_callback(audit)
             if callback:
                 callback("PHASE_A")
                 callback("PHASE_B")
-            return audit, valid_pass(blind_audit=audit)
+            return audit, valid_pass(blind_audit=audit, planner_impact=kwargs["plan"]["impact_closure"], implementation_impact=kwargs["implementation_impact_closure"])
 
         output = io.StringIO()
         with (
@@ -485,7 +485,7 @@ timeout_seconds = 30
                 kwargs["contract_closure"]["candidate_id"],
                 kwargs["candidate_id"],
             )
-            audit = valid_blind_audit()
+            audit = valid_blind_audit(candidate_id=kwargs["candidate_id"], changed_paths=kwargs["changed_paths"])
             callback = kwargs.get("on_blind_audit")
             if callback is not None:
                 callback(audit)
@@ -493,7 +493,7 @@ timeout_seconds = 30
             if phase_callback is not None:
                 phase_callback("PHASE_A")
                 phase_callback("PHASE_B")
-            return audit, valid_pass(blind_audit=audit)
+            return audit, valid_pass(blind_audit=audit, planner_impact=kwargs["plan"]["impact_closure"], implementation_impact=kwargs["implementation_impact_closure"])
 
         output = io.StringIO()
         with (

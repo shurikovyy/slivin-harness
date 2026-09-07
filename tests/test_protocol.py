@@ -253,19 +253,89 @@ def evaluator_finding(finding_id: str = "BLIND-1") -> dict:
     }
 
 
-def valid_blind_audit(*, findings=None) -> dict:
+def valid_blind_audit(*, findings=None, candidate_id="candidate-1", changed_paths=None) -> dict:
+    paths = ["target.txt"] if changed_paths is None else changed_paths
     return {
         "protocol_version": BLIND_AUDIT_VERSION,
+        "candidate_id": candidate_id,
         "summary": "Independent candidate audit completed.",
+        "impact_analysis": {
+            "applicable": True,
+            "changed_contracts": [{
+                "impact_id": "CONTRACT-1", "name": "Observable reader value",
+                "before": "The public reader returns before.", "after": "The public reader returns after.",
+                "paths": ["reader.py", "target.txt"], "symbols": ["read_target"],
+                "evidence": ["reader.py reads the changed target.txt value."],
+            }],
+            "affected_consumers": [{
+                "impact_id": "CONSUMER-1", "name": "Public value reader",
+                "paths": ["reader.py"], "symbols": ["read_target"],
+                "relation": "The reader observes the changed file value.", "required_behavior": "Return after.",
+                "evidence": ["The public read_target path consumes target.txt."],
+            }],
+            "not_affected_consumers": [], "related_out_of_scope": [],
+            "changed_path_review": [{"path": path, "observed_role": "Implementation", "impact": "Updates the observable value.", "evidence": [f"The diff for {path} was inspected."]} for path in paths],
+            "search_evidence": [{"target": "read_target", "method": "Trace file reads through the public reader and inspect sibling callers.", "evidence_paths": ["reader.py", "target.txt"], "conclusion": "The public reader is material to the value change."}],
+            "closure_summary": "The changed value was traced through actual readers and plausible siblings independently of implementation declarations.",
+        },
         "findings": list(findings or []),
         "advisories": [],
     }
 
 
-def valid_pass(*, blind_audit=None) -> dict:
+def implementation_impact_fixture(*, candidate_id="candidate-1", plan=None, contract=None, changed_paths=None, revision_binding=None) -> dict:
+    from slivin_harness.protocol import stable_fingerprint
+    plan = valid_plan() if plan is None else plan
+    contract = contract or build_implementation_contract(plan, task_contract=valid_task_contract())
+    paths = ["target.txt"] if changed_paths is None else changed_paths
+    report = attach_post_patch_impact({"status": "COMPLETE"}, plan=plan, changed_paths=paths)
+    artifact = {
+        "schema_version": "implementation-impact-closure.v1", "status": "PASS",
+        "candidate_id": candidate_id, "plan_fingerprint": plan_fingerprint(plan),
+        "implementation_contract_fingerprint": contract["fingerprint"], "changed_paths": sorted(paths),
+        "post_patch_impact": report["post_patch_impact"], "revision_binding": revision_binding or {},
+    }
+    artifact["fingerprint"] = stable_fingerprint(artifact, length=64)
+    return artifact
+
+
+def valid_pass(*, blind_audit=None, planner_impact=None, implementation_impact=None) -> dict:
     audit = blind_audit or valid_blind_audit()
+    planner_impact = valid_plan()["impact_closure"] if planner_impact is None else planner_impact
+    implementation_impact = implementation_impact or implementation_impact_fixture(candidate_id=audit["candidate_id"])
+    sources = {"BLIND": audit["impact_analysis"], "PLANNER": planner_impact, "IMPLEMENTER": implementation_impact["post_patch_impact"]}
+
+    def disposition(status, paths, **reference):
+        return dict(reference, disposition=status, reason="Independent repository inspection confirms this classification.", evidence_paths=list(paths), evidence=["The actual consumer and candidate behavior were inspected."], finding_ids=[])
+
+    challenge = {}
+    for group, input_group, status in (
+        ("blind_contract_dispositions", "changed_contracts", "COVERED"),
+        ("blind_consumer_dispositions", "affected_consumers", "COVERED_IN_SCOPE"),
+    ):
+        targets = planner_impact.get("changed_contracts" if input_group == "changed_contracts" else "in_scope_consumers", [])
+        source = "PLANNER"
+        if not targets:
+            targets = sources["IMPLEMENTER"]["changed_contracts" if input_group == "changed_contracts" else "in_scope_consumers"]
+            source = "IMPLEMENTER"
+        challenge[group] = [dict(
+            disposition(status, row["paths"], impact_id=row["impact_id"]),
+            matches=[{"source": source, "classification": "CHANGED_CONTRACT" if input_group == "changed_contracts" else "IN_SCOPE", "name": targets[0]["name"]}] if targets else [],
+        ) for row in sources["BLIND"][input_group]]
+    challenge["planner_consumer_dispositions"] = [disposition("CONFIRMED", row["paths"], name=row["name"]) for row in planner_impact.get("in_scope_consumers", [])]
+    challenge["implementer_consumer_dispositions"] = [disposition("CONFIRMED", row["paths"], name=row["name"]) for row in sources["IMPLEMENTER"]["in_scope_consumers"] if row["source"] == "DISCOVERED"]
+    for group, input_group, status in (
+        ("not_affected_dispositions", "not_affected_consumers", "CONFIRMED_NOT_AFFECTED"),
+        ("related_follow_up_dispositions", "related_out_of_scope", "CONFIRMED_OUT_OF_SCOPE"),
+    ):
+        challenge[group] = [disposition(status, row["paths"], source=source, reference=row["impact_id"] if source == "BLIND" else row["name"]) for source, ledger in sources.items() for row in ledger.get(input_group, [])]
+    evidence_paths = sources["BLIND"]["search_evidence"][0]["evidence_paths"]
+    challenge["changed_path_dispositions"] = [disposition("UNDERSTOOD", evidence_paths, path=row["path"]) for row in sources["BLIND"]["changed_path_review"]]
+    challenge["coverage_summary"] = "Independent contracts, readers, sibling classifications and all changed paths were compared with repository evidence."
     return {
         "protocol_version": EVALUATOR_PROTOCOL_VERSION,
+        "candidate_id": audit["candidate_id"],
+        "impact_challenge": challenge,
         "status": "PASS",
         "summary": "The task is satisfied and checks cover the changed contract.",
         "blind_finding_dispositions": [
@@ -288,6 +358,11 @@ class ProtocolContractTests(unittest.TestCase):
         self.workspace = Path(temporary.name)
         write_plan_evidence(self.workspace)
         self.task_contract = valid_task_contract()
+        self.evaluation_context = {
+            "workspace": self.workspace, "candidate_id": "candidate-1", "changed_paths": ["target.txt"],
+            "planner_impact_closure": valid_plan()["impact_closure"],
+            "implementation_impact_closure": implementation_impact_fixture(),
+        }
 
     def test_protocol_versions_are_explicit(self) -> None:
         self.assertEqual(PLANNER_SCHEMA["properties"]["protocol_version"]["enum"], [PLANNER_PROTOCOL_VERSION])
@@ -359,7 +434,7 @@ class ProtocolContractTests(unittest.TestCase):
 
     def test_pass_is_mechanically_strict(self) -> None:
         audit = valid_blind_audit()
-        validate_evaluation_artifact(valid_pass(blind_audit=audit), blind_audit=audit)
+        validate_evaluation_artifact(valid_pass(blind_audit=audit), blind_audit=audit, **self.evaluation_context)
 
         finding = evaluator_finding()
         audit = valid_blind_audit(findings=[finding])
@@ -367,21 +442,21 @@ class ProtocolContractTests(unittest.TestCase):
         evaluation["blind_finding_dispositions"][0]["disposition"] = "RETAINED"
         evaluation["findings"] = [finding]
         with self.assertRaisesRegex(RuntimeError, "PASS requires no findings"):
-            validate_evaluation_artifact(evaluation, blind_audit=audit)
+            validate_evaluation_artifact(evaluation, blind_audit=audit, **self.evaluation_context)
 
     def test_findings_status_requires_a_finding(self) -> None:
         audit = valid_blind_audit()
         evaluation = valid_pass(blind_audit=audit)
         evaluation["status"] = "FINDINGS"
         with self.assertRaisesRegex(RuntimeError, "requires at least one finding"):
-            validate_evaluation_artifact(evaluation, blind_audit=audit)
+            validate_evaluation_artifact(evaluation, blind_audit=audit, **self.evaluation_context)
 
     def test_phase_b_must_disposition_every_blind_finding(self) -> None:
         audit = valid_blind_audit(findings=[evaluator_finding()])
         evaluation = valid_pass(blind_audit=audit)
         evaluation["blind_finding_dispositions"] = []
         with self.assertRaisesRegex(RuntimeError, "disposition every"):
-            validate_evaluation_artifact(evaluation, blind_audit=audit)
+            validate_evaluation_artifact(evaluation, blind_audit=audit, **self.evaluation_context)
 
     def test_implementation_handoff_contains_task_contract_and_verification_plan(self) -> None:
         plan = valid_plan()

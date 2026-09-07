@@ -180,7 +180,7 @@ timeout_seconds = 30
         def fake_evaluator(*_args, **kwargs):
             nonlocal evaluator_calls
             evaluator_calls += 1
-            audit = valid_blind_audit()
+            audit = valid_blind_audit(candidate_id=kwargs["candidate_id"], changed_paths=kwargs["changed_paths"])
             blind_callback = kwargs.get("on_blind_audit")
             if blind_callback:
                 blind_callback(audit)
@@ -188,16 +188,10 @@ timeout_seconds = 30
             if callback:
                 callback("PHASE_A")
                 callback("PHASE_B")
+            verdict = valid_pass(blind_audit=audit, planner_impact=kwargs["plan"]["impact_closure"], implementation_impact=kwargs["implementation_impact_closure"])
             if with_replan and evaluator_calls == 1:
-                return audit, {
-                    "protocol_version": EVALUATOR_PROTOCOL_VERSION,
-                    "status": "REPLAN_REQUIRED",
-                    "summary": "The technical model must be rebuilt from baseline.",
-                    "blind_finding_dispositions": [],
-                    "findings": [],
-                    "reason": "The first technical model is intentionally rejected by the integration fixture.",
-                }
-            return audit, valid_pass(blind_audit=audit)
+                verdict.update(status="REPLAN_REQUIRED", summary="The technical model must be rebuilt from baseline.", reason="The first technical model is intentionally rejected by the integration fixture.")
+            return audit, verdict
 
         implementer_calls = 0
         implementer_threads: list[str] = []
@@ -413,7 +407,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a23")
+        self.assertEqual(build_identity["version"], "0.8.0a24")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)

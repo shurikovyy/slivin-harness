@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a23 — Phase 7
+# Архитектура Slivin Harness 0.8.0a24 — Phase 7
 
 ## Назначение
 
-`0.8.0a23` требует typed impact closure в `planner.v5` до `READY`, сохраняет
+`0.8.0a24` требует typed impact closure в `planner.v5` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a23
+Harness                     0.8.0a24
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -60,8 +60,8 @@ Runtime request             runtime-request.v1
 Runtime result              runtime-result.v1
 Runtime evidence            runtime-evidence.v1
 Contract closure            contract-closure.v1
-Blind audit                 blind-audit.v1
-Evaluator                   evaluator.v5
+Blind audit                 blind-audit.v2
+Evaluator                   evaluator.v6
 Phase 7 controller          phase7-final-gate.v1
 Patch proof                 patch-proof.v1
 Final acceptance            final-acceptance.v2
@@ -224,7 +224,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a23`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a24`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -312,7 +312,7 @@ revision_binding и stable fingerprint. Его binding проверяется п
 
 Implementer technical-model divergence возвращает REPLAN_REQUIRED с evidence и
 использует тот же semantic reset/fresh Planner/fresh Implementer path, что Evaluator.
-Evaluator `evaluator.v5` не получает новых PASS/Blind Audit требований в этом patch.
+Evaluator `evaluator.v6` независимо проверяет эти impact artifacts после blind Phase A.
 
 Перед любым App Server `turn/start` Controller рекурсивно проверяет production
 `outputSchema`: каждый object с `properties` обязан иметь
@@ -368,15 +368,35 @@ PROD_OBSERVE
 
 ## 9. Step 6 — Blind Evaluator
 
-`evaluator.v5` работает в две фазы одного fresh thread.
+`evaluator.v6` работает в две фазы одного fresh thread.
 
 ### Phase A
 
-Не видит Planner, Contract, Implementer Report, green checks, runtime evidence и previous findings. Самостоятельно исследует repository/candidate и сохраняет immutable `blind-audit.v1`.
+Не видит Planner/Implementer impact, reasoning/report, Contract, green checks, runtime
+evidence и previous findings. Самостоятельно исследует actual contracts, shared state/API,
+readers/writers/decision points и plausible siblings за пределами changed paths.
+`blind-audit.v2` содержит required impact_analysis и current candidate_id; classification
+rows имеют собственные impact_id. Shared `impact.py` проверяет repository evidence paths
+и owner-backed prose-only exception. Changed paths закрываются exactly once, deletion
+не требует final-file existence в changed-path review. Recorder валидирует audit и
+использует `write_once_authoritative_json` до любого Phase B framing.
 
 ### Phase B
 
-Получает active Contract, Verification Plan, `contract-closure.v1`, deterministic и runtime evidence. Каждый blind finding должен быть retained или dismissed with evidence.
+Получает normalized `plan["impact_closure"]`, validated current implementation impact,
+active Contract, Verification Plan, `contract-closure.v1`, deterministic и runtime evidence.
+Полный Planner plan и raw Implementer report не передаются. `run_evaluator()` повторно
+проверяет implementation artifact against candidate, Plan/Contract fingerprints, exact
+changed paths и revision binding непосредственно до раскрытия Phase B.
+
+Required `impact_challenge` содержит exact dispositions blind contracts/affected consumers,
+Planner IN_SCOPE, Implementer DISCOVERED, всех NOT_AFFECTED/related rows (включая собственные
+blind rows) и changed paths. Blind IDs сохраняют naming independence; typed matches
+ссылаются на existing prior ledger rows. Каждый negative disposition требует final
+finding_ids и запрещает PASS. Каждый blind finding retained либо dismissed с evidence.
+MODEL_CONFLICT не принимается как обычный FINDINGS repair. Candidate IDs обоих reports
+проверяются against current Controller candidate; repair всегда запускает fresh Phase A.
+Evaluator guards и внешний integrity coordinator сохраняют read-only semantics.
 
 ## 10. Repair и semantic replan
 
@@ -546,7 +566,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a23` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a24` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 

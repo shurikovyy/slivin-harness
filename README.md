@@ -1,4 +1,4 @@
-# Slivin Harness 0.8.0a23 — Phase 7
+# Slivin Harness 0.8.0a24 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
@@ -7,12 +7,16 @@ Slivin Harness управляет автономной работой Codex в �
 technical impact radius. Пользователь задаёт observable intent и ограничения;
 перечислять consumers, файлы и regression cases он не обязан.
 
-`0.8.0a23` quality-core требует typed Planner Impact Closure до `READY` в `planner.v5`
+`0.8.0a24` quality-core требует typed Planner Impact Closure до `READY` в `planner.v5`
 и post-patch Implementer Impact Closure до `COMPLETE` в `implementer.v4`.
 Implementer проверяет Planner model по реальному diff, пересматривает consumers,
 добавляет discoveries через Controller expansion и рассматривает каждый changed path.
 Controller сохраняет candidate-bound `implementation-impact-closure.v1`; semantic
 divergence требует fresh Planner через `REPLAN_REQUIRED`.
+`evaluator.v6` независимо восстанавливает impact model по actual candidate до раскрытия
+обоих ledgers. Controller immutable-сохраняет `blind-audit.v2`, затем требует evidence-backed
+`impact_challenge` всех contracts/consumers/classifications и changed paths. Согласованные
+ledgers и зелёные tests сами по себе не разрешают Evaluator PASS.
 User product scope, technical impact radius и patch size различны: минимальный patch
 выбирается после closure. Исключение `applicable=false` требует непустой owner boundary
 из manifest `allowed_paths`, ограниченной существующими safe prose files; declarations
@@ -46,14 +50,14 @@ CONTROLLER DETERMINISTIC CHECKS
         ↓
 RUNTIME / EXTERNAL VERIFICATION (условно)
         ↓
-TWO-PHASE BLIND EVALUATOR evaluator.v5
+TWO-PHASE BLIND EVALUATOR evaluator.v6
         ↓
 FINAL GATE phase7-final-gate.v1
         ↓
 patch reconstruction + transactional result delivery
 ```
 
-Machine-readable workflow: **workflow.v6**. Реализуемая фаза: **phase7-final-gate-delivery-benchmark**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller plane: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Runtime evidence: **runtime-evidence.v1**. Blind audit: **blind-audit.v1**. Final Gate: **phase7-final-gate.v1**.
+Machine-readable workflow: **workflow.v6**. Реализуемая фаза: **phase7-final-gate-delivery-benchmark**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller plane: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Runtime evidence: **runtime-evidence.v1**. Blind audit: **blind-audit.v2**. Final Gate: **phase7-final-gate.v1**.
 
 Каждый production `outputSchema` для Task Contract, Planner, Implementer и
 Evaluator рекурсивно проверяется Controller до App Server `turn/start` по strict
@@ -84,7 +88,7 @@ canonical candidate identity до/после probe batch. Любое измен�
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a23`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a24`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
@@ -262,9 +266,9 @@ Typed Verification Plan теперь исполняется для `LIVE_LOCAL`,
 
 Перед независимой проверкой Controller создаёт `contract-closure.v1`: каждый active item связан с candidate, Contract/Verification fingerprints и принятым `VERIFIED`/допустимым `NOT_AFFECTED` evidence. Evaluator не получает свободное объяснение Implementer.
 
-### Двухфазный Blind Evaluator v5
+### Двухфазный Blind Evaluator v6
 
-Один fresh read-only evaluator сначала выполняет blind discovery без Planner, Implementation Contract, Implementer Report, зелёных checks и runtime evidence. `blind-audit.v1` сохраняется Controller до раскрытия framing. Затем Phase B получает только Controller-normalized Contract, Closure Record, deterministic и runtime evidence; каждый blind finding обязан быть сохранён или снят с конкретным evidence.
+Один fresh read-only evaluator сначала выполняет independent impact discovery без Planner/Implementer impact, Implementation Contract, зелёных checks и runtime evidence. `blind-audit.v2` с candidate ID, собственными impact IDs и exact changed-path review записывается Controller через immutable write-once persistence. Только затем Phase B получает normalized Planner impact, актуальный `implementation-impact-closure.v1`, Contract, Closure Record, deterministic/runtime evidence. Каждый blind finding сохраняется или снимается с evidence; отрицательная impact disposition требует material finding и запрещает PASS. FAST по-прежнему пропускает Evaluator. Mandatory user-facing delivery related follow-ups остаётся следующей подзадачей.
 
 Подробности: [Phase 6 runtime/evaluator](docs/PHASE6_RUNTIME_EVALUATOR.md).
 
@@ -327,7 +331,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a23 ...
+DOCS_SYNC_PASS harness=0.8.0a24 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -341,7 +345,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a23` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a24` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

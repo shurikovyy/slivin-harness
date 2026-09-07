@@ -38,9 +38,9 @@ FRESH EVALUATOR THREAD
         ↓
 PHASE A — BLIND DISCOVERY
         ↓
-blind-audit.v1 фиксируется Controller
+blind-audit.v2 фиксируется Controller
         ↓
-PHASE B — CONTRACT AUDIT
+PHASE B — INDEPENDENT IMPACT CHALLENGE
         ↓
 EVALUATION_PASS / FINDINGS / REPLAN_REQUIRED / BLOCKED / NEEDS_USER_DECISION
 ```
@@ -189,7 +189,7 @@ Controller-accepted evidence
 Evaluator не получает свободное оправдание Implementer. Phase B видит именно этот
 Controller-normalized record.
 
-## Двухфазный Evaluator v5
+## Двухфазный Evaluator v6
 
 ### Phase A — blind discovery
 
@@ -199,6 +199,8 @@ Fresh read-only evaluator получает:
 RAW USER REQUEST
 USER TASK CONTRACT
 sanitized preflight
+owner allowed_paths
+current candidate ID
 repository/current candidate
 changed paths как навигацию
 ```
@@ -207,18 +209,50 @@ changed paths как навигацию
 
 ```text
 Planner reasoning
+Planner impact_closure
 Implementation Contract
 Implementer Report
+implementation-impact-closure.v1
 Controller checks
 runtime evidence
 previous findings
 held-out/reference solution
 ```
 
-Phase A возвращает `blind-audit.v1`. Controller проверяет candidate и записывает audit в
-private/public artifact **до** раскрытия Contract/evidence.
+Phase A возвращает `blind-audit.v2` с обязательными `candidate_id`, `impact_analysis`,
+summary, findings и advisories. `impact_analysis` содержит:
 
-### Phase B — contract audit
+```text
+applicable
+changed_contracts          impact_id/name/before/after/paths/symbols/evidence
+affected_consumers         impact_id/name/paths/symbols/relation/required_behavior/evidence
+not_affected_consumers     impact_id/name/paths/symbols/why_considered/reason/evidence
+related_out_of_scope       impact_id/name/paths/symbols/relation/reason/evidence/suggested_follow_up
+changed_path_review        path/observed_role/impact/evidence
+search_evidence            target/method/evidence_paths/conclusion
+closure_summary
+```
+
+IDs имеют форму CONTRACT-N, CONSUMER-N, NOT-AFFECTED-N, RELATED-N с positive integer N.
+Они уникальны в category; consumer classification names уникальны и disjoint. Независимые
+names не обязаны повторять Planner vocabulary. Before/after различаются. Paths/symbols
+и evidence concrete; regular evidence files разрешаются canonical внутри workspace.
+Каждый actual changed path independently reviewed exactly once. Для deletion отсутствие
+final file допустимо только в changed-path review; search evidence не может ссылаться
+на удалённый file. Changed paths — seed для outward sweep, не review boundary.
+
+Engineering impact требует changed contracts и independent search evidence. Исключение
+`applicable=false` использует `impact.validate_owner_prose_boundary`: non-empty owner
+boundary только из safe existing prose files .md/.rst/.txt/.adoc; search и changed paths
+входят в boundary. Behavioral/runtime obligations исключают этот route. Summary должен
+содержать конкретное объяснение и evidence path.
+
+Controller проверяет current candidate и schema, затем записывает audit через
+`write_once_authoritative_json` в private/public artifact **до** раскрытия Contract/evidence.
+Persistence callback обязателен; его ошибка предотвращает Phase B. Phase guards и внешний
+integrity coordinator не позволяют Evaluator менять candidate.
+
+### Phase B — independent impact challenge
 
 Тот же fresh thread затем получает только Controller-normalized artifacts:
 
@@ -226,9 +260,40 @@ private/public artifact **до** раскрытия Contract/evidence.
 Implementation Contract
 Verification Plan
 Contract Closure Record
+Planner normalized impact_closure
+Controller-normalized implementation-impact-closure.v1
 deterministic Controller evidence
 runtime PASS/SKIPPED evidence
 ```
+
+Перед раскрытием implementation impact повторно валидируется against current candidate,
+Plan/Contract fingerprints, exact changed paths и revision binding. Stale artifact не
+попадает в Phase B. Full Planner reasoning и raw Implementer report не раскрываются.
+
+`evaluator.v6` содержит mandatory `candidate_id` и `impact_challenge`:
+
+| Dispositions | Authoritative exact set | Positive result for PASS |
+| --- | --- | --- |
+| blind_contract_dispositions | Каждый blind changed contract impact_id | COVERED |
+| blind_consumer_dispositions | Каждый blind affected consumer impact_id | COVERED_IN_SCOPE |
+| planner_consumer_dispositions | Каждый Planner IN_SCOPE normalized name | CONFIRMED |
+| implementer_consumer_dispositions | Каждый Implementer DISCOVERED normalized name | CONFIRMED |
+| not_affected_dispositions | BLIND IDs + PLANNER/IMPLEMENTER names, source отдельно | CONFIRMED_NOT_AFFECTED |
+| related_follow_up_dispositions | BLIND IDs + PLANNER/IMPLEMENTER names, source отдельно | CONFIRMED_OUT_OF_SCOPE |
+| changed_path_dispositions | Каждый actual changed path | UNDERSTOOD |
+
+Все rows требуют reason, existing evidence_paths, evidence и finding_ids. Blind dispositions
+дополнительно содержат `matches` с source/classification/name существующих prior rows;
+COVERED_IN_SCOPE требует actual IN_SCOPE match. COVERED contract допускает независимое
+repository evidence без совпадения имени. Exact sets запрещают missing/extra/duplicate rows.
+`coverage_summary` обязателен и не заменяет structured challenge.
+
+MATERIAL_GAP/MODEL_CONFLICT, MISSING/misclassified consumer, UNSUPPORTED/implementation
+gap, ACTUALLY_AFFECTED/INSUFFICIENT_EVIDENCE, ACTUALLY_IN_SCOPE и SUSPICIOUS/UNJUSTIFIED
+paths требуют соответствующих final finding_ids. Negative disposition запрещает PASS.
+Каждый finding содержит failure_mode, required_action и typed required_proof. Assertions
+проверяются через affected consumer semantics: зелёный helper test не закрывает неправильный
+reachable sibling. Согласованность двух прежних ledgers не является independent evidence.
 
 Planner reasoning и Implementer prose остаются скрыты. Каждый Phase A finding обязан стать:
 
@@ -251,11 +316,18 @@ CONSUMER
 RISK
 EVIDENCE
 DOCS
+MODEL
 ```
 
 `CONSUMER` и `RISK` транзакционно расширяют active Implementation Contract и Verification
 Plan до repair. Обычный candidate defect возвращается тому же Implementer. Ошибка самой
 technical model возвращает `REPLAN_REQUIRED`.
+MODEL_CONFLICT запрещён в обычном FINDINGS repair и требует semantic replan либо честный
+BLOCKED/NEEDS_USER_DECISION status с reason. Оба Evaluator reports связаны с current candidate.
+После repair прежние audit/challenge stale: новый Implementer impact, checks/runtime и
+fresh Evaluator Phase A/Phase B обязательны. FAST по-прежнему пропускает Evaluator.
+Все related follow-ups сохраняются в immutable audit/prior artifacts и exact dispositions;
+mandatory user-facing delivery ещё не реализована.
 
 ## Runtime statuses
 

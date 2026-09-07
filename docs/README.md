@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a23
+# Документация Slivin Harness 0.8.0a24
 
-Актуальная версия: **0.8.0a23 — Post-patch Implementer Impact Closure**.
+Актуальная версия: **0.8.0a24 — Independent Evaluator Impact Challenge**.
 
 Основные документы:
 
@@ -44,8 +44,8 @@ runtime-request.v1
 runtime-result.v1
 runtime-evidence.v1
 contract-closure.v1
-blind-audit.v1
-evaluator.v5
+blind-audit.v2
+evaluator.v6
 workflow.v6
 run-state.v1
 candidate.v1

@@ -1,6 +1,6 @@
 {
   "schema_version": "workflow.v6",
-  "harness_version": "0.8.0a23",
+  "harness_version": "0.8.0a24",
   "phase": "phase7-final-gate-delivery-benchmark",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",
@@ -13,8 +13,8 @@
     "implementation_contract": "implementation-contract.v3",
     "implementation_impact_closure": "implementation-impact-closure.v1",
     "verification_plan": "verification-plan.v1",
-    "evaluator": "evaluator.v5",
-    "blind_audit": "blind-audit.v1",
+    "evaluator": "evaluator.v6",
+    "blind_audit": "blind-audit.v2",
     "contract_closure": "contract-closure.v1",
     "runtime_scenario": "runtime-scenario.v1",
     "runtime_evidence": "runtime-evidence.v1"

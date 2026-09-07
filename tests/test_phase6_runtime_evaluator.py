@@ -40,7 +40,7 @@ from slivin_harness.runtime_projection import (
 from slivin_harness.verification import compile_verification_plan
 from slivin_harness.workflow import RuntimeStatus
 from slivin_harness.workspace import RuntimeProjection, WorkspaceSession
-from test_protocol import proof, valid_plan, valid_task_contract
+from test_protocol import implementation_impact_fixture, proof, valid_blind_audit, valid_pass, valid_plan, valid_task_contract, write_plan_evidence
 
 
 def git(repo: Path, *args: str) -> str:
@@ -631,30 +631,27 @@ class _FakeEvaluatorServer:
 
 
 class TwoPhaseEvaluatorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="slivin-evaluator-phase6-")
+        self.addCleanup(temporary.cleanup)
+        self.workspace = Path(temporary.name)
+        write_plan_evidence(self.workspace)
+        self.plan = valid_plan()
+        self.contract = build_implementation_contract(self.plan, task_contract=valid_task_contract())
+        self.impact = implementation_impact_fixture(plan=self.plan, contract=self.contract)
+
     def test_two_phase_prompt_is_blind_then_contract_aware(self) -> None:
-        audit = {
-            "protocol_version": BLIND_AUDIT_VERSION,
-            "summary": "Blind repository audit found no material defect.",
-            "findings": [],
-            "advisories": [],
-        }
-        verdict = {
-            "protocol_version": EVALUATOR_PROTOCOL_VERSION,
-            "status": "PASS",
-            "summary": "Known obligations and blind audit are satisfied.",
-            "blind_finding_dispositions": [],
-            "findings": [],
-            "reason": "",
-        }
+        audit = valid_blind_audit()
+        verdict = valid_pass(blind_audit=audit)
         server = _FakeEvaluatorServer([audit, verdict])
         phases: list[str] = []
         persisted: list[dict] = []
-        contract = {"protocol_version": "implementation-contract.v3", "items": []}
+        contract = self.contract
         verification = {"protocol_version": "verification-plan.v1"}
         closure = {"protocol_version": CONTRACT_CLOSURE_VERSION}
         observed_audit, observed_verdict = run_evaluator(
             server,  # type: ignore[arg-type]
-            workspace=Path(tempfile.mkdtemp(prefix="slivin-evaluator-phase6-")),
+            workspace=self.workspace,
             task_prompt="Fix the target behavior.",
             task_contract={"explicit_acceptance": []},
             preflight={"head_sha": "abc"},
@@ -666,6 +663,7 @@ class TwoPhaseEvaluatorTests(unittest.TestCase):
             contract_closure=closure,
             checks_evidence={"checks": []},
             runtime_evidence={"status": "RUNTIME_VERIFICATION_SKIPPED"},
+            plan=self.plan, implementation_impact_closure=self.impact, revision_binding={},
             on_blind_audit=persisted.append,
             on_phase_complete=phases.append,
             timeout=30,
@@ -692,29 +690,17 @@ class TwoPhaseEvaluatorTests(unittest.TestCase):
             "required_action": "Preserve the sibling contract.",
             "required_proof": proof("The sibling behavior remains unchanged."),
         }
-        audit = {
-            "protocol_version": BLIND_AUDIT_VERSION,
-            "summary": "One material consumer finding.",
-            "findings": [finding],
-            "advisories": [],
-        }
-        validate_blind_audit(audit)
-        verdict = {
-            "protocol_version": EVALUATOR_PROTOCOL_VERSION,
-            "status": "PASS",
-            "summary": "Incorrectly claims pass.",
-            "blind_finding_dispositions": [
-                {
-                    "finding_id": "BLIND-1",
-                    "disposition": "RETAINED",
-                    "evidence": ["The finding remains reachable."],
-                }
-            ],
-            "findings": [finding],
-            "reason": "",
-        }
+        audit = valid_blind_audit(findings=[finding])
+        validate_blind_audit(audit, workspace=self.workspace, candidate_id="candidate-1", changed_paths=["target.txt"])
+        verdict = valid_pass(blind_audit=audit)
+        verdict["blind_finding_dispositions"][0]["disposition"] = "RETAINED"
+        verdict["findings"] = [finding]
         with self.assertRaisesRegex(RuntimeError, "PASS requires no findings"):
-            validate_evaluation_artifact(verdict, blind_audit=audit)
+            validate_evaluation_artifact(
+                verdict, blind_audit=audit, workspace=self.workspace, candidate_id="candidate-1",
+                changed_paths=["target.txt"], planner_impact_closure=self.plan["impact_closure"],
+                implementation_impact_closure=self.impact,
+            )
 
 
 if __name__ == "__main__":

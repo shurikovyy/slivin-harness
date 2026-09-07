@@ -32,7 +32,8 @@ def safe_impact_path(raw: str, *, field: str) -> str:
     return relative
 
 
-def impact_paths(values: list[str], *, field: str, workspace: Path) -> list[str]:
+def impact_paths(values: list[str], *, field: str, workspace: Path, allow_missing: bool = False) -> list[str]:
+    """Validate file evidence; allow_missing is only for Controller-known deletions."""
     root = workspace.resolve()
     normalized: list[str] = []
     for index, raw in enumerate(values):
@@ -42,11 +43,12 @@ def impact_paths(values: list[str], *, field: str, workspace: Path) -> list[str]
             resolved = (root / relative).resolve()
             inside = resolved.is_relative_to(root)
             exists = inside and resolved.is_file()
+            missing = inside and not (root / relative).exists() and not (root / relative).is_symlink()
         except (OSError, RuntimeError, ValueError):
-            inside = exists = False
+            inside = exists = missing = False
         if not inside:
             impact_error("UNSAFE_PATH", field=path_field, message="Impact evidence path escapes workspace", actual=raw)
-        if not exists:
+        if not exists and not (allow_missing and missing):
             impact_error("IMPACT_PATH_MISSING", field=path_field, message="Impact evidence requires an existing repository file", actual=raw)
         normalized.append(relative)
     return normalized

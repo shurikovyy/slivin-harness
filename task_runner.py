@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -1585,11 +1586,16 @@ def validate_plan_artifact(
     )
 
 def validate_evaluation_artifact(
-    evaluation: dict, *, blind_audit: dict
+    evaluation: dict, *, blind_audit: dict, workspace: Path, candidate_id: str,
+    changed_paths: list[str], planner_impact_closure: dict | None,
+    implementation_impact_closure: dict, owner_allowed_paths: list[str] | tuple = (),
 ) -> None:
-    """Compatibility entry point backed by evaluator.v5 validation."""
-    validate_blind_audit(blind_audit)
-    validate_evaluator_artifact(evaluation, blind_audit=blind_audit)
+    """Controller entry point backed by evaluator.v6 impact challenge validation."""
+    validate_evaluator_artifact(
+        evaluation, blind_audit=blind_audit, workspace=workspace, candidate_id=candidate_id,
+        changed_paths=changed_paths, planner_impact_closure=planner_impact_closure,
+        implementation_impact_closure=implementation_impact_closure, owner_allowed_paths=owner_allowed_paths,
+    )
 
 
 def build_implementation_prompt(
@@ -4275,6 +4281,15 @@ def main(argv: list[str] | None = None) -> int:
                 }
                 run_state.begin_stage(StageId.EVALUATOR)
                 evaluation_candidate_before = observe_candidate("EVALUATOR_BEFORE")
+                evaluator_binding = run_state.verification_binding(
+                    candidate_id=evaluation_candidate_before.candidate_id,
+                    check_registry_digest=check_registry.digest(),
+                )
+                validate_implementation_impact_closure(
+                    active_implementation_impact, candidate_id=evaluation_candidate_before.candidate_id,
+                    plan=plan, contract=implementation_contract, changed_paths=changed_paths,
+                    revision_binding=evaluator_binding,
+                )
                 blind_artifact = f"blind_audit_{evaluation_index:02d}.json"
                 persisted_blind_audit: dict | None = None
 
@@ -4285,8 +4300,12 @@ def main(argv: list[str] | None = None) -> int:
                         raise RuntimeError(
                             "Evaluator changed the candidate during PHASE_A"
                         )
-                    persisted_blind_audit = dict(audit)
-                    recorder.write_authoritative_json(blind_artifact, audit)
+                    validate_blind_audit(
+                        audit, workspace=workspace, candidate_id=current.candidate_id,
+                        changed_paths=changed_paths, owner_allowed_paths=allowed_paths,
+                    )
+                    recorder.write_once_authoritative_json(blind_artifact, audit)
+                    persisted_blind_audit = copy.deepcopy(audit)
 
                 def evaluator_phase_guard(phase: str) -> None:
                     current = observe_candidate(f"EVALUATOR_{phase}_AFTER")
@@ -4311,6 +4330,9 @@ def main(argv: list[str] | None = None) -> int:
                         contract_closure=active_contract_closure,
                         checks_evidence=deterministic_evidence,
                         runtime_evidence=active_runtime_evidence,
+                        plan=plan,
+                        implementation_impact_closure=active_implementation_impact,
+                        revision_binding=evaluator_binding,
                         runtime_probe_guidance=[],
                         on_heartbeat=make_heartbeat(f"EVALUATE #{evaluation_index}"),
                         on_thread_started=_thread_recorder(recorder, f"evaluator_{evaluation_index}"),
@@ -4320,14 +4342,19 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                 )
                 validate_evaluation_artifact(
-                    evaluation, blind_audit=blind_audit
+                    evaluation, blind_audit=blind_audit, workspace=workspace,
+                    candidate_id=evaluation_candidate_before.candidate_id,
+                    changed_paths=changed_paths,
+                    planner_impact_closure=plan["impact_closure"] if plan is not None else None,
+                    implementation_impact_closure=active_implementation_impact,
+                    owner_allowed_paths=allowed_paths,
                 )
                 if persisted_blind_audit != blind_audit:
                     raise RuntimeError(
                         "Evaluator Phase A artifact was not persisted before Phase B"
                     )
                 evaluation_artifact = f"evaluation_{evaluation_index:02d}.json"
-                recorder.write_authoritative_json(evaluation_artifact, evaluation)
+                recorder.write_once_authoritative_json(evaluation_artifact, evaluation)
                 evaluation_candidate_after = observe_candidate("EVALUATOR_AFTER")
                 if evaluation_candidate_after.candidate_id != evaluation_candidate_before.candidate_id:
                     run_state.route_stage(
@@ -4357,6 +4384,7 @@ def main(argv: list[str] | None = None) -> int:
                             blind_artifact,
                             evaluation_artifact,
                             active_contract_closure_artifact,
+                            active_implementation_impact_artifact,
                             checks_artifact,
                             active_runtime_artifact or active_verification_artifact,
                             "candidate_identity_current.json",

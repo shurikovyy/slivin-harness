@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a23 — Phase 7
+# Модель качества Slivin Harness 0.8.0a24 — Phase 7
 
 Нормативный autonomy contract: **[AUTONOMOUS_ENGINEERING_CONTRACT.md](AUTONOMOUS_ENGINEERING_CONTRACT.md)**.
 User scope задаёт observable результат и explicit ограничения; technical impact
@@ -125,8 +125,8 @@ FAST подчиняется тому же owner-backed prose-only исключе
 Controller-normalized `implementation-impact-closure.v1` привязан к candidate,
 Planner/Contract fingerprints, changed paths и revision binding. Это доказательство
 структуры, согласованности и актуальности declarations; оно не доказывает истинность
-semantic evidence или исчерпывающий discovery. Независимое усиление Evaluator closure
-и обязательный final surfacing follow-ups ещё не реализованы.
+semantic evidence или исчерпывающий discovery. Evaluator независимо challenge-ит эти
+declarations; обязательный final surfacing follow-ups ещё не реализован.
 
 Self-verify остаётся assertion builder-а, а не финальным authority.
 
@@ -148,7 +148,24 @@ PROD_OBSERVE
 
 ### Blind Evaluator
 
-`evaluator.v5` сначала независимо исследует candidate без Contract/check framing и фиксирует `blind-audit.v1`. Затем проверяет active Contract, `contract-closure.v1`, deterministic и runtime evidence. Green test не является authority: Evaluator ищет false-green fixtures, missed consumers и reachable boundary gaps.
+`evaluator.v6` сначала независимо восстанавливает `impact_analysis` по actual candidate,
+без обоих impact ledgers и Contract/check framing. `blind-audit.v2` содержит собственные
+IDs, changed contracts, affected/NOT_AFFECTED/related consumers, exact changed-path review,
+search evidence и summary. Controller использует shared safe-path/prose policy и
+write-once persistence до Phase B.
+
+Phase B получает normalized Planner impact и текущий `implementation-impact-closure.v1`
+после повторной проверки binding, а также Contract, `contract-closure.v1` и deterministic/
+runtime evidence. `impact_challenge` обязан покрыть exact sets blind contracts/consumers,
+Planner IN_SCOPE, Implementer DISCOVERED, NOT_AFFECTED и related rows всех источников,
+changed paths. Names могут различаться: blind IDs связываются с prior names explicit matches.
+
+PASS требует positive dispositions и достаточных proofs. Negative disposition требует
+существующий final finding; MODEL_CONFLICT направляет в semantic replan. Green test не
+является authority: assertion должен проверять observable semantics affected consumer,
+а не только локальный helper. Controller доказывает структуру, references и current-candidate
+binding, но не истинность semantic conclusions. После repair нужны новые blind audit и
+challenge в fresh thread. FAST policy и Final Gate остаются прежними.
 
 ### Final Gate
 
@@ -370,8 +387,8 @@ runtime-request.v1
 runtime-result.v1
 runtime-evidence.v1
 contract-closure.v1
-blind-audit.v1
-evaluator.v5
+blind-audit.v2
+evaluator.v6
 workflow.v6
 run-state.v1
 candidate.v1

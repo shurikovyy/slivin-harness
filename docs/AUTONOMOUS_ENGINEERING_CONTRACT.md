@@ -223,8 +223,43 @@ Current Controller-private receipt и все integrity checks остаются �
 Evaluator независимо проверяет candidate и достаточность evidence, ищет
 необнаруженных consumers, достижимые регрессии и false-green assertions. Наличие
 Planner ledger не доказывает корректность реализации и не заменяет blind audit.
-`evaluator.v5` PASS semantics сохраняются; отдельное усиление evaluator impact
-closure и mandatory final surfacing являются следующей подзадачей и ещё не реализованы.
+Planner closure ≠ proof of full impact. Implementer post-patch closure ≠ proof of full impact.
+Evaluator independently reconstructs the impact model from the actual candidate
+before seeing either closure. Evaluator PASS requires evidence-backed challenge of
+both prior closures.
+
+В Phase A `evaluator.v6` самостоятельно исследует changed semantic/state contracts,
+shared symbols/API, readers/writers/decision points и sibling consumers. Changed paths
+служат seed для outward sweep, а не границей review. Каждый changed path рассматривается
+ровно один раз, включая deletion. Остальные evidence paths должны быть существующими
+regular files с canonical target внутри workspace. Engineering impact обязателен;
+prose-only exception использует shared owner-backed policy из `impact.py`.
+
+`blind-audit.v2` содержит independent `impact_analysis`, собственные stable impact IDs
+и current candidate ID. Controller валидирует и immutable-сохраняет audit **до** раскрытия
+normalized Planner impact, implementation impact artifact, Contract и checks/runtime
+evidence. Planner reasoning и raw Implementer report в обеих фазах скрыты.
+
+Phase B обязана disposition каждый blind contract и affected consumer, Planner IN_SCOPE,
+Implementer DISCOVERED, все NOT_AFFECTED и RELATED_OUT_OF_SCOPE из трёх ledgers и каждый
+changed path. Blind names не обязаны повторять Planner vocabulary: используются собственные
+IDs и explicit matches к normalized prior names. NOT_AFFECTED требует независимого
+подтверждения; согласие Planner и Implementer не является доказательством.
+
+Negative disposition требует соответствующих final material findings с failure mode,
+required action и typed proof. Она запрещает PASS. Ошибочно вынесенная out-of-scope проблема
+возвращается в scope; подтверждённые отдельные follow-ups сохраняются вместе с immutable
+blind model и Phase B dispositions. Наличие regression test не доказывает корректность,
+если assertion покрывает только helper и пропускает affected consumer semantics.
+
+Исправимые CONSUMER/RISK findings используют Controller expansion и Implementer repair.
+MODEL_CONFLICT требует REPLAN_REQUIRED вместо candidate repair; если исследование
+заблокировано, сохраняются BLOCKED/NEEDS_USER_DECISION с concrete reason. Candidate change
+делает прежние blind audit/challenge stale: после repair нужен fresh Evaluator thread.
+Перед Phase B Controller повторно проверяет candidate/Plan/Contract/revision binding
+implementation-impact-closure. FAST policy не меняется и Evaluator не запускается.
+
+Mandatory user-facing RELATED_OUT_OF_SCOPE delivery остаётся следующей подзадачей.
 
 ## Definition of COMPLETE
 
@@ -263,5 +298,8 @@ repositories и не кодируют hidden scenarios конкретного be
 - NOT_AFFECTED без evidence; скрытый перевод независимой проблемы в obligation.
 - RELATED_OUT_OF_SCOPE без relation/reason/evidence/follow-up или её молчаливая потеря.
 - Behavioral code change, механически спрятанный за `applicable=false`.
+- Evaluator PASS по согласованным прежним ledgers без независимого blind impact sweep.
+- Missing/duplicate/extra impact dispositions, negative disposition без material finding.
+- Потеря blind impact model или его повторное использование после candidate change.
 - Новая feature от Planner, ослабление verbatim user claims или owner boundary.
 - Подгонка prompt/tests под hidden benchmark вместо исправления автономного исследования.

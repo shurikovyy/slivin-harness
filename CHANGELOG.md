@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.0a24 — Independent Evaluator Impact Challenge
+
+- Upgraded to `blind-audit.v2` with independent typed impact analysis, stable impact IDs, exact changed-path review and shared owner-backed prose applicability.
+- Upgraded to `evaluator.v6`: Phase B challenges exact sets of blind contracts/consumers, Planner IN_SCOPE, Implementer DISCOVERED, all NOT_AFFECTED/related rows and changed paths. Negative dispositions require material findings and prohibit PASS.
+- Made blind persistence write-once before disclosure of normalized prior impact artifacts. Both reports bind the current candidate; stale implementation artifacts are rejected before Phase B. Planner reasoning and raw Implementer reports remain hidden.
+- Preserved existing consumer/risk expansion, candidate repair and semantic replan; fresh evaluation follows candidate changes. Added a generic missed-sibling false-green workflow regression. FAST and Final Gate policy are unchanged; mandatory related follow-up delivery remains future work.
+
 ## 0.8.0a23 — Post-patch Implementer Impact Closure
 
 - Upgraded Implementer to `implementer.v4` with required strict `post_patch_impact` before COMPLETE: actual changed contracts, consumer dispositions, new risks, exact changed-path review, search evidence and summary.
