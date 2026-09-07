@@ -152,6 +152,20 @@ def main() -> int:
     validate_workflow_definition()
 
     docs_dir = ROOT / "docs"
+    phase6_text = " ".join((docs_dir / "PHASE6_RUNTIME_EVALUATOR.md").read_text(encoding="utf-8").split())
+    _assert(
+        "mandatory user-facing delivery ещё не реализована" not in phase6_text,
+        "docs/PHASE6_RUNTIME_EVALUATOR.md still describes user follow-up delivery as future work",
+    )
+    for marker in (USER_FOLLOW_UP_VERSION, "CONFIRMED_OUT_OF_SCOPE", "DECLARED_OUT_OF_SCOPE_FAST", "PHASE7_FINAL_GATE.md"):
+        _assert(marker in phase6_text, f"docs/PHASE6_RUNTIME_EVALUATOR.md is missing {marker}")
+    windows_text = (docs_dir / "WINDOWS_SETUP.md").read_text(encoding="utf-8")
+    _assert(
+        set(re.findall(r"\bfinal-acceptance\.v\d+\b", windows_text)) == {FINAL_ACCEPTANCE_VERSION},
+        "docs/WINDOWS_SETUP.md must reference the current Final Acceptance protocol",
+    )
+    _assert(USER_FOLLOW_UP_VERSION in windows_text, "docs/WINDOWS_SETUP.md is missing mandatory user follow-up evidence")
+
     generated_markdown = render_workflow_markdown(harness_version=__version__)
     _assert(
         (docs_dir / "WORKFLOW.md").read_text(encoding="utf-8") == generated_markdown,

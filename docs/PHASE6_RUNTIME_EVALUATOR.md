@@ -331,7 +331,10 @@ finding_ids, ссылающиеся на существующий final material
 После repair прежние audit/challenge stale: новый Implementer impact, checks/runtime и
 fresh Evaluator Phase A/Phase B обязательны. FAST по-прежнему пропускает Evaluator.
 Все related follow-ups сохраняются в immutable audit/prior artifacts и exact dispositions;
-mandatory user-facing delivery ещё не реализована.
+Phase 7 создаёт обязательный user-facing `user-follow-up.v1`. FULL доставляет только
+`CONFIRMED_OUT_OF_SCOPE`; FAST маркирует findings как `DECLARED_OUT_OF_SCOPE_FAST`,
+поскольку independent Evaluator в этом profile не запускается.
+Подробности — в [PHASE7_FINAL_GATE.md](PHASE7_FINAL_GATE.md).
 
 ## Runtime statuses
 
