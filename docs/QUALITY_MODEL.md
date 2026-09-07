@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a24 — Phase 7
+# Модель качества Slivin Harness 0.8.0a25 — Phase 7
 
 Нормативный autonomy contract: **[AUTONOMOUS_ENGINEERING_CONTRACT.md](AUTONOMOUS_ENGINEERING_CONTRACT.md)**.
 User scope задаёт observable результат и explicit ограничения; technical impact
@@ -161,7 +161,8 @@ Planner IN_SCOPE, Implementer DISCOVERED, NOT_AFFECTED и related rows всех 
 changed paths. Names могут различаться: blind IDs связываются с prior names explicit matches.
 
 PASS требует positive dispositions и достаточных proofs. Negative disposition требует
-существующий final finding; MODEL_CONFLICT направляет в semantic replan. Green test не
+существующий final finding. Blind changed-contract MATERIAL_GAP и MODEL_CONFLICT допустимы
+только с REPLAN_REQUIRED и concrete reason; остальные statuses отклоняются. Green test не
 является authority: assertion должен проверять observable semantics affected consumer,
 а не только локальный helper. Controller доказывает структуру, references и current-candidate
 binding, но не истинность semantic conclusions. После repair нужны новые blind audit и

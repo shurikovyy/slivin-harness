@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a24 — Phase 7
+# Архитектура Slivin Harness 0.8.0a25 — Phase 7
 
 ## Назначение
 
-`0.8.0a24` требует typed impact closure в `planner.v5` до `READY`, сохраняет
+`0.8.0a25` требует typed impact closure в `planner.v5` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a24
+Harness                     0.8.0a25
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -224,7 +224,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a24`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a25`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -394,7 +394,10 @@ Planner IN_SCOPE, Implementer DISCOVERED, всех NOT_AFFECTED/related rows (в
 blind rows) и changed paths. Blind IDs сохраняют naming independence; typed matches
 ссылаются на existing prior ledger rows. Каждый negative disposition требует final
 finding_ids и запрещает PASS. Каждый blind finding retained либо dismissed с evidence.
-MODEL_CONFLICT не принимается как обычный FINDINGS repair. Candidate IDs обоих reports
+Blind changed-contract MATERIAL_GAP и MODEL_CONFLICT требуют только REPLAN_REQUIRED,
+concrete reason и final finding; PASS/FINDINGS/BLOCKED/NEEDS_USER_DECISION отклоняются.
+Используется существующий semantic reset с fresh Planner/Contract/Implementer.
+Candidate IDs обоих reports
 проверяются against current Controller candidate; repair всегда запускает fresh Phase A.
 Evaluator guards и внешний integrity coordinator сохраняют read-only semantics.
 
@@ -566,7 +569,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a24` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a25` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 

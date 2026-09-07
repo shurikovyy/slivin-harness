@@ -147,9 +147,9 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
         row = self.verdict["impact_challenge"][group][0]
         row.update(disposition=value, finding_ids=["IMPACT-GAP-1"])
         finding = evaluator_finding("IMPACT-GAP-1")
-        if value == "MODEL_CONFLICT":
+        if group == "blind_contract_dispositions":
             finding["category"] = "MODEL"
-        self.verdict.update(status="REPLAN_REQUIRED" if value == "MODEL_CONFLICT" else "FINDINGS", findings=[finding], reason="The independently inspected candidate has a material impact gap.")
+        self.verdict.update(status="REPLAN_REQUIRED" if group == "blind_contract_dispositions" else "FINDINGS", findings=[finding], reason="The independently inspected candidate has a material impact gap.")
 
     def run_phases(self, *, observer=None, persist=None, impact=None):
         server = ScriptedEvaluator(self.audit, self.verdict, observer)
@@ -440,11 +440,34 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
         self.verdict["blind_finding_dispositions"][0]["disposition"] = "RETAINED"
         self.reject_b("retained blind finding")
 
-    def test_model_conflict_requires_replan_not_repair(self):
-        self.negative("blind_contract_dispositions", "MODEL_CONFLICT")
-        self.validate_b()
-        self.verdict["status"] = "FINDINGS"
-        self.reject_b("REPLAN_REQUIRED")
+    def assert_blind_contract_status_matrix(self, disposition):
+        self.negative("blind_contract_dispositions", disposition)
+        for status in ("REPLAN_REQUIRED", "FINDINGS", "BLOCKED", "NEEDS_USER_DECISION", "PASS"):
+            with self.subTest(disposition=disposition, status=status):
+                self.verdict["status"] = status
+                row = self.verdict["impact_challenge"]["blind_contract_dispositions"][0]
+                self.assertEqual(row["finding_ids"], [self.verdict["findings"][0]["finding_id"]])
+                if status == "REPLAN_REQUIRED":
+                    self.validate_b()
+                else:
+                    self.reject_b("PASS requires no findings" if status == "PASS" else "REPLAN_REQUIRED")
+
+    def test_model_conflict_status_matrix_requires_only_replan(self):
+        self.assert_blind_contract_status_matrix("MODEL_CONFLICT")
+
+    def test_material_gap_status_matrix_requires_only_replan(self):
+        self.assert_blind_contract_status_matrix("MATERIAL_GAP")
+
+    def test_blind_contract_replan_still_requires_reason_and_material_finding(self):
+        for disposition in ("MATERIAL_GAP", "MODEL_CONFLICT"):
+            for missing in ("reason", "finding_ids", "findings"):
+                with self.subTest(disposition=disposition, missing=missing):
+                    self.negative("blind_contract_dispositions", disposition)
+                    if missing == "finding_ids":
+                        self.verdict["impact_challenge"]["blind_contract_dispositions"][0][missing] = []
+                    else:
+                        self.verdict[missing] = "" if missing == "reason" else []
+                    self.reject_b()
 
     def test_candidate_change_invalidates_blind_and_final_challenge(self):
         (self.workspace / "reader_a.py").write_text("def read_value(entry):\n    return None\n", encoding="utf-8")
@@ -495,7 +518,7 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
 
 
 class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
-    def run_sibling_case(self, *, repair=False, model_conflict=False):
+    def run_sibling_case(self, *, repair=False, contract_gap=None):
         temporary = tempfile.TemporaryDirectory(prefix="slivin-independent-sibling-")
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -551,6 +574,12 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
                 plan["evidence_plan"]["consumers"] = plan["evidence_plan"]["consumers"][:1]
             else:
                 test.assertEqual(collect_changed_paths(Path(kwargs["workspace"])), [])
+                if contract_gap == "MATERIAL_GAP":
+                    plan["impact_closure"]["changed_contracts"].append({
+                        "name": "Availability decision authority", "before": "Availability trusts the active field alone.",
+                        "after": "Availability uses the expiration-aware predicate.",
+                        "evidence_paths": ["reader_b.py"], "evidence_symbols": ["can_read"],
+                    })
             return plan
 
         def implementer(*_args, **kwargs):
@@ -558,7 +587,7 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
             observed["implementer_threads"].append(kwargs["thread_id"])
             continuing = len(observed["implementer_threads"]) > 1
             contract = kwargs["implementation_contract"]
-            if continuing and not repair and not model_conflict:
+            if continuing and not repair and not contract_gap:
                 observed["expanded_items"] = copy.deepcopy(contract["items"])
                 report = attach_post_patch_impact({
                     "protocol_version": "implementer.v4", "status": "BLOCKED", "summary": "The new reader obligation remains unresolved.",
@@ -579,7 +608,7 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
                 run_state=kwargs["run_state"], check_registry_digest=kwargs["check_registry_digest"],
             ))
             discoveries = []
-            if continuing and not model_conflict:
+            if continuing and not contract_gap:
                 finding = observed["finding"]
                 discoveries = [{"kind": "consumer", "name": finding["title"], "reason": finding["failure_mode"], "required_behavior": finding["required_action"], "required_proof": finding["required_proof"], "evidence": finding["evidence"]}]
             report = attach_post_patch_impact({
@@ -645,6 +674,16 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
                         },
                     }
                     for (path, name), wrong in zip(readers, broken):
+                        if contract_gap == "MATERIAL_GAP" and name == "can_read":
+                            # The blind model identifies a separate decision authority
+                            # from repository inspection, before seeing prior ledgers.
+                            audit["impact_analysis"]["changed_contracts"].append({
+                                "impact_id": "CONTRACT-2", "name": "Availability decision authority",
+                                "before": "Availability trusts the active field alone.",
+                                "after": "Availability uses the expiration-aware predicate.",
+                                "paths": [path], "symbols": [name],
+                                "evidence": [f"{path} {name} determines availability independently of the value reader; expiration must govern both decisions."],
+                            })
                         if wrong:
                             finding = {"finding_id": "SIBLING-GAP", "severity": "HIGH", "category": "CONSUMER", "title": "Expired entry availability reader", "evidence": [f"{path} {name} returns true for an expired active entry; regression.py asserts only the value reader."], "failure_mode": "The availability reader exposes expired entries by reading active directly.", "required_action": "The availability reader must reject expired entries and preserve fresh availability.", "required_proof": proof("Exercise expired and fresh entries through the availability reader.")}
                             audit["findings"].append(finding)
@@ -672,11 +711,21 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
                     observed["green_before_gap"] = True
                     verdict.update(status="FINDINGS", findings=copy.deepcopy(audit["findings"]))
                     verdict["blind_finding_dispositions"][0]["disposition"] = "RETAINED"
-                    if model_conflict:
+                    if contract_gap:
                         verdict.update(status="REPLAN_REQUIRED", reason="The model omitted direct eligibility authority in a public decision point.")
                         verdict["findings"][0]["category"] = "MODEL"
-                        verdict["impact_challenge"]["blind_contract_dispositions"][0].update(disposition="MODEL_CONFLICT", finding_ids=["SIBLING-GAP"])
+                        row = verdict["impact_challenge"]["blind_contract_dispositions"][-1]
+                        row.update(disposition=contract_gap, finding_ids=["SIBLING-GAP"])
+                        if contract_gap == "MATERIAL_GAP":
+                            row["matches"] = []
+                            row["reason"] = "The prior model does not cover the separate availability decision authority found in the blind repository sweep."
+                            test.assertEqual(row["impact_id"], "CONTRACT-2")
+                            test.assertNotIn("Availability decision authority", json.dumps(planned))
                     observed["finding"] = copy.deepcopy(verdict["findings"][0])
+                elif contract_gap == "MATERIAL_GAP":
+                    verdict["impact_challenge"]["blind_contract_dispositions"][-1]["matches"] = [
+                        {"source": "PLANNER", "classification": "CHANGED_CONTRACT", "name": "Availability decision authority"},
+                    ]
                 return json.dumps(verdict)
 
         config = {"projects": {"demo": {"repo": str(source), "base_ref": "HEAD", "result_mode": "keep_worktree", "toolchain": {}}}, "workspace": {"root": str(root / "workspaces")}}
@@ -716,13 +765,21 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
         self.assertEqual(final["status"], "PASS")
         self.assertEqual(len(final["impact_challenge"]["implementer_consumer_dispositions"]), 1)
 
-    def test_independent_model_conflict_uses_fresh_semantic_replan(self):
-        result, seen, root, output = self.run_sibling_case(model_conflict=True)
-        self.assertEqual(result, 0, output)
-        self.assertEqual(seen["planner_calls"], 2)
-        self.assertNotEqual(seen["implementer_threads"][0], seen["implementer_threads"][1])
-        self.assertEqual(len(seen["phase_a"]), 2)
-        self.assertTrue((root / "replan_01_reset.json").is_file())
+    def test_independent_contract_gaps_use_fresh_semantic_replan(self):
+        for disposition in ("MODEL_CONFLICT", "MATERIAL_GAP"):
+            with self.subTest(disposition=disposition):
+                result, seen, root, output = self.run_sibling_case(contract_gap=disposition)
+                self.assertEqual(result, 0, output)
+                self.assertEqual(seen["planner_calls"], 2)
+                self.assertNotEqual(seen["implementer_threads"][0], seen["implementer_threads"][1])
+                self.assertEqual(len(seen["phase_a"]), 2)
+                self.assertTrue((root / "replan_01_reset.json").is_file())
+                rejected = json.loads((root / "evaluation_01.json").read_text(encoding="utf-8"))
+                self.assertEqual(rejected["status"], "REPLAN_REQUIRED")
+                self.assertEqual(rejected["impact_challenge"]["blind_contract_dispositions"][-1]["disposition"], disposition)
+                if disposition == "MATERIAL_GAP":
+                    blind = json.loads((root / "blind_audit_01.json").read_text(encoding="utf-8"))
+                    self.assertEqual(blind["impact_analysis"]["changed_contracts"][-1]["impact_id"], "CONTRACT-2")
 
 
 if __name__ == "__main__":

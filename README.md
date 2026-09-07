@@ -1,4 +1,4 @@
-# Slivin Harness 0.8.0a24 — Phase 7
+# Slivin Harness 0.8.0a25 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
@@ -7,7 +7,7 @@ Slivin Harness управляет автономной работой Codex в �
 technical impact radius. Пользователь задаёт observable intent и ограничения;
 перечислять consumers, файлы и regression cases он не обязан.
 
-`0.8.0a24` quality-core требует typed Planner Impact Closure до `READY` в `planner.v5`
+`0.8.0a25` quality-core требует typed Planner Impact Closure до `READY` в `planner.v5`
 и post-patch Implementer Impact Closure до `COMPLETE` в `implementer.v4`.
 Implementer проверяет Planner model по реальному diff, пересматривает consumers,
 добавляет discoveries через Controller expansion и рассматривает каждый changed path.
@@ -17,6 +17,9 @@ divergence требует fresh Planner через `REPLAN_REQUIRED`.
 обоих ledgers. Controller immutable-сохраняет `blind-audit.v2`, затем требует evidence-backed
 `impact_challenge` всех contracts/consumers/classifications и changed paths. Согласованные
 ledgers и зелёные tests сами по себе не разрешают Evaluator PASS.
+Blind changed-contract `MATERIAL_GAP` и `MODEL_CONFLICT` допустимы только с
+`REPLAN_REQUIRED`: semantic reset запускает fresh Planner и Implementer. Final material
+finding и concrete reason обязательны.
 User product scope, technical impact radius и patch size различны: минимальный patch
 выбирается после closure. Исключение `applicable=false` требует непустой owner boundary
 из manifest `allowed_paths`, ограниченной существующими safe prose files; declarations
@@ -88,7 +91,7 @@ canonical candidate identity до/после probe batch. Любое измен�
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a24`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a25`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
@@ -331,7 +334,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a24 ...
+DOCS_SYNC_PASS harness=0.8.0a25 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -345,7 +348,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a24` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a25` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

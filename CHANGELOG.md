@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.0a25 — Blind contract gap replan routing
+
+- Require `REPLAN_REQUIRED` for every blind changed-contract `MATERIAL_GAP` or `MODEL_CONFLICT`. All other statuses are rejected; material findings and a concrete reason remain mandatory.
+- Preserve consumer/risk repair routing and reuse the existing semantic reset with fresh Planner and Implementer. Added adversarial status matrices and a generic missing-contract replan integration regression.
+- Keep `evaluator.v6` and `blind-audit.v2` wire schemas unchanged; synchronize current documentation, including the practical guide's blind-audit reference.
+
 ## 0.8.0a24 — Independent Evaluator Impact Challenge
 
 - Upgraded to `blind-audit.v2` with independent typed impact analysis, stable impact IDs, exact changed-path review and shared owner-backed prose applicability.

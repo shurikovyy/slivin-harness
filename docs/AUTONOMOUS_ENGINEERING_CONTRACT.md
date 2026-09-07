@@ -253,8 +253,11 @@ blind model и Phase B dispositions. Наличие regression test не док�
 если assertion покрывает только helper и пропускает affected consumer semantics.
 
 Исправимые CONSUMER/RISK findings используют Controller expansion и Implementer repair.
-MODEL_CONFLICT требует REPLAN_REQUIRED вместо candidate repair; если исследование
-заблокировано, сохраняются BLOCKED/NEEDS_USER_DECISION с concrete reason. Candidate change
+MATERIAL_GAP и MODEL_CONFLICT в blind changed-contract dispositions допустимы только с
+REPLAN_REQUIRED, concrete reason и соответствующим final material finding. PASS, FINDINGS,
+BLOCKED и NEEDS_USER_DECISION с этими dispositions запрещены: текущая technical model
+недостаточна и требует semantic reset, fresh Planner, нового Contract и fresh Implementer.
+Candidate change
 делает прежние blind audit/challenge stale: после repair нужен fresh Evaluator thread.
 Перед Phase B Controller повторно проверяет candidate/Plan/Contract/revision binding
 implementation-impact-closure. FAST policy не меняется и Evaluator не запускается.

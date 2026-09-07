@@ -208,9 +208,11 @@ PHASE B — independent impact challenge:
   с failure_mode, required_action и typed proof. Negative disposition запрещает PASS.
   Missing consumer, неверный NOT_AFFECTED/out-of-scope, false-green coverage не могут исчезнуть.
 - FINDINGS означает исправимый candidate gap: consumer/risk findings поступают в Controller
-  expansion и Implementer repair. MATERIAL_GAP в changed contract, materially incomplete root
-  cause или MODEL_CONFLICT требуют REPLAN_REQUIRED, если неверна сама technical model.
-  Не создавай новый product intent. BLOCKED/NEEDS_USER_DECISION требуют concrete reason.
+  expansion и Implementer repair. MATERIAL_GAP или MODEL_CONFLICT в blind changed contract
+  разрешены только со status=REPLAN_REQUIRED и concrete reason: technical model недостаточна,
+  требуется semantic reset и fresh Planner/Implementer. Другие statuses запрещены.
+  Не создавай новый product intent. BLOCKED/NEEDS_USER_DECISION требуют concrete reason
+  и не могут использоваться при этих changed-contract dispositions.
 - Сохрани все blind related follow-ups, даже если их нет в прежних ledgers. Их mandatory
   user-facing delivery выполняется отдельно; отсутствие delivery сейчас не отменяет finding.
 
@@ -461,8 +463,12 @@ def validate_impact_challenge(
                 raise RuntimeError("Every negative impact disposition requires a corresponding final finding")
             if negative and evaluation["status"] == EvaluatorStatus.PASS.value:
                 raise RuntimeError("Evaluator PASS forbids negative impact dispositions")
-            if row["disposition"] == "MODEL_CONFLICT" and evaluation["status"] == EvaluatorStatus.FINDINGS.value:
-                raise RuntimeError("MODEL_CONFLICT requires REPLAN_REQUIRED instead of candidate repair")
+            if (
+                group == "blind_contract_dispositions"
+                and row["disposition"] in {"MATERIAL_GAP", "MODEL_CONFLICT"}
+                and evaluation["status"] != EvaluatorStatus.REPLAN_REQUIRED.value
+            ):
+                raise RuntimeError(f"Blind contract {row['disposition']} requires status REPLAN_REQUIRED")
         if seen != expected[group]:
             raise RuntimeError(f"{group} must disposition every and only authoritative input row")
     _exact_paths([row["path"] for row in challenge["changed_path_dispositions"]], changed_paths, workspace=workspace, field="changed_path_dispositions")

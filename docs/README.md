@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a24
+# Документация Slivin Harness 0.8.0a25
 
-Актуальная версия: **0.8.0a24 — Independent Evaluator Impact Challenge**.
+Актуальная версия: **0.8.0a25 — Blind contract gap replan routing**.
 
 Основные документы:
 

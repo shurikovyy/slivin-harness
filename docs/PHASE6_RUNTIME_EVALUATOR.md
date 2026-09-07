@@ -322,8 +322,12 @@ MODEL
 `CONSUMER` и `RISK` транзакционно расширяют active Implementation Contract и Verification
 Plan до repair. Обычный candidate defect возвращается тому же Implementer. Ошибка самой
 technical model возвращает `REPLAN_REQUIRED`.
-MODEL_CONFLICT запрещён в обычном FINDINGS repair и требует semantic replan либо честный
-BLOCKED/NEEDS_USER_DECISION status с reason. Оба Evaluator reports связаны с current candidate.
+Blind changed-contract MATERIAL_GAP и MODEL_CONFLICT разрешены только с REPLAN_REQUIRED.
+PASS, FINDINGS, BLOCKED и NEEDS_USER_DECISION с ними отклоняются. Concrete reason и
+finding_ids, ссылающиеся на существующий final material finding, остаются обязательными.
+Существующий semantic reset удаляет rejected candidate и запускает fresh Planner v5,
+новый Implementation Contract и fresh Implementer v4. Consumer-level routing сохраняется.
+Оба Evaluator reports связаны с current candidate.
 После repair прежние audit/challenge stale: новый Implementer impact, checks/runtime и
 fresh Evaluator Phase A/Phase B обязательны. FAST по-прежнему пропускает Evaluator.
 Все related follow-ups сохраняются в immutable audit/prior artifacts и exact dispositions;

@@ -224,7 +224,7 @@ changed paths as navigation
 
 It does not see Planner reasoning, Implementation Contract, Implementer report, deterministic
 results, runtime evidence, previous findings or held-out assertions. Controller persists the
-returned `blind-audit.v1` before any additional evidence is revealed.
+returned `blind-audit.v2` before any additional evidence is revealed.
 
 ### Phase B — Contract audit
 
