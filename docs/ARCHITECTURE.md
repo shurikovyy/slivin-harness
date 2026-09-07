@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a21 — Phase 7
+# Архитектура Slivin Harness 0.8.0a22 — Phase 7
 
 ## Назначение
 
-`0.8.0a21` требует typed impact closure в `planner.v5` до `READY`, сохраняет
+`0.8.0a22` требует typed impact closure в `planner.v5` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a21
+Harness                     0.8.0a22
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -224,7 +224,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a21`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a22`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -240,6 +240,16 @@ compiler проверяются safe existing evidence files, concrete entries �
 IN_SCOPE ↔ affected_consumers mapping, включая required behavior и typed proof.
 Сначала исследуется technical impact radius, затем выбирается patch size в рамках
 user product scope. Эти три понятия не равны.
+
+`validate_plan_artifact()` получает `owner_allowed_paths` из Controller-owned
+manifest `allowed_paths` при initial validation, capability corrective validation
+и повторной Controller validation initial/replan artifact. READY с `applicable=false`
+требует непустой hard boundary только из существующих regular prose files
+(`.md`, `.rst`, `.txt`, `.adoc`), safe repo-relative и после canonical resolution
+внутри workspace; resolved extension также prose. Search evidence ограничен subset
+этих owner paths. Directory/glob/code/config/mixed/nonexistent/escaping boundary
+не разрешает исключение; Planner declarations не могут его авторизовать.
+Отсутствие behavioral/state/runtime obligations и конкретный summary обязательны.
 
 Planner read-only относительно candidate и не получает previous solution/reference/held-out.
 Controller передаёт ему probe-backed `AVAILABLE_VERIFICATION_CAPABILITIES` и
@@ -517,7 +527,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a21` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a22` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 

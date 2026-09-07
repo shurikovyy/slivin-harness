@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a21
+# Документация Slivin Harness 0.8.0a22
 
-Актуальная версия: **0.8.0a21 — Autonomous Planner Impact Closure**.
+Актуальная версия: **0.8.0a22 — Owner-backed Impact Applicability**.
 
 Основные документы:
 

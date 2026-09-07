@@ -123,12 +123,13 @@ class PlannerImpactClosureTests(unittest.TestCase):
         self.task_contract = synthetic_task_contract()
         self.plan = synthetic_plan()
 
-    def validate(self, plan: dict | None = None) -> None:
-        validate_plan_artifact(plan or self.plan, workspace=self.workspace, task_contract=self.task_contract)
+    def validate(self, plan: dict | None = None, *, owner_allowed_paths: list[str] | None = None) -> None:
+        context = {} if owner_allowed_paths is None else {"owner_allowed_paths": owner_allowed_paths}
+        validate_plan_artifact(plan or self.plan, workspace=self.workspace, task_contract=self.task_contract, **context)
 
-    def reject(self, code: str | None = None) -> None:
+    def reject(self, code: str | None = None, *, owner_allowed_paths: list[str] | None = None) -> None:
         with self.assertRaises(ArtifactContractError) as raised:
-            self.validate()
+            self.validate(owner_allowed_paths=owner_allowed_paths)
         if code:
             self.assertEqual(raised.exception.code, code)
 
@@ -260,7 +261,7 @@ class PlannerImpactClosureTests(unittest.TestCase):
         closure["closure_summary"] = "README.md contains only explanatory prose; correcting spelling changes no behavioral contract or reachable program consumer."
         return plan
 
-    def test_trivial_task_needs_no_fake_consumers_but_requires_specific_explanation(self) -> None:
+    def use_prose_task(self) -> None:
         intent = "Correct the prose spelling."
         task = synthetic_task_contract()
         normalized = {key: value for key, value in task.items() if key not in {"raw_user_request", "raw_request_sha256", "fingerprint"}}
@@ -270,25 +271,140 @@ class PlannerImpactClosureTests(unittest.TestCase):
         normalized["explicit_preservation"] = []
         self.task_contract = build_task_contract(raw_request=intent, normalized=normalized)
         self.plan = self.non_applicable_plan()
-        self.validate()
+
+    def test_trivial_task_needs_no_fake_consumers_but_requires_specific_explanation(self) -> None:
+        self.use_prose_task()
+        self.validate(owner_allowed_paths=["README.md"])
         contract = build_implementation_contract(self.plan, task_contract=self.task_contract)
         self.assertFalse(any(row["type"] == "consumer" for row in contract["items"]))
         for summary in ("", "N/A", "README.md", "README.md not applicable"):
             with self.subTest(summary=summary):
                 self.plan["impact_closure"]["closure_summary"] = summary
-                self.reject()
+                self.reject(owner_allowed_paths=["README.md"])
 
     def test_behavioral_change_cannot_bypass_with_false_and_empty_arrays(self) -> None:
         self.plan["impact_closure"] = self.non_applicable_plan()["impact_closure"]
-        self.reject("IMPACT_NOT_APPLICABLE_UNJUSTIFIED")
+        self.reject("IMPACT_NOT_APPLICABLE_UNJUSTIFIED", owner_allowed_paths=["README.md"])
+
+    def test_fully_sanitized_behavioral_ledger_cannot_self_authorize_non_applicability(self) -> None:
+        self.assertIn("Expired entries must not be returned.", self.task_contract["raw_user_request"])
+        self.plan = self.non_applicable_plan()
+        # Every Planner-owned behavioral declaration is consistently erased;
+        # only the Controller retains the real behavioral user Task Contract.
+        for group in ("changed_contracts", "in_scope_consumers", "not_affected_consumers", "related_out_of_scope"):
+            self.assertEqual(self.plan["impact_closure"][group], [])
+        self.assertEqual(self.plan["affected_consumers"], [])
+        self.assertEqual(self.plan["risks"], [])
+        self.assertFalse(self.plan["state_model"]["applicable"])
+        for group in ("representations", "authority", "lifecycle", "boundaries"):
+            self.assertEqual(self.plan["state_model"][group], [])
+        for group in ("consumers", "boundaries"):
+            self.assertEqual(self.plan["evidence_plan"][group], [])
+        self.assertEqual(self.plan["evidence_plan"]["regression"][0]["level"], "LOCAL_DETERMINISTIC")
+        self.assertEqual(self.plan["evidence_plan"]["regression"][0]["capabilities"], [])
+        self.assertGreater(len(self.plan["impact_closure"]["closure_summary"].split()), 12)
+        self.reject("IMPACT_NOT_APPLICABLE_OWNER_BOUNDARY")
+
+    def test_sanitized_behavioral_ledger_with_explicit_empty_owner_boundary_is_rejected(self) -> None:
+        self.plan = self.non_applicable_plan()
+        self.reject("IMPACT_NOT_APPLICABLE_OWNER_BOUNDARY", owner_allowed_paths=[])
+
+    def test_genuine_prose_task_without_owner_boundary_is_conservatively_rejected(self) -> None:
+        self.use_prose_task()
+        self.reject("IMPACT_NOT_APPLICABLE_OWNER_BOUNDARY")
+
+    def test_long_planner_explanation_does_not_authorize_behavioral_task(self) -> None:
+        self.plan = self.non_applicable_plan()
+        self.plan["impact_closure"]["closure_summary"] *= 30
+        self.reject("IMPACT_NOT_APPLICABLE_OWNER_BOUNDARY")
+
+    def test_non_applicable_rejects_mixed_code_directory_glob_and_unsafe_owner_paths(self) -> None:
+        self.use_prose_task()
+        (self.workspace / "notes").mkdir()
+        (self.workspace / "[ab].md").write_text("Literal filename still has glob syntax.\n", encoding="utf-8")
+        for paths in (
+            ["README.md", "state.py"], ["state.py"], ["notes"], ["missing.md"],
+            ["../outside.md"], ["..\\outside.md"], ["C:outside.md"], ["C:/outside.md"],
+            ["/outside.md"], ["\\\\server\\share\\notes.md"], ["*.md"], ["notes/**"],
+            ["[ab].md"], ["README.md:stream"], ["."], [""], ["README.md", "missing.md"],
+        ):
+            with self.subTest(paths=paths):
+                self.reject(owner_allowed_paths=paths)
+
+    def test_non_applicable_rejects_owner_junction_or_symlink_escape(self) -> None:
+        self.use_prose_task()
+        with tempfile.TemporaryDirectory(prefix="slivin-owner-outside-") as outside:
+            (Path(outside) / "notes.md").write_text("Ordinary prose.\n", encoding="utf-8")
+            link = self.workspace / "linked"
+            if os.name == "nt":
+                subprocess.run(
+                    ["cmd", "/d", "/c", "mklink", "/J", str(link), outside],
+                    check=True, capture_output=True,
+                )
+            else:
+                link.symlink_to(Path(outside), target_is_directory=True)
+            # Search evidence stays valid inside the workspace; it is the owner
+            # boundary itself that must reject the escaping canonical target.
+            self.reject("UNSAFE_PATH", owner_allowed_paths=["README.md", "linked/notes.md"])
+
+    def test_non_applicable_search_evidence_must_be_subset_of_owner_paths(self) -> None:
+        self.use_prose_task()
+        (self.workspace / "notes.md").write_text("Ordinary independent prose.\n", encoding="utf-8")
+        self.plan["impact_closure"]["search_evidence"][0]["evidence_paths"].append("notes.md")
+        self.reject("IMPACT_NOT_APPLICABLE_OWNER_BOUNDARY", owner_allowed_paths=["README.md"])
+        self.validate(owner_allowed_paths=["README.md", "notes.md"])
+
+    def test_prose_extensions_and_normalized_exact_owner_paths_are_supported(self) -> None:
+        self.use_prose_task()
+        (self.workspace / "notes").mkdir()
+        for extension in (".md", ".rst", ".txt", ".adoc"):
+            with self.subTest(extension=extension):
+                path = f"notes/guide{extension}"
+                (self.workspace / path).write_text("Ordinary explanatory prose.\n", encoding="utf-8")
+                self.plan["impact_closure"]["search_evidence"][0]["evidence_paths"] = [path]
+                self.plan["impact_closure"]["closure_summary"] = f"{path} contains ordinary explanatory prose with no runtime consumers or behavioral obligations."
+                self.validate(owner_allowed_paths=[path.replace("/", "\\")])
 
     def test_non_applicable_rejects_code_evidence_and_runtime_proofs(self) -> None:
         self.plan = self.non_applicable_plan()
         self.plan["impact_closure"]["search_evidence"][0]["evidence_paths"] = ["state.py"]
-        self.reject("IMPACT_NOT_APPLICABLE_UNJUSTIFIED")
+        self.reject("IMPACT_NOT_APPLICABLE_OWNER_BOUNDARY", owner_allowed_paths=["README.md"])
         self.plan = self.non_applicable_plan()
         self.plan["evidence_plan"]["regression"][0]["capabilities"] = ["NODE"]
-        self.reject("IMPACT_NOT_APPLICABLE_UNJUSTIFIED")
+        self.reject("IMPACT_NOT_APPLICABLE_UNJUSTIFIED", owner_allowed_paths=["README.md"])
+
+    def test_owner_boundary_survives_initial_and_corrective_planner_validation(self) -> None:
+        from test_planner import _FakeCodex
+
+        self.use_prose_task()
+        first = copy.deepcopy(self.plan)
+        first["evidence_plan"]["regression"][0]["capabilities"] = ["DOCS_SYNC"]
+        codex = _FakeCodex([first, self.plan])
+        result = run_planner(
+            codex, workspace=self.workspace, task_prompt=self.task_contract["raw_user_request"],
+            task_contract=self.task_contract, preflight={"status": "READY"},
+            owner_allowed_paths=["README.md"], available_verification_capabilities=[],
+            manifest_repair_evidence=[],
+        )
+        self.assertEqual(result, self.plan)
+        self.assertEqual(len(codex.turns), 2)
+        contract = build_implementation_contract(result, task_contract=self.task_contract)
+        self.assertFalse(any(row["type"] == "consumer" for row in contract["items"]))
+
+    def test_corrective_turn_cannot_replace_owner_authority_with_sanitized_ledger(self) -> None:
+        from test_planner import _FakeCodex
+
+        first = synthetic_plan()
+        first["evidence_plan"]["regression"][0]["capabilities"] = ["PROJECT_PYTHON"]
+        codex = _FakeCodex([first, self.non_applicable_plan()])
+        with self.assertRaises(ArtifactContractError) as raised:
+            run_planner(
+                codex, workspace=self.workspace, task_prompt=self.task_contract["raw_user_request"],
+                task_contract=self.task_contract, preflight={"status": "READY"},
+                owner_allowed_paths=[], available_verification_capabilities=[], manifest_repair_evidence=[],
+            )
+        self.assertEqual(raised.exception.code, "IMPACT_NOT_APPLICABLE_OWNER_BOUNDARY")
+        self.assertEqual(len(codex.turns), 2)
 
     def test_blocked_can_preserve_unfinished_impact_without_fake_entries(self) -> None:
         self.plan["status"] = "BLOCKED"

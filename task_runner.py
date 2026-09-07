@@ -1537,13 +1537,15 @@ def checks_summary(results: list[CheckResult], *, output_limit: int = 8_000) -> 
 
 
 def validate_plan_artifact(
-    plan: dict, *, workspace: Path, task_contract: dict
+    plan: dict, *, workspace: Path, task_contract: dict,
+    owner_allowed_paths: list[str] | None = None,
 ) -> None:
     """Compatibility entry point backed by the planner.v5 validator."""
     validate_planner_artifact(
         plan,
         workspace=workspace,
         task_contract=task_contract,
+        owner_allowed_paths=owner_allowed_paths or (),
     )
 
 def validate_evaluation_artifact(
@@ -2755,7 +2757,10 @@ def main(argv: list[str] | None = None) -> int:
                         ", ".join(exc.unavailable_capabilities),
                     )
                     return 2
-                validate_plan_artifact(plan, workspace=workspace, task_contract=task_contract)
+                validate_plan_artifact(
+                    plan, workspace=workspace, task_contract=task_contract,
+                    owner_allowed_paths=allowed_paths,
+                )
                 remaining_planner_gaps = planner_capability_gaps(
                     plan, available=planning_available_capabilities
                 )
@@ -4123,7 +4128,10 @@ def main(argv: list[str] | None = None) -> int:
                             ", ".join(exc.unavailable_capabilities),
                         )
                         return 2
-                    validate_plan_artifact(plan, workspace=workspace, task_contract=task_contract)
+                    validate_plan_artifact(
+                        plan, workspace=workspace, task_contract=task_contract,
+                        owner_allowed_paths=allowed_paths,
+                    )
                     remaining_replan_gaps = planner_capability_gaps(
                         plan, available=replan_available_capabilities
                     )

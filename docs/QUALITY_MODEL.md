@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a21 — Phase 7
+# Модель качества Slivin Harness 0.8.0a22 — Phase 7
 
 Нормативный autonomy contract: **[AUTONOMOUS_ENGINEERING_CONTRACT.md](AUTONOMOUS_ENGINEERING_CONTRACT.md)**.
 User scope задаёт observable результат и explicit ограничения; technical impact
@@ -83,8 +83,14 @@ behavior и proof. Проверка выполняется для initial plan, 
 
 NOT_AFFECTED требует repository evidence и не становится obligation. Независимые
 RELATED_OUT_OF_SCOPE findings сохраняются с follow-up в Planner artifact. Для
-нетехнической задачи допустим обоснованный `applicable=false` без fake consumers;
-mechanical eligibility и границы этой проверки определены в normative contract.
+нетехнической задачи допустим `applicable=false` без fake consumers только при
+непустом Controller-owned `owner_allowed_paths` из manifest `allowed_paths`, целиком
+ограниченном существующими safe prose files (`.md`, `.rst`, `.txt`, `.adoc`).
+Canonical paths остаются внутри workspace; search evidence — subset owner paths.
+Без этой границы даже genuine prose task не получает исключение. Planner prose
+и очищенные declarations не являются authority; остальные проверки отсутствия
+behavioral/state/runtime obligations и concrete summary сохраняются.
+Полные mechanical eligibility и границы проверки определены в normative contract.
 Обычный behavioral code change не может обойти closure пустым false-ledger.
 Один локальный extension point не даёт Planner права сокращать impact radius.
 Полная ledger не доказывает истинность evidence или корректность future patch.

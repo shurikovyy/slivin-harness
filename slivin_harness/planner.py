@@ -298,9 +298,16 @@ search_evidence фиксирует target, method, evidence_paths и conclusion 
 конкретная shell-команда не обязательна. closure_summary объясняет полноту исследования,
 но не заменяет structured entries. READY без impact closure запрещён.
 
-applicable=false разрешён только для задач без изменяемого behavioral/semantic/state contract,
-например редактирования обычного текста. Нужны search_evidence по существующим текстовым
-документам (.md/.rst/.txt/.adoc) и конкретное closure_summary с указанием evidence path и
+Для READY engineering/code task default — applicable=true. Исключение applicable=false
+разрешено только при непустой OWNER-DEFINED HARD PATH BOUNDARY из Controller: каждый
+owner allowed path — safe repo-relative существующий regular prose file (.md/.rst/.txt/.adoc),
+в том числе после canonical resolution внутри workspace. Directory, glob, отсутствующий,
+code/config или escaping path и смешанная prose/code boundary запрещают это исключение.
+Твои собственные paths, declarations и prose не могут разрешить applicable=false;
+без такой owner boundary даже редакторская задача требует applicable closure либо честный
+другой status. Search evidence paths должны быть subset именно этих owner paths.
+Задача не должна менять behavioral/semantic/state contract.
+Нужно конкретное closure_summary с указанием evidence path и
 объяснением отсутствия behavioral impact. Проверь, что этот текст не исполняется и не служит
 config/API/state contract. Все четыре contract/consumer arrays, affected_consumers, risks,
 State Model collections и consumer/boundary proofs пусты; state_model.applicable=false.
@@ -480,7 +487,9 @@ def _impact_paths(values: list[str], *, field: str, workspace: Path) -> list[str
     return normalized
 
 
-def _validate_impact_closure(plan: dict[str, Any], *, workspace: Path) -> None:
+def _validate_impact_closure(
+    plan: dict[str, Any], *, workspace: Path, owner_allowed_paths: Sequence[str]
+) -> None:
     closure = plan["impact_closure"]
     field = "impact_closure"
     require_type(closure, dict, field=field)
@@ -537,6 +546,25 @@ def _validate_impact_closure(plan: dict[str, Any], *, workspace: Path) -> None:
     if not closure["search_evidence"]:
         _impact_error("IMPACT_SEARCH_MISSING", field=f"{field}.search_evidence", message="READY requires repository evidence of an impact sweep", actual=[])
     if not closure["applicable"]:
+        # Eligibility comes only from the Controller's manifest boundary. The
+        # Planner's ledger and prose cannot establish this independent authority.
+        if not owner_allowed_paths:
+            _impact_error("IMPACT_NOT_APPLICABLE_OWNER_BOUNDARY", field="owner_allowed_paths", message="Non-applicable READY requires a non-empty owner-defined prose-file boundary", actual=owner_allowed_paths)
+        owner_paths = require_string_list(list(owner_allowed_paths), field="owner_allowed_paths")
+        if any(char in path for path in owner_paths for char in "[]"):
+            _impact_error("UNSAFE_PATH", field="owner_allowed_paths", message="Non-applicable owner boundary cannot contain glob patterns", actual=owner_paths)
+        owner_paths = _impact_paths(
+            owner_paths, field="owner_allowed_paths", workspace=workspace,
+        )
+        prose_extensions = {".md", ".rst", ".txt", ".adoc"}
+        if any(
+            Path(path).suffix.lower() not in prose_extensions
+            or (workspace / path).resolve().suffix.lower() not in prose_extensions
+            for path in owner_paths
+        ):
+            _impact_error("IMPACT_NOT_APPLICABLE_OWNER_BOUNDARY", field="owner_allowed_paths", message="Non-applicable READY requires only ordinary prose files in the owner boundary, including resolved targets", actual=owner_paths)
+        if not set(search_paths).issubset(owner_paths):
+            _impact_error("IMPACT_NOT_APPLICABLE_OWNER_BOUNDARY", field=f"{field}.search_evidence", message="Non-applicable search evidence must stay within the exact owner-defined prose-file boundary", actual=search_paths)
         state = plan["state_model"]
         behavioral = any(closure[group] for group in (
             "changed_contracts", "in_scope_consumers", "not_affected_consumers", "related_out_of_scope",
@@ -551,15 +579,13 @@ def _validate_impact_closure(plan: dict[str, Any], *, workspace: Path) -> None:
             or set(proof["capabilities"]) - {Capability.GIT.value, Capability.DOCS_SYNC.value}
             for proof in proofs
         )
-        # Conservative non-applicability route: existing prose evidence plus a
-        # path-specific explanation, never just a false flag/empty ledger. The
-        # Planner must also establish that the prose is not executable/config.
-        prose_only = all(Path(path).suffix.lower() in {".md", ".rst", ".txt", ".adoc"} for path in search_paths)
+        # Owner eligibility is necessary, but does not replace the explanation
+        # or the existing checks against behavioral obligations/executors.
         explained = any(path in closure["closure_summary"] for path in search_paths)
         explanation = closure["closure_summary"]
         for path in search_paths:
             explanation = explanation.replace(path, "")
-        if behavioral or not prose_only or not explained or len(explanation.split()) < 6:
+        if behavioral or not explained or len(explanation.split()) < 6:
             _impact_error("IMPACT_NOT_APPLICABLE_UNJUSTIFIED", field=field, message="Non-applicable READY requires a concrete prose-only explanation and no behavioral obligations or executors", actual=closure)
         return
 
@@ -590,7 +616,8 @@ def _validate_impact_closure(plan: dict[str, Any], *, workspace: Path) -> None:
 
 
 def validate_plan_artifact(
-    plan: dict[str, Any], *, workspace: Path, task_contract: dict[str, Any]
+    plan: dict[str, Any], *, workspace: Path, task_contract: dict[str, Any],
+    owner_allowed_paths: Sequence[str] = (),
 ) -> None:
     validate_task_contract(task_contract)
     required = set(PLANNER_SCHEMA["required"])
@@ -710,7 +737,7 @@ def validate_plan_artifact(
         require_type(item["reason"], str, field=f"unknowns[{index}].reason")
 
     status = plan["status"]
-    _validate_impact_closure(plan, workspace=workspace)
+    _validate_impact_closure(plan, workspace=workspace, owner_allowed_paths=owner_allowed_paths)
     if status == PlannerStatus.TASK_CONTRACT_INVALID.value:
         if alignment["status"] != "INVALID" or not alignment["reason"].strip():
             raise ArtifactContractError(code="TASK_CONTRACT_INVALID_WITHOUT_EVIDENCE", field="task_contract_alignment", message="TASK_CONTRACT_INVALID requires INVALID alignment and reason", expected="INVALID with reason", actual=alignment)
@@ -802,7 +829,10 @@ MANIFEST_REPAIR_EVIDENCE:
         timeout=timeout,
     )
     plan = _parse_planner_output(raw)
-    validate_plan_artifact(plan, workspace=workspace, task_contract=task_contract)
+    validate_plan_artifact(
+        plan, workspace=workspace, task_contract=task_contract,
+        owner_allowed_paths=owner_allowed_paths,
+    )
     unavailable = planner_capability_gaps(
         plan, available=available_verification_capabilities
     )
@@ -833,7 +863,10 @@ proof route только из available capabilities. Не заменяй нед
         timeout=timeout,
     )
     corrected = _parse_planner_output(corrected_raw)
-    validate_plan_artifact(corrected, workspace=workspace, task_contract=task_contract)
+    validate_plan_artifact(
+        corrected, workspace=workspace, task_contract=task_contract,
+        owner_allowed_paths=owner_allowed_paths,
+    )
     remaining = planner_capability_gaps(
         corrected, available=available_verification_capabilities
     )

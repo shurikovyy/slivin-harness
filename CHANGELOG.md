@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.0a22 — Owner-backed Planner impact applicability
+
+- Hardened the existing `planner.v5` non-applicable READY exception: a non-empty Controller-owned manifest `allowed_paths` boundary must consist entirely of existing safe regular prose files (`.md`, `.rst`, `.txt`, `.adoc`), with canonical targets inside the workspace and prose extensions. Search evidence must stay within those exact owner paths.
+- Planner-generated paths, sanitized behavioral declarations and persuasive closure prose cannot authorize the exception. Existing behavioral/state/runtime obligation checks and concrete summary requirements remain mandatory; genuine prose tasks without an owner boundary are conservatively rejected on this route.
+- Passed owner authority through initial and corrective Planner validation, redundant Controller validation and semantic replan. Added a fully sanitized adversarial bypass regression, path-boundary coverage and corrective/replan integration checks.
+- Raised Harness to `0.8.0a22`; Planner wire schema remains `planner.v5`, with other role protocols, consumer mapping, compiler, integrity and Final Gate semantics unchanged.
+
 ## 0.8.0a21 — Autonomous Planner Impact Closure
 
 - Upgraded only Planner to `planner.v5`, with mandatory strict typed `impact_closure`: changed contracts, concrete consumers, scope classifications, search evidence and closure summary before READY.

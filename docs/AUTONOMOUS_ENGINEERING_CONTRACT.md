@@ -133,10 +133,20 @@ Compiler сохраняет каждую строку `affected_consumers`; ни
 obligations. Follow-up findings сохраняются в полном Planner artifact; отдельный
 механизм обязательного final surfacing здесь ещё не реализован.
 
-`applicable=false` не требует fake consumer ledger. Консервативный маршрут для
-нетехнической/редакторской задачи требует search evidence по существующим текстовым
-документам (`.md`, `.rst`, `.txt`, `.adoc`), summary с evidence path и конкретным
-объяснением отсутствия behavioral impact. Механический минимум summary — хотя бы
+Для READY engineering/code task default — `applicable=true`. `applicable=false`
+не требует fake consumer ledger, но разрешён только при независимом основании:
+Controller передаёт непустой `owner_allowed_paths` из manifest `allowed_paths`.
+Каждый owner path обязан быть safe repo-relative существующим regular file с
+расширением `.md`, `.rst`, `.txt` или `.adoc`; canonical resolution остаётся внутри
+workspace и сохраняет prose extension. Directories, globs, отсутствующие файлы,
+code/config files, symlink/junction escape и смешанная prose/code boundary запрещают
+исключение. Search evidence paths должны быть subset этих конкретных owner paths.
+Planner-generated paths, очищенные declarations и длинное объяснение не создают
+authority. Даже genuine prose task без owner boundary не может получить READY с
+`applicable=false`: нужен applicable closure либо другой честный status.
+
+Этот маршрут также требует summary с evidence path и конкретным объяснением
+отсутствия behavioral impact. Механический минимум summary — хотя бы
 шесть слов объяснения помимо path. Planner обязан проверить, что текст не служит
 исполняемым/config/API/state contract; расширение файла само по себе этого не доказывает.
 Все четыре contract/consumer arrays, `affected_consumers`, risks, State Model

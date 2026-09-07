@@ -68,6 +68,7 @@ class TaskRunnerWorkflowIntegrationTests(unittest.TestCase):
         risk: str = "low",
         with_replan: bool = False,
         benchmark_fail: bool = False,
+        owner_allowed_paths: list[str] | None = None,
     ) -> Path:
         heldout_command = (
             "import sys; print('ORACLE_REACHED'); sys.exit(1)"
@@ -98,6 +99,7 @@ max_fix_cycles = 0
 max_replan_cycles = {1 if with_replan else 0}
 turn_timeout_seconds = 60
 require_clean_git = true
+allowed_paths = {json.dumps(owner_allowed_paths or [])}
 
 prompt = """
 Change target.txt from before to after.
@@ -125,6 +127,7 @@ timeout_seconds = 30
         benchmark_fail: bool = False,
         projected_jest: bool = False,
         planner_exception: PlannerCapabilityInfeasible | None = None,
+        owner_allowed_paths: list[str] | None = None,
     ) -> tuple[int, Path, str]:
         root = Path(tempfile.mkdtemp(prefix="slivin-main-workflow-"))
         repo = self.make_repo(root)
@@ -139,6 +142,7 @@ timeout_seconds = 30
             risk=risk,
             with_replan=with_replan,
             benchmark_fail=benchmark_fail,
+            owner_allowed_paths=owner_allowed_paths,
         )
         run_root = root / "run"
 
@@ -290,12 +294,17 @@ timeout_seconds = 30
             mock.patch.object(task_runner, "resolve_codex_cmd", return_value=Path(sys.executable)),
             mock.patch.object(task_runner, "run_task_contract_normalizer", side_effect=fake_task_contract),
             mock.patch.object(task_runner, "run_planner", side_effect=fake_planner),
+            mock.patch.object(task_runner, "validate_planner_artifact", wraps=task_runner.validate_planner_artifact) as planner_validation,
             mock.patch.object(task_runner, "run_evaluator", side_effect=fake_evaluator),
             mock.patch.object(task_runner, "run_implementer_report", side_effect=fake_implementer_report),
             contextlib.redirect_stdout(output),
             contextlib.redirect_stderr(output),
         ):
             result = task_runner.main([str(manifest)])
+        if owner_allowed_paths is not None:
+            self.assertEqual(planner_validation.call_count, 2 if with_replan else 1, output.getvalue())
+            for call in planner_validation.call_args_list:
+                self.assertEqual(call.kwargs["owner_allowed_paths"], owner_allowed_paths)
         return result, run_root, output.getvalue()
 
     def test_infeasible_corrected_plan_stops_before_contract_and_implementer(self) -> None:
@@ -360,7 +369,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a21")
+        self.assertEqual(build_identity["version"], "0.8.0a22")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)
@@ -551,6 +560,7 @@ timeout_seconds = 30
             benchmark=False,
             risk="medium",
             with_replan=True,
+            owner_allowed_paths=["target.txt", "reader.py"],
         )
         self.assertEqual(result, 0, output)
         self.assertTrue((run_root / "replan_01_rejected_candidate.patch").is_file())
