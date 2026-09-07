@@ -36,7 +36,7 @@ from slivin_harness.workspace import (
 
 PHASE7_VERSION = "phase7-final-gate.v1"
 PATCH_PROOF_VERSION = "patch-proof.v1"
-FINAL_ACCEPTANCE_VERSION = "final-acceptance.v2"
+FINAL_ACCEPTANCE_VERSION = "final-acceptance.v3"
 DELIVERY_RECORD_VERSION = "delivery-record.v2"
 HELDOUT_EVIDENCE_VERSION = "heldout-evidence.v2"
 BENCHMARK_ISOLATION_VERSION = "benchmark-isolation.v1"
@@ -1311,6 +1311,10 @@ def build_final_acceptance(
     reconstructed_verification: Mapping[str, Any],
     artifact_bindings: Sequence[Mapping[str, Any]],
     heldout_evidence: Mapping[str, Any] | None,
+    user_follow_up_report: Mapping[str, Any] | None = None,
+    user_follow_up_context: Mapping[str, Any] | None = None,
+    run_root: Path | None = None,
+    private_root: Path | None = None,
 ) -> dict[str, Any]:
     candidate_id = final_candidate.candidate_id
     if quality_reconciliation.get("status") != "QUALITY_GATE_RECONCILIATION_PASS":
@@ -1343,6 +1347,39 @@ def build_final_acceptance(
     elif heldout_evidence is not None:
         raise Phase7Error("Production final acceptance cannot contain held-out evidence")
 
+    from slivin_harness.handoff import (
+        USER_FOLLOW_UP_ARTIFACT, USER_FOLLOW_UP_VERSION, validate_user_follow_up_report,
+    )
+
+    if user_follow_up_report is None or user_follow_up_context is None or run_root is None or private_root is None:
+        raise Phase7Error("Final acceptance requires a valid user follow-up report and current Controller context")
+    expected_binding = {
+        "task_id": task_id, "mode": mode.value, "pipeline_profile": pipeline_profile,
+        "candidate_id": candidate_id, "attempt_id": quality_reconciliation["attempt_id"],
+        "revision_snapshot": quality_reconciliation["revision_snapshot"],
+    }
+    if any(user_follow_up_context.get(key) != value for key, value in expected_binding.items()):
+        raise Phase7Error("User follow-up Controller context does not match final acceptance")
+    if sorted(user_follow_up_context.get("changed_paths", ())) != sorted(final_candidate.changed_paths):
+        raise Phase7Error("User follow-up changed paths do not match final candidate")
+    validate_user_follow_up_report(user_follow_up_report, **user_follow_up_context)
+    try:
+        for root in (private_root, run_root):
+            path = root / USER_FOLLOW_UP_ARTIFACT
+            if not path.is_file() or not path.resolve().is_relative_to(root.resolve()):
+                raise Phase7Error("User follow-up requires contained regular artifact files")
+        private_payload = (private_root / USER_FOLLOW_UP_ARTIFACT).read_bytes()
+        public_payload = (run_root / USER_FOLLOW_UP_ARTIFACT).read_bytes()
+        if private_payload != public_payload:
+            raise Phase7Error("User follow-up authoritative/public mirror mismatch")
+        validate_user_follow_up_report(json.loads(private_payload), **user_follow_up_context)
+    except (OSError, ValueError) as exc:
+        raise Phase7Error("User follow-up requires intact private and public artifacts") from exc
+    digest = artifact_digest(run_root, private_root, USER_FOLLOW_UP_ARTIFACT)
+    bindings = [row for row in artifact_bindings if row.get("artifact") == USER_FOLLOW_UP_ARTIFACT]
+    if bindings != [digest]:
+        raise Phase7Error("User follow-up artifact digest binding is missing or invalid")
+
     return {
         "schema_version": FINAL_ACCEPTANCE_VERSION,
         "phase_version": PHASE7_VERSION,
@@ -1361,6 +1398,11 @@ def build_final_acceptance(
         "revision_snapshot": dict(quality_reconciliation["revision_snapshot"]),
         "stage_bindings": list(quality_reconciliation["stage_bindings"]),
         "artifact_bindings": list(artifact_bindings),
+        "user_follow_up": {
+            "artifact": USER_FOLLOW_UP_ARTIFACT, "schema_version": USER_FOLLOW_UP_VERSION,
+            "status": user_follow_up_report["status"], "count": user_follow_up_report["count"],
+            "fingerprint": user_follow_up_report["fingerprint"], "sha256": digest["sha256"],
+        },
         "patch": dict(patch_metadata),
         "patch_proof": dict(patch_proof),
         "reconstructed_verification": dict(reconstructed_verification),

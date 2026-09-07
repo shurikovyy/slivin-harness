@@ -7,7 +7,8 @@ Phase 7 завершает согласованный Step 0–7 quality-core. �
 ```text
 phase7-final-gate.v1
 patch-proof.v1
-final-acceptance.v2
+final-acceptance.v3
+user-follow-up.v1
 delivery-record.v2
 heldout-evidence.v2
 benchmark-isolation.v1
@@ -159,6 +160,59 @@ Git-control и runtime-projection guards. Public
 `reconstructed-verification.v1` содержит только статусы и IDs; hidden output и
 command diagnostics остаются private.
 
+## User Follow-up Handoff
+
+Сразу после final Implementer/Evaluator loop Controller наблюдает current candidate,
+повторно валидирует implementation impact и, в FULL, blind audit/Evaluator PASS.
+До quality reconciliation, held-out и packaging он строит `user-follow-up.v1`:
+
+```text
+schema_version, status, task_id, mode, pipeline_profile
+candidate_id, attempt_id, revision_snapshot
+source_bindings: plan / implementation impact / blind audit / evaluation fingerprints
+follow_ups, count, summary, fingerprint
+```
+
+Каждая запись содержит stable `FOLLOWUP-<16 hex>` ID, title, relation,
+reason_out_of_scope, suggested_next_task, repository paths/symbols/evidence,
+review_status и provenance (source, reference, disposition). Source priority для
+title: PLANNER → IMPLEMENTER → BLIND_EVALUATOR. Только точное совпадение
+relation/reason/suggested_follow_up после нормализации whitespace и sorted paths/
+symbols позволяет merge. Evidence объединяется как sorted distinct union;
+provenance сохраняется. Похожие формулировки не объединяются эвристически.
+
+FULL inventory включает current Planner, Implementer и blind related findings.
+Каждая source row требует Evaluator CONFIRMED_OUT_OF_SCOPE. Missing disposition,
+ACTUALLY_IN_SCOPE или UNSUPPORTED запрещают успешный handoff. FAST использует
+только Implementer findings с DECLARED_OUT_OF_SCOPE_FAST и явно сообщает, что
+independent Evaluator не запускался. Known current IN_SCOPE names/signatures
+не могут одновременно стать follow-ups. История rejected attempts не сканируется.
+Если существующий semantic replan создал Plan в FAST, его fingerprint остаётся
+в bindings; inventory и review_status всё равно остаются Implementer-only.
+
+`count == len(follow_ups)`; FOLLOW_UPS_PRESENT означает count > 0, NO_FOLLOW_UPS —
+count == 0. Нулевой report тоже обязателен. Controller сохраняет private authoritative
+copy и public immutable mirror через `write_once_authoritative_json()` и печатает:
+
+```text
+USER_FOLLOW_UP_REPORT: <public path>
+USER_FOLLOW_UP_COUNT: <N>
+USER_FOLLOW_UP: <id> | <bounded title> | NEXT: <bounded next task>
+```
+
+Каждая finding занимает одну bounded line без embedded newlines; полное evidence
+остаётся в JSON. Report связан с current candidate/attempt/revision snapshot и всеми
+current source fingerprints. Повторная валидация пересобирает inventory, обнаруживая
+даже удаление finding с пересчитанным fingerprint. Пути проходят shared safe-relative,
+regular-file/existence/canonical-containment validation.
+
+Report существует до hidden held-out и не содержит его output/assertions. Он остаётся
+в Final Gate evidence при HARNESS_TASK_PASS, HARNESS_BENCHMARK_PASS,
+HARNESS_BENCHMARK_SEMANTIC_FAIL, BENCHMARK_INVALID, reconstructed verification
+failure и RESULT_DELIVERY_BLOCKED/FAIL. Failures до завершения discovery не требуют
+фабриковать handoff. Это run artifact: он не входит в changed project paths,
+`candidate.patch` или apply_to_source.
+
 ## 3. Immutable final acceptance
 
 `final_acceptance.json` создаётся только после patch reconstruction и
@@ -182,7 +236,14 @@ reconstructed verification proof
 held-out evidence — только benchmark
 ```
 
-Это `final-acceptance.v2`: он не дублирует все логи и reasoning, а связывает уже существующие доказательства.
+Это `final-acceptance.v3`: он не дублирует все логи и reasoning, а связывает уже существующие доказательства.
+
+Acceptance дополнительно требует valid `user_follow_up_report.json`, даже при count=0:
+schema/fingerprint, candidate/attempt/revisions, current source bindings, completeness,
+status/count и совпадение private/public copies повторно проверяются. Обязательный
+`user_follow_up` содержит artifact, schema_version, status, count, fingerprint и sha256;
+этот же digest входит в `artifact_bindings`. Missing, stale или tampered handoff
+запрещает acceptance, не меняя остальных Final Gate условий.
 
 ## 4. Result delivery
 

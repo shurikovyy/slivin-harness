@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import dataclasses
 import io
 import json
 import subprocess
@@ -17,6 +18,9 @@ from slivin_harness.planner import PlannerCapabilityInfeasible
 from slivin_harness.protocol import EVALUATOR_PROTOCOL_VERSION
 from slivin_harness.workflow import StageResultCode, StageState
 from test_protocol import attach_post_patch_impact, valid_blind_audit, valid_pass, valid_plan, valid_task_contract, write_plan_evidence
+from test_user_follow_up_handoff import related_finding, write_related_evidence
+from slivin_harness.handoff import USER_FOLLOW_UP_ARTIFACT
+from slivin_harness.phase7 import ReconstructedVerificationResult
 
 
 def git(repo: Path, *args: str) -> str:
@@ -56,6 +60,7 @@ class TaskRunnerWorkflowIntegrationTests(unittest.TestCase):
         git(repo, "config", "user.name", "Test")
         git(repo, "config", "user.email", "test@example.invalid")
         write_plan_evidence(repo)
+        write_related_evidence(repo)
         (repo / "reader_b.py").write_text("from reader import read_target\n\ndef read_summary():\n    return 'Value: ' + read_target()\n", encoding="utf-8")
         git(repo, "add", "-A")
         git(repo, "commit", "-m", "baseline")
@@ -136,6 +141,9 @@ timeout_seconds = 30
         implementer_replan: bool = False,
         check_repair: bool = False,
         reuse_old_impact: bool = False,
+        related: bool = False,
+        blind_related: bool = False,
+        terminal_failure: str | None = None,
     ) -> tuple[int, Path, str]:
         root = Path(tempfile.mkdtemp(prefix="slivin-main-workflow-"))
         repo = self.make_repo(root)
@@ -167,6 +175,8 @@ timeout_seconds = 30
             if planner_exception is not None:
                 raise planner_exception
             plan = valid_plan()
+            if related:
+                plan["impact_closure"]["related_out_of_scope"] = [related_finding()]
             if promote_not_affected:
                 plan["impact_closure"]["not_affected_consumers"] = [{
                     "name": "Integration sibling", "paths": ["reader_b.py"], "symbols": ["read_summary"],
@@ -181,6 +191,10 @@ timeout_seconds = 30
             nonlocal evaluator_calls
             evaluator_calls += 1
             audit = valid_blind_audit(candidate_id=kwargs["candidate_id"], changed_paths=kwargs["changed_paths"])
+            if blind_related:
+                row = related_finding()
+                row.update(impact_id="RELATED-1", name="Independent writer issue", relation="The writer emits an independent diagnostic value.")
+                audit["impact_analysis"]["related_out_of_scope"] = [row]
             blind_callback = kwargs.get("on_blind_audit")
             if blind_callback:
                 blind_callback(audit)
@@ -282,6 +296,8 @@ timeout_seconds = 30
                 report["registered_checks"] = []
                 report["discovered_obligations"] = []
             attach_post_patch_impact(report, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace))
+            if related and kwargs["plan"] is None:
+                report["post_patch_impact"]["related_out_of_scope"] = [related_finding()]
             for row in report["post_patch_impact"]["in_scope_consumers"] + report["post_patch_impact"]["new_risks"]:
                 if row["name"] == "Integration sibling":
                     row.update(paths=["reader_b.py"], symbols=["read_summary"])
@@ -301,7 +317,26 @@ timeout_seconds = 30
             if check_repair and kwargs.get("label") == "CHECKS #1":
                 results[0].returncode = 1
                 results[0].output = "A synthetic Controller assertion requires the reader to be reviewed."
+            if terminal_failure == "heldout" and kwargs.get("label") == "HELD-OUT":
+                results[0].returncode = 2
+                results[0].output = "Synthetic held-out infrastructure unavailable."
             return results
+
+        original_reconstruction = task_runner.run_authoritative_reconstructed_verification
+        original_delivery = task_runner.deliver_candidate_transaction
+
+        def reconstructed_verification(**kwargs):
+            if terminal_failure == "reconstruction":
+                return ReconstructedVerificationResult(
+                    public={"status": "FAIL", "reason_code": "SYNTHETIC_RECONSTRUCTION_FAILURE"}, private={},
+                )
+            return original_reconstruction(**kwargs)
+
+        def delivery(**kwargs):
+            result = original_delivery(**kwargs)
+            if terminal_failure in {"RESULT_DELIVERY_BLOCKED", "RESULT_DELIVERY_FAIL"}:
+                return dataclasses.replace(result, status=terminal_failure, reason_code="SYNTHETIC_DELIVERY_FAILURE")
+            return result
 
         output = io.StringIO()
         local_config = {
@@ -335,6 +370,8 @@ timeout_seconds = 30
             mock.patch.object(task_runner, "run_evaluator", side_effect=fake_evaluator),
             mock.patch.object(task_runner, "run_implementer_report", side_effect=fake_implementer_report),
             mock.patch.object(task_runner, "run_checks", side_effect=controller_checks),
+            mock.patch.object(task_runner, "run_authoritative_reconstructed_verification", side_effect=reconstructed_verification),
+            mock.patch.object(task_runner, "deliver_candidate_transaction", side_effect=delivery),
             contextlib.redirect_stdout(output),
             contextlib.redirect_stderr(output),
         ):
@@ -385,6 +422,7 @@ timeout_seconds = 30
             StageState.PASSED.value,
         )
         self.assertIn("HARNESS_TASK_PASS", output)
+        self.assert_handoff(run_root, output, count=0)
         self.assertTrue((run_root / "candidate.patch").is_file())
         self.assertTrue((run_root / "patch_proof.json").is_file())
         self.assertTrue((run_root / "reconstructed_verification.json").is_file())
@@ -392,7 +430,7 @@ timeout_seconds = 30
         self.assertTrue((run_root / "final_acceptance.json").is_file())
         self.assertTrue((run_root / "delivery_record.json").is_file())
         acceptance = json.loads((run_root / "final_acceptance.json").read_text(encoding="utf-8"))
-        self.assertEqual(acceptance["schema_version"], "final-acceptance.v2")
+        self.assertEqual(acceptance["schema_version"], "final-acceptance.v3")
         self.assertEqual(acceptance["patch_proof"]["status"], "PATCH_RECONSTRUCTION_PASS")
         self.assertEqual(acceptance["reconstructed_verification"]["status"], "PASS")
         self.assertEqual(
@@ -407,7 +445,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a25")
+        self.assertEqual(build_identity["version"], "0.8.0a26")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)
@@ -425,6 +463,7 @@ timeout_seconds = 30
     def test_full_production_run_executes_planner_runtime_skip_and_evaluator(self) -> None:
         result, run_root, output = self.run_case(benchmark=False, risk="medium")
         self.assertEqual(result, 0, output)
+        self.assert_handoff(run_root, output, count=0)
         state = json.loads((run_root / "run_state.json").read_text(encoding="utf-8"))
         self.assertEqual(
             state["stages"]["planner"]["result_code"],
@@ -453,6 +492,7 @@ timeout_seconds = 30
     def test_benchmark_run_has_distinct_terminal_status_and_heldout_artifact(self) -> None:
         result, run_root, output = self.run_case(benchmark=True)
         self.assertEqual(result, 0, output)
+        self.assert_handoff(run_root, output, count=0)
         self.assertLess(
             output.index("STATIC_TOOLCHAIN_PREFLIGHT_PASS"),
             output.index("=== USER TASK CONTRACT ==="),
@@ -528,6 +568,7 @@ timeout_seconds = 30
         result, run_root, output = self.run_case(
             benchmark=True,
             benchmark_fail=True,
+            related=True,
         )
         self.assertEqual(result, 1, output)
         state = json.loads((run_root / "run_state.json").read_text(encoding="utf-8"))
@@ -541,6 +582,68 @@ timeout_seconds = 30
         self.assertFalse((run_root / "final_acceptance.json").exists())
         self.assertIn("HARNESS_BENCHMARK_SEMANTIC_FAIL", output)
         self.assertNotIn("\nHARNESS_BENCHMARK_FAIL\n", output)
+        report = self.assert_handoff(run_root, output, count=1)
+        self.assertNotIn("ORACLE_REACHED", json.dumps(report))
+        self.assertNotIn("heldout", json.dumps(report))
+        self.assertLess(output.index("USER_FOLLOW_UP_COUNT"), output.index("HELDOUT_STATUS:"))
+
+    def assert_handoff(self, run_root, output, *, count):
+        public = run_root / USER_FOLLOW_UP_ARTIFACT
+        private = run_root / "controller_private" / USER_FOLLOW_UP_ARTIFACT
+        self.assertEqual(public.read_bytes(), private.read_bytes())
+        report = json.loads(public.read_text(encoding="utf-8"))
+        self.assertEqual(report["count"], count)
+        self.assertIn(f"USER_FOLLOW_UP_REPORT: {public.resolve()}", output)
+        self.assertIn(f"USER_FOLLOW_UP_COUNT: {count}", output)
+        state = json.loads((run_root / "run_state.json").read_text(encoding="utf-8"))
+        self.assertIn(USER_FOLLOW_UP_ARTIFACT, state["stages"]["final_gate"]["artifacts"])
+        return report
+
+    def test_full_follow_up_is_delivered_without_entering_project_patch(self):
+        result, run_root, output = self.run_case(benchmark=False, risk="medium", related=True, blind_related=True)
+        self.assertEqual(result, 0, output)
+        report = self.assert_handoff(run_root, output, count=2)
+        acceptance = json.loads((run_root / "final_acceptance.json").read_text(encoding="utf-8"))
+        self.assertEqual(acceptance["user_follow_up"]["fingerprint"], report["fingerprint"])
+        bindings = {row["artifact"]: row for row in acceptance["artifact_bindings"]}
+        self.assertEqual(acceptance["user_follow_up"]["sha256"], bindings[USER_FOLLOW_UP_ARTIFACT]["sha256"])
+        for row in report["follow_ups"]:
+            self.assertEqual(row["review_status"], "CONFIRMED_OUT_OF_SCOPE")
+            self.assertIn(f"USER_FOLLOW_UP: {row['follow_up_id']} | {row['title']} | NEXT: {row['suggested_next_task']}", output)
+        sources = [row["source"] for row in report["follow_ups"][0]["provenance"] + report["follow_ups"][1]["provenance"]]
+        self.assertCountEqual(sources, ["PLANNER", "IMPLEMENTER", "BLIND_EVALUATOR"])
+        self.assertNotIn(USER_FOLLOW_UP_ARTIFACT, (run_root / "candidate.patch").read_text(encoding="utf-8"))
+        self.assertNotIn(USER_FOLLOW_UP_ARTIFACT, acceptance["changed_paths"])
+        workspaces = list((run_root.parent / "workspaces").rglob("target.txt"))
+        self.assertTrue(workspaces)
+        for target in workspaces:
+            self.assertFalse((target.parent / USER_FOLLOW_UP_ARTIFACT).exists())
+
+    def test_fast_follow_up_is_delivered_as_implementer_declaration(self):
+        result, run_root, output = self.run_case(benchmark=False, related=True)
+        self.assertEqual(result, 0, output)
+        report = self.assert_handoff(run_root, output, count=1)
+        self.assertEqual(report["follow_ups"][0]["review_status"], "DECLARED_OUT_OF_SCOPE_FAST")
+        self.assertFalse((run_root / "evaluation_01.json").exists())
+
+    def test_fast_semantic_replan_preserves_implementer_only_handoff(self):
+        result, run_root, output = self.run_case(benchmark=False, related=True, implementer_replan=True)
+        self.assertEqual(result, 0, output)
+        report = self.assert_handoff(run_root, output, count=1)
+        self.assertIsNotNone(report["source_bindings"]["plan_fingerprint"])
+        self.assertIsNone(report["source_bindings"]["evaluation_fingerprint"])
+        self.assertEqual(report["follow_ups"][0]["review_status"], "DECLARED_OUT_OF_SCOPE_FAST")
+        self.assertEqual([row["source"] for row in report["follow_ups"][0]["provenance"]], ["IMPLEMENTER"])
+        self.assertTrue((run_root / "replan_01_reset.json").exists())
+        self.assertFalse((run_root / "evaluation_01.json").exists())
+
+    def test_follow_up_survives_later_final_gate_failures(self):
+        for failure in ("heldout", "reconstruction", "RESULT_DELIVERY_BLOCKED", "RESULT_DELIVERY_FAIL"):
+            with self.subTest(failure=failure):
+                result, run_root, output = self.run_case(benchmark=failure == "heldout", related=True, terminal_failure=failure)
+                self.assertEqual(result, 2, output)
+                self.assert_handoff(run_root, output, count=1)
+                self.assertEqual((run_root / "final_acceptance.json").exists(), failure.startswith("RESULT_DELIVERY"))
 
     def test_discovery_recompiles_active_contract_and_verification_plan(self) -> None:
         result, run_root, output = self.run_case(

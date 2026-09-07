@@ -2,7 +2,7 @@
 
 > Этот файл генерируется из `slivin_harness/workflow.py`. Не редактируйте таблицы вручную; запустите `./py tools/render_workflow_docs.py`.
 
-- Harness: **0.8.0a25**
+- Harness: **0.8.0a26**
 - Workflow schema: **workflow.v6**
 - Реализуемая фаза: **phase7-final-gate-delivery-benchmark**
 
@@ -124,7 +124,8 @@ machine-readable workflow и versioned Run State
 + Controller evidence audit without Planner/Implementer prose
 + Final Gate quality reconciliation bound to one candidate/revision vector
 + patch reconstruction from the recorded baseline
-+ immutable final-acceptance.v2 and delivery-record.v2
++ mandatory user-follow-up.v1 before held-out with public immutable delivery
++ immutable final-acceptance.v3 binding user handoff and delivery-record.v2
 + transactional apply_to_source with source guards and safe rollback
 + standalone sanitized historical benchmark repository
 + classified hidden held-out exam without repair feedback

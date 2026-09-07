@@ -689,72 +689,19 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
         )
 
     def test_final_acceptance_is_built_after_patch_proof(self) -> None:
-        candidate = SimpleNamespace(
-            baseline_sha="b",
-            workspace_head="w",
-            candidate_id="c",
-            changed_paths=("a.txt",),
-        )
-        payload = build_final_acceptance(
-            task_id="T",
-            harness_version="0.8.0a12",
-            workflow_version="workflow.v6",
-            mode=WorkflowMode.PRODUCTION,
-            pipeline_profile="FULL",
-            result_mode="keep_worktree",
-            source_baseline_sha="source",
-            final_candidate=candidate,
-            quality_reconciliation={
-                "status": "QUALITY_GATE_RECONCILIATION_PASS",
-                "attempt_id": 1,
-                "candidate_id": "c",
-                "revision_snapshot": {},
-                "stage_bindings": [],
-            },
-            patch_metadata={"sha256": "p", "path": "candidate.patch"},
-            patch_proof={
-                "status": "PATCH_RECONSTRUCTION_PASS",
-                "patch_sha256": "p",
-                "expected_candidate_id": "c",
-                "reconstructed_candidate_id": "c",
-            },
-            reconstructed_verification={
-                "status": "PASS",
-                "expected_candidate_id": "c",
-                "reconstructed_candidate_id": "c",
-            },
-            artifact_bindings=[],
-            heldout_evidence=None,
-        )
-        self.assertEqual(payload["schema_version"], FINAL_ACCEPTANCE_VERSION)
-        self.assertEqual(payload["attempt_id"], 1)
-        self.assertEqual(payload["patch_proof"]["status"], "PATCH_RECONSTRUCTION_PASS")
-
-        bad_proof = dict(payload["patch_proof"])
-        bad_proof["reconstructed_candidate_id"] = "other"
-        with self.assertRaisesRegex(Phase7Error, "reconstructed candidate"):
-            build_final_acceptance(
-                task_id="T",
-                harness_version="0.8.0a12",
-                workflow_version="workflow.v6",
-                mode=WorkflowMode.PRODUCTION,
-                pipeline_profile="FULL",
-                result_mode="keep_worktree",
-                source_baseline_sha="source",
-                final_candidate=candidate,
-                quality_reconciliation={
-                    "status": "QUALITY_GATE_RECONCILIATION_PASS",
-                    "attempt_id": 1,
-                    "candidate_id": "c",
-                    "revision_snapshot": {},
-                    "stage_bindings": [],
-                },
-                patch_metadata={"sha256": "p", "path": "candidate.patch"},
-                patch_proof=bad_proof,
-                reconstructed_verification=payload["reconstructed_verification"],
-                artifact_bindings=[],
-                heldout_evidence=None,
-            )
+        from test_user_follow_up_handoff import acceptance_context, handoff_context
+        with tempfile.TemporaryDirectory(prefix="slivin-acceptance-") as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            args = acceptance_context(handoff_context(workspace), root / "run")
+            payload = build_final_acceptance(**args)
+            self.assertEqual(payload["schema_version"], FINAL_ACCEPTANCE_VERSION)
+            self.assertEqual(payload["attempt_id"], 1)
+            self.assertEqual(payload["patch_proof"]["status"], "PATCH_RECONSTRUCTION_PASS")
+            args["patch_proof"]["reconstructed_candidate_id"] = "other"
+            with self.assertRaisesRegex(Phase7Error, "reconstructed candidate"):
+                build_final_acceptance(**args)
 
 
 if __name__ == "__main__":

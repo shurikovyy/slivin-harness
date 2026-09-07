@@ -130,8 +130,8 @@ capabilities сравниваются как множество. Это наме
 Compiler сохраняет каждую строку `affected_consumers`; ни один IN_SCOPE consumer
 не может быть потерян до компиляции. Число consumers не ограничено искусственным
 порогом компактности. NOT_AFFECTED и RELATED_OUT_OF_SCOPE не компилируются в
-obligations. Follow-up findings сохраняются в полном Planner artifact; отдельный
-механизм обязательного final surfacing здесь ещё не реализован.
+obligations. Follow-up findings сохраняются в полном Planner artifact и входят
+в обязательный Controller-owned user handoff текущей финальной модели.
 
 Для READY engineering/code task default — `applicable=true`. `applicable=false`
 не требует fake consumer ledger, но разрешён только при независимом основании:
@@ -262,7 +262,29 @@ Candidate change
 Перед Phase B Controller повторно проверяет candidate/Plan/Contract/revision binding
 implementation-impact-closure. FAST policy не меняется и Evaluator не запускается.
 
-Mandatory user-facing RELATED_OUT_OF_SCOPE delivery остаётся следующей подзадачей.
+## User follow-up delivery
+
+IN_SCOPE → solve now. RELATED_OUT_OF_SCOPE → preserve → independently challenge
+where Evaluator exists → mandatory user follow-up delivery → suggested next task.
+User is not responsible for reading internal artifacts to discover follow-up work.
+Пользователь получает описание проблемы, её связь с задачей, причину исключения из
+текущего scope, repository paths/symbols/evidence и конкретную следующую задачу.
+
+Controller создаёт `user-follow-up.v1` в private authoritative copy и public immutable
+`user_follow_up_report.json` после final agent loop и до held-out. Console всегда
+показывает путь и count, в том числе 0, а для каждой finding — title и next task.
+FULL использует только current Planner/Implementer/blind findings с независимой
+Evaluator disposition CONFIRMED_OUT_OF_SCOPE. FAST не запускает Evaluator и честно
+маркирует Implementer findings DECLARED_OUT_OF_SCOPE_FAST.
+
+Дедупликация разрешена только по точной нормализованной relation/reason/next-task
+и paths/symbols; evidence и provenance объединяются. Название само по себе не
+доказывает тождество. Current IN_SCOPE obligation нельзя спрятать в follow-up.
+Rejected attempts не добавляются в final inventory. Candidate, attempt, revisions
+и source fingerprints привязаны к report; stale, tampered или неполный handoff
+запрещает `final-acceptance.v3`, даже при count=0. Hidden held-out output не является
+источником handoff. Report сохраняется при последующем held-out/reconstruction/
+delivery failure и не входит в project patch.
 
 ## Definition of COMPLETE
 

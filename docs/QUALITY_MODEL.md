@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a25 — Phase 7
+# Модель качества Slivin Harness 0.8.0a26 — Phase 7
 
 Нормативный autonomy contract: **[AUTONOMOUS_ENGINEERING_CONTRACT.md](AUTONOMOUS_ENGINEERING_CONTRACT.md)**.
 User scope задаёт observable результат и explicit ограничения; technical impact
@@ -126,7 +126,7 @@ Controller-normalized `implementation-impact-closure.v1` привязан к can
 Planner/Contract fingerprints, changed paths и revision binding. Это доказательство
 структуры, согласованности и актуальности declarations; оно не доказывает истинность
 semantic evidence или исчерпывающий discovery. Evaluator независимо challenge-ит эти
-declarations; обязательный final surfacing follow-ups ещё не реализован.
+declarations. Controller доставляет current related findings пользователю через обязательный `user-follow-up.v1` до held-out, включая valid zero report. FULL требует независимого CONFIRMED_OUT_OF_SCOPE; FAST явно сообщает об отсутствии Evaluator review.
 
 Self-verify остаётся assertion builder-а, а не финальным authority.
 
@@ -293,7 +293,11 @@ projection должны остаться pristine; иначе `reconstructed-ver
 
 ### Immutable acceptance
 
-`final-acceptance.v2` создаётся один раз после patch proof и reconstructed verification PASS. Он содержит artifact bindings и patch SHA-256, но не дублирует reasoning/logs.
+`final-acceptance.v3` создаётся один раз после patch proof и reconstructed verification PASS. Он содержит artifact bindings и patch SHA-256, но не дублирует reasoning/logs.
+
+Обязательный `user_follow_up` связывает current `user-follow-up.v1` через fingerprint
+и SHA-256 в artifact bindings. Даже count=0 требует valid private/public report.
+Missing, tampered, stale или потерявший current related finding handoff запрещает acceptance.
 
 ### Delivery
 
@@ -399,7 +403,8 @@ phase5-contract-runtime.v1
 phase6-runtime-evaluator.v1
 phase7-final-gate.v1
 patch-proof.v1
-final-acceptance.v2
+final-acceptance.v3
+user-follow-up.v1
 delivery-record.v2
 heldout-evidence.v2
 benchmark-isolation.v1

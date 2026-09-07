@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a25
+# Документация Slivin Harness 0.8.0a26
 
-Актуальная версия: **0.8.0a25 — Blind contract gap replan routing**.
+Актуальная версия: **0.8.0a26 — User Follow-up Handoff**.
 
 Основные документы:
 
@@ -53,7 +53,8 @@ controller-plane.v1
 execution-broker.v1
 phase7-final-gate.v1
 patch-proof.v1
-final-acceptance.v2
+final-acceptance.v3
+user-follow-up.v1
 delivery-record.v2
 heldout-evidence.v2
 benchmark-isolation.v1

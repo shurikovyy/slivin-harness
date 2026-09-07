@@ -485,6 +485,7 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
         PATCH_PROOF_VERSION,
         PHASE7_VERSION,
     )
+    from slivin_harness.handoff import USER_FOLLOW_UP_VERSION
     from slivin_harness.protocol import (
         EVALUATOR_PROTOCOL_VERSION,
         PLANNER_PROTOCOL_VERSION,
@@ -521,6 +522,7 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
             "phase7": PHASE7_VERSION,
             "patch_proof": PATCH_PROOF_VERSION,
             "final_acceptance": FINAL_ACCEPTANCE_VERSION,
+            "user_follow_up": USER_FOLLOW_UP_VERSION,
             "delivery_record": DELIVERY_RECORD_VERSION,
             "heldout_evidence": HELDOUT_EVIDENCE_VERSION,
             "benchmark_isolation": BENCHMARK_ISOLATION_VERSION,
@@ -723,7 +725,8 @@ machine-readable workflow и versioned Run State
 + Controller evidence audit without Planner/Implementer prose
 + Final Gate quality reconciliation bound to one candidate/revision vector
 + patch reconstruction from the recorded baseline
-+ immutable final-acceptance.v2 and delivery-record.v2
++ mandatory user-follow-up.v1 before held-out with public immutable delivery
++ immutable final-acceptance.v3 binding user handoff and delivery-record.v2
 + transactional apply_to_source with source guards and safe rollback
 + standalone sanitized historical benchmark repository
 + classified hidden held-out exam without repair feedback

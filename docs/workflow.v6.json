@@ -1,6 +1,6 @@
 {
   "schema_version": "workflow.v6",
-  "harness_version": "0.8.0a25",
+  "harness_version": "0.8.0a26",
   "phase": "phase7-final-gate-delivery-benchmark",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",
@@ -26,7 +26,8 @@
     "phase6": "phase6-runtime-evaluator.v1",
     "phase7": "phase7-final-gate.v1",
     "patch_proof": "patch-proof.v1",
-    "final_acceptance": "final-acceptance.v2",
+    "final_acceptance": "final-acceptance.v3",
+    "user_follow_up": "user-follow-up.v1",
     "delivery_record": "delivery-record.v2",
     "heldout_evidence": "heldout-evidence.v2",
     "benchmark_isolation": "benchmark-isolation.v1"

@@ -320,11 +320,13 @@ Do not edit `WORKFLOW.md` or `workflow.v6.json` manually.
 После `EVALUATION_PASS` Controller:
 
 ```text
-reconciles one candidate/revision vector
+persists current user-follow-up.v1 and prints report/count before held-out
+→ reconciles one candidate/revision vector
 → builds candidate.patch through a private isolated index
 → reconstructs candidate from clean baseline
 → materializes authoritative proof runtime and replays static/repair/held-out checks
-→ creates immutable final-acceptance.v2
+→ validates current user-follow-up.v1 and binds its digest
+→ creates immutable final-acceptance.v3
 → delivers via keep_worktree or transactional apply_to_source
 ```
 
@@ -344,3 +346,18 @@ one passing historical trial is not proof of universal reliability.
 ```
 
 После Windows self-check следующая команда проверки качества — полный historical `_90` trial, а не новая фаза разработки.
+
+## Related follow-up work
+
+После final discovery Controller всегда печатает `USER_FOLLOW_UP_REPORT` и
+`USER_FOLLOW_UP_COUNT`, даже если count=0. При наличии findings каждая bounded
+`USER_FOLLOW_UP` line содержит title и `NEXT` — отдельную рекомендуемую задачу.
+Полные paths/symbols/evidence, причина связи с исходным intent и причина исключения
+из текущего scope находятся в публичном immutable `user_follow_up_report.json`.
+Пользователь не обязан искать follow-ups в Plan/Implementer/blind artifacts.
+
+FULL rows имеют `CONFIRMED_OUT_OF_SCOPE` после независимого Evaluator challenge.
+FAST rows имеют `DECLARED_OUT_OF_SCOPE_FAST`: Evaluator в этом profile не запускался.
+Report сохраняется при последующем held-out, reconstruction или delivery failure;
+его наличие само по себе не означает acceptance текущего fix. Handoff не применяется
+к source repo и не входит в `candidate.patch`.

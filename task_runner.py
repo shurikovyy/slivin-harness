@@ -86,6 +86,9 @@ from slivin_harness.phase6 import (
     validate_contract_closure_record,
     validate_runtime_scenario_commands,
 )
+from slivin_harness.handoff import (
+    USER_FOLLOW_UP_ARTIFACT, build_user_follow_up_report, user_follow_up_console_lines,
+)
 from slivin_harness.phase7 import (
     Phase7Error,
     artifact_digest,
@@ -3003,6 +3006,8 @@ def main(argv: list[str] | None = None) -> int:
             active_contract_closure_artifact: str | None = None
             active_implementation_impact: dict | None = None
             active_implementation_impact_artifact: str | None = None
+            blind_audit: dict | None = None
+            evaluation: dict | None = None
             active_runtime_evidence: dict = {
                 "protocol_version": "runtime-evidence.v1",
                 "status": StageResultCode.RUNTIME_VERIFICATION_SKIPPED.value,
@@ -4559,6 +4564,31 @@ def main(argv: list[str] | None = None) -> int:
         changed_paths = list(final_candidate_before.changed_paths)
         enforce_allowed_paths(changed_paths, allowed_paths)
 
+        def current_follow_up_context():
+            return dict(
+                task_id=manifest["task_id"], mode=workflow_mode.value,
+                pipeline_profile=pipeline_profile.value,
+                candidate_id=final_candidate_before.candidate_id,
+                attempt_id=int(run_state.data["attempt_id"]),
+                revision_snapshot=dict(run_state.data["revisions"]),
+                workspace=workspace, changed_paths=collect_changed_paths(workspace),
+                plan=plan, implementation_contract=implementation_contract,
+                implementation_impact_closure=active_implementation_impact,
+                revision_binding=run_state.verification_binding(
+                    candidate_id=final_candidate_before.candidate_id,
+                    check_registry_digest=check_registry.digest(),
+                ),
+                blind_audit=blind_audit, evaluation=evaluation,
+                owner_allowed_paths=allowed_paths,
+            )
+
+        user_follow_up_report = build_user_follow_up_report(**current_follow_up_context())
+        user_follow_up_path = recorder.write_once_authoritative_json(
+            USER_FOLLOW_UP_ARTIFACT, user_follow_up_report,
+        )
+        for line in user_follow_up_console_lines(user_follow_up_report, user_follow_up_path):
+            print(line)
+
         quality_reconciliation = reconcile_quality_gate(
             run_state_data=run_state.data,
             final_candidate=final_candidate_before,
@@ -4579,7 +4609,7 @@ def main(argv: list[str] | None = None) -> int:
                     outcome=WorkflowOutcome.INVALID,
                     result_code=StageResultCode.BENCHMARK_INVALID,
                     reason_code="HELDOUT_CHECKS_MISSING",
-                    artifacts=(quality_reconciliation_artifact,),
+                    artifacts=(quality_reconciliation_artifact, USER_FOLLOW_UP_ARTIFACT),
                 )
                 print(StageResultCode.BENCHMARK_INVALID.value)
                 return 2
@@ -4636,6 +4666,7 @@ def main(argv: list[str] | None = None) -> int:
                     reason_code=reason_code,
                     artifacts=(
                         quality_reconciliation_artifact,
+                        USER_FOLLOW_UP_ARTIFACT,
                         *heldout_artifacts,
                         "candidate_identity_current.json",
                     ),
@@ -4744,6 +4775,7 @@ def main(argv: list[str] | None = None) -> int:
                 reason_code=reconstruction_reason,
                 artifacts=(
                     quality_reconciliation_artifact,
+                    USER_FOLLOW_UP_ARTIFACT,
                     patch_proof_artifact,
                     reconstructed_verification_artifact,
                 ),
@@ -4758,6 +4790,7 @@ def main(argv: list[str] | None = None) -> int:
         evidence_names.extend(
             [
                 quality_reconciliation_artifact,
+                USER_FOLLOW_UP_ARTIFACT,
                 patch_proof_artifact,
                 reconstructed_verification_artifact,
                 *heldout_artifacts,
@@ -4791,6 +4824,9 @@ def main(argv: list[str] | None = None) -> int:
             reconstructed_verification=reconstructed_verification.public,
             artifact_bindings=artifact_bindings,
             heldout_evidence=heldout_evidence,
+            user_follow_up_report=user_follow_up_report,
+            user_follow_up_context=current_follow_up_context(),
+            run_root=recorder.root, private_root=recorder.private_root,
         )
         final_acceptance_artifact = "final_acceptance.json"
         recorder.write_once_authoritative_json(
@@ -4819,6 +4855,7 @@ def main(argv: list[str] | None = None) -> int:
 
         final_artifacts = [
             "candidate_identity_current.json",
+            USER_FOLLOW_UP_ARTIFACT,
             "candidate.patch",
             quality_reconciliation_artifact,
             patch_proof_artifact,

@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from slivin_harness import __version__
+from slivin_harness.handoff import USER_FOLLOW_UP_VERSION
 from slivin_harness.implementer import IMPLEMENTER_PROTOCOL_VERSION, IMPLEMENTATION_CONTRACT_VERSION
 from slivin_harness.control_plane import CONTROL_PLANE_VERSION
 from slivin_harness.execution import EXECUTION_BROKER_VERSION
@@ -118,7 +119,7 @@ def _check_one_h1(path: Path) -> None:
 
 
 def main() -> int:
-    _assert(__version__ == "0.8.0a25", f"Unexpected Harness version: {__version__}")
+    _assert(__version__ == "0.8.0a26", f"Unexpected Harness version: {__version__}")
     _assert(MANIFEST_VERSION == 2, f"Unexpected manifest version: {MANIFEST_VERSION}")
     _assert(PLANNER_PROTOCOL_VERSION == "planner.v5", PLANNER_PROTOCOL_VERSION)
     _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v3", IMPLEMENTATION_CONTRACT_VERSION)
@@ -143,7 +144,8 @@ def main() -> int:
     _assert(BLIND_AUDIT_VERSION == "blind-audit.v2", BLIND_AUDIT_VERSION)
     _assert(PHASE7_VERSION == "phase7-final-gate.v1", PHASE7_VERSION)
     _assert(PATCH_PROOF_VERSION == "patch-proof.v1", PATCH_PROOF_VERSION)
-    _assert(FINAL_ACCEPTANCE_VERSION == "final-acceptance.v2", FINAL_ACCEPTANCE_VERSION)
+    _assert(FINAL_ACCEPTANCE_VERSION == "final-acceptance.v3", FINAL_ACCEPTANCE_VERSION)
+    _assert(USER_FOLLOW_UP_VERSION == "user-follow-up.v1", USER_FOLLOW_UP_VERSION)
     _assert(DELIVERY_RECORD_VERSION == "delivery-record.v2", DELIVERY_RECORD_VERSION)
     _assert(HELDOUT_EVIDENCE_VERSION == "heldout-evidence.v2", HELDOUT_EVIDENCE_VERSION)
     _assert(BENCHMARK_ISOLATION_VERSION == "benchmark-isolation.v1", BENCHMARK_ISOLATION_VERSION)
@@ -182,7 +184,7 @@ def main() -> int:
         for path in [ROOT / "README.md", docs_dir / "ARCHITECTURE.md", docs_dir / "QUALITY_MODEL.md"]
     )
     for marker in (
-        "0.8.0a25",
+        "0.8.0a26",
         "version = 2",
         "task-contract.v1",
         "planner.v5",
@@ -208,6 +210,7 @@ def main() -> int:
         PHASE7_VERSION,
         PATCH_PROOF_VERSION,
         FINAL_ACCEPTANCE_VERSION,
+        USER_FOLLOW_UP_VERSION,
         DELIVERY_RECORD_VERSION,
         HELDOUT_EVIDENCE_VERSION,
         BENCHMARK_ISOLATION_VERSION,
@@ -294,6 +297,7 @@ def main() -> int:
         f" blind_audit={BLIND_AUDIT_VERSION}"
         f" phase7={PHASE7_VERSION} patch_proof={PATCH_PROOF_VERSION}"
         f" final_acceptance={FINAL_ACCEPTANCE_VERSION} delivery={DELIVERY_RECORD_VERSION}"
+        f" user_follow_up={USER_FOLLOW_UP_VERSION}"
         f" heldout_evidence={HELDOUT_EVIDENCE_VERSION}"
         f" benchmark_isolation={BENCHMARK_ISOLATION_VERSION}"
     )

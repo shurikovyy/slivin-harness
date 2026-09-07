@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.0a26 — User Follow-up Handoff
+
+- Added Controller-owned `user-follow-up.v1`: current related findings are delivered through private authoritative and public immutable `user_follow_up_report.json`, including zero findings, before held-out checks.
+- FULL requires independent Evaluator `CONFIRMED_OUT_OF_SCOPE`; FAST labels Implementer declarations honestly. Exact semantic identities deduplicate deterministically, retaining evidence and provenance; active IN_SCOPE obligations cannot become follow-ups.
+- Bound handoff to candidate, attempt, revisions and current source fingerprints. `final-acceptance.v3` requires a valid complete handoff and binds its artifact digest; later benchmark, reconstruction or physical delivery failures retain the report and console summary.
+- Preserved role protocols, discovery/challenge, FAST policy, patch delivery and hidden verification semantics. Added generic handoff, tamper/stale and workflow regressions.
+
 ## 0.8.0a25 — Blind contract gap replan routing
 
 - Require `REPLAN_REQUIRED` for every blind changed-contract `MATERIAL_GAP` or `MODEL_CONFLICT`. All other statuses are rejected; material findings and a concrete reason remain mandatory.

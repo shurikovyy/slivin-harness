@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a25 — Phase 7
+# Архитектура Slivin Harness 0.8.0a26 — Phase 7
 
 ## Назначение
 
-`0.8.0a25` требует typed impact closure в `planner.v5` до `READY`, сохраняет
+`0.8.0a26` требует typed impact closure в `planner.v5` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a25
+Harness                     0.8.0a26
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -64,7 +64,8 @@ Blind audit                 blind-audit.v2
 Evaluator                   evaluator.v6
 Phase 7 controller          phase7-final-gate.v1
 Patch proof                 patch-proof.v1
-Final acceptance            final-acceptance.v2
+Final acceptance            final-acceptance.v3
+User follow-up              user-follow-up.v1
 Delivery record             delivery-record.v2
 Held-out evidence           heldout-evidence.v2
 Benchmark isolation         benchmark-isolation.v1
@@ -224,7 +225,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a25`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a26`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -457,7 +458,14 @@ held-out. Candidate/Git/runtime guards должны остаться pristine; �
 
 ### Immutable acceptance
 
-После patch proof и `reconstructed-verification.v1=PASS` создаётся `final-acceptance.v2`. Он связывает candidate, revisions, stage artifacts и patch SHA-256 и не перезаписывается.
+Перед held-out Controller строит current-only `user-follow-up.v1` через `handoff.py`,
+сохраняет private/public immutable copies и печатает bounded summary каждой finding.
+FULL требует независимого Evaluator CONFIRMED_OUT_OF_SCOPE; FAST использует
+DECLARED_OUT_OF_SCOPE_FAST. Exact semantic duplicates объединяются с evidence/provenance;
+current IN_SCOPE obligation нельзя вынести в handoff. Rejected attempts и hidden output
+не являются источниками report. Public JSON сохраняется при последующем Final Gate failure.
+
+После patch proof и `reconstructed-verification.v1=PASS` создаётся `final-acceptance.v3`. Он связывает candidate, revisions, stage artifacts, обязательный user handoff и patch SHA-256 и не перезаписывается. Handoff повторно проверяется против current source bindings и private/public digest; отсутствие report, включая count=0, запрещает acceptance.
 
 ### Delivery
 
@@ -569,7 +577,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a25` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a26` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 
