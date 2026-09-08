@@ -154,6 +154,10 @@ def main() -> int:
     docs_dir = ROOT / "docs"
     phase6_text = " ".join((docs_dir / "PHASE6_RUNTIME_EVALUATOR.md").read_text(encoding="utf-8").split())
     _assert(
+        set(re.findall(r"\bfresh Implementer (v\d+)\b", phase6_text)) == {IMPLEMENTER_PROTOCOL_VERSION.rsplit(".", 1)[1]},
+        "docs/PHASE6_RUNTIME_EVALUATOR.md semantic reset must reference the current Implementer protocol",
+    )
+    _assert(
         "mandatory user-facing delivery ещё не реализована" not in phase6_text,
         "docs/PHASE6_RUNTIME_EVALUATOR.md still describes user follow-up delivery as future work",
     )
