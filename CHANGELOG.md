@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.0a28 — Planner tool evidence refresh
+
+- Unified initial/replan Planner preparation: bind the current candidate after reset/runtime rebuild, resolve current owner checks, refresh stale tool/config probes, then publish available capabilities. Invalidated evidence triggers verification and never substitutes for a new PASS.
+- Preserved Controller probe requirements across invalidation while discarding rejected config paths; current explicit/auto Jest config and actually needed project Python are revalidated. Failed refresh stops before Planner with typed private/public evidence.
+- Added real-registry generic Jest replan, runtime rebuild, stale/config/tool failure and integrity regressions. Retained owner gates, post-plan/dynamic gates, role protocols, autonomous impact closure and benchmark isolation.
+
 ## 0.8.0a27 — Baseline-aware proof model replan
 
 - Added required `implementer.v5` terminal reason classification. Technical/proof-model divergence requires REPLAN_REQUIRED; BLOCKED is reserved for infrastructure limitations, with strict status/reason validation.

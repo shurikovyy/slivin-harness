@@ -1,4 +1,4 @@
-# Slivin Harness 0.8.0a27 — Phase 7
+# Slivin Harness 0.8.0a28 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
@@ -7,7 +7,7 @@ Slivin Harness управляет автономной работой Codex в �
 technical impact radius. Пользователь задаёт observable intent и ограничения;
 перечислять consumers, файлы и regression cases он не обязан.
 
-`0.8.0a27` quality-core требует typed Planner Impact Closure до `READY` в `planner.v5`
+`0.8.0a28` quality-core требует typed Planner Impact Closure до `READY` в `planner.v5`
 и post-patch Implementer Impact Closure до `COMPLETE` в `implementer.v5`.
 Implementer проверяет Planner model по реальному diff, пересматривает consumers,
 добавляет discoveries через Controller expansion и рассматривает каждый changed path.
@@ -93,9 +93,18 @@ files и bounded probes `git --version`, Python/Node `--version`, а для Jest
 canonical candidate identity до/после probe batch. Любое изменение candidate
 делает evidence недействительным.
 
+Перед initial и каждым fresh Planner один Controller preparation route связывает
+current candidate после reset/runtime rebuild, заново разрешает owner check inputs
+и обновляет stale tool/config probes. Только затем формируется
+`AVAILABLE_VERIFICATION_CAPABILITIES`. `planner_tool_evidence_NN.json` сохраняет
+candidate/runtime/revision binding, выполненные probes, переиспользованное evidence
+и reason codes. Отказ обязательного refresh останавливает Planner заранее;
+post-plan и dynamic gates остаются обязательными. Tool probe PASS не доказывает
+возможность exploratory команды в Planner sandbox или PASS продуктовых tests.
+
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a27`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a28`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
@@ -349,7 +358,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a27 ...
+DOCS_SYNC_PASS harness=0.8.0a28 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -363,7 +372,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a27` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a28` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

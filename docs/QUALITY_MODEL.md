@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a27 — Phase 7
+# Модель качества Slivin Harness 0.8.0a28 — Phase 7
 
 Нормативный autonomy contract: **[AUTONOMOUS_ENGINEERING_CONTRACT.md](AUTONOMOUS_ENGINEERING_CONTRACT.md)**.
 User scope задаёт observable результат и explicit ограничения; technical impact
@@ -52,6 +52,15 @@ tracked mutation, deletion или untracked addition отменяет любое
 evidence. Runtime-only exclusions сохраняются. Raw probe output остаётся private,
 а public artifact содержит только typed diagnostic. Explicit Jest config и cwd
 auto-discovery поддерживаются без запуска tests.
+
+После semantic reset или runtime rebuild старое tool evidence не является PASS
+и не является доказательством отсутствия инструмента. До fresh Planner Controller
+перепроверяет необходимые stale probes по current owner references. Initial и
+replan используют один preparation route; текущие подтверждения переиспользуются.
+Typed `planner-tool-evidence.v1` фиксирует результат и candidate/runtime/revision
+binding. Failed required tool/config probe запрещает запуск Planner. Successful
+Controller probe не доказывает доступность cache write в Planner sandbox и не
+заменяет обязательные owner/product checks.
 
 ## Что доказывает каждый слой
 

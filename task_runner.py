@@ -2599,15 +2599,6 @@ def main(argv: list[str] | None = None) -> int:
             local_config, project_name=session.project_name
         )
         runtime_capabilities = runtime_available_capabilities(runtime_scenarios)
-        planning_available_capabilities = available_capabilities(
-            toolchain=toolchain,
-            configured=declared_capabilities,
-            runtime=runtime_capabilities,
-            verified_tool_capabilities=tool_probe_registry.verified_capabilities,
-        )
-        planner_repair_evidence = build_manifest_repair_evidence(
-            static_preflight.public_dict()
-        )
         runtime_executor = RuntimeExecutor(
             workspace=workspace,
             source_repo=session.source_repo,
@@ -2643,6 +2634,63 @@ def main(argv: list[str] | None = None) -> int:
                 "candidate_identity_current.json", identity.to_dict()
             )
             return identity
+
+        planner_preparation_index = 0
+
+        def prepare_planner_capabilities(reason: str) -> tuple[set[str], list[dict], str]:
+            """One pre-turn boundary for initial and all semantic-replan Planners."""
+            nonlocal planner_preparation_index
+            planner_preparation_index += 1
+            candidate = observe_candidate("PLANNER_TOOL_EVIDENCE_PREPARATION")
+            batch_id = f"planner-tool-evidence-{planner_preparation_index:02d}"
+            refreshed = run_static_toolchain_preflight(
+                manifest["checks"],
+                workspace=workspace,
+                harness_root=HARNESS_ROOT,
+                toolchain=toolchain,
+                probe_registry=tool_probe_registry,
+                candidate_baseline_sha=session.base_sha or preflight["head_sha"],
+                batch_id=batch_id,
+                refresh_known_tools=True,
+            )
+            artifact = f"planner_tool_evidence_{planner_preparation_index:02d}.json"
+            recorder.write_private_json(
+                f"planner_tool_evidence_{planner_preparation_index:02d}_private.json",
+                refreshed.private_dict(),
+            )
+            capabilities = available_capabilities(
+                toolchain=toolchain,
+                configured=declared_capabilities,
+                runtime=runtime_available_capabilities(runtime_scenarios),
+                verified_tool_capabilities=tool_probe_registry.verified_capabilities,
+            )
+            recorder.write_once_authoritative_json(artifact, {
+                "schema_version": "planner-tool-evidence.v1",
+                "status": refreshed.status,
+                "reason": reason,
+                "candidate_id": candidate.candidate_id,
+                "runtime_id": runtime_state.runtime_id if runtime_state is not None else None,
+                "revision_snapshot": dict(run_state.data["revisions"]),
+                "tool_probe_evidence": (
+                    refreshed.tool_probe_evidence.public_dict()
+                    if refreshed.tool_probe_evidence is not None else None
+                ),
+                "available_capabilities": sorted(capabilities) if refreshed.passed else [],
+                "reason_codes": list(refreshed.reason_codes),
+                "candidate_unchanged": refreshed.candidate_unchanged,
+            })
+            if not refreshed.passed:
+                run_state.route_stage(
+                    StageId.PLANNER,
+                    outcome=WorkflowOutcome.BLOCKED,
+                    result_code=StageResultCode.BLOCKED,
+                    reason_code="PLANNER_TOOL_EVIDENCE_REFRESH_FAILED",
+                    artifacts=(artifact,),
+                )
+                print("PLANNER_TOOL_EVIDENCE_FAIL:", reason, ", ".join(refreshed.reason_codes))
+                raise HarnessControlledStop("PLANNER_TOOL_EVIDENCE_REFRESH_FAILED")
+            print("PLANNER_TOOL_EVIDENCE_PASS:", reason)
+            return capabilities, build_manifest_repair_evidence(refreshed.public_dict()), artifact
 
         print("TASK_STARTED:", datetime.now().astimezone().isoformat())
         print("TASK:", manifest["task_id"])
@@ -2802,6 +2850,9 @@ def main(argv: list[str] | None = None) -> int:
             run_state.begin_stage(StageId.PLANNER)
             if pipeline_profile == PipelineProfile.FULL:
                 print("=== PLAN ===")
+                planning_available_capabilities, planner_repair_evidence, planner_preparation_artifact = (
+                    prepare_planner_capabilities("INITIAL_PLANNER")
+                )
                 try:
                     plan = integrity_coordinator.run_read_only(
                         "PLANNER_TURN:1",
@@ -2888,7 +2939,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_state.pass_stage(
                     StageId.PLANNER,
                     StageResultCode.PLANNER_READY,
-                    artifacts=("plan_01.json",),
+                    artifacts=("plan_01.json", planner_preparation_artifact),
                 )
             else:
                 run_state.skip_stage(
@@ -3511,11 +3562,8 @@ def main(argv: list[str] | None = None) -> int:
                     tool_probe_registry.invalidate_runtime_environment_evidence()
 
                 run_state.begin_stage(StageId.PLANNER)
-                replan_available_capabilities = available_capabilities(
-                    toolchain=toolchain,
-                    configured=declared_capabilities,
-                    runtime=runtime_available_capabilities(runtime_scenarios),
-                    verified_tool_capabilities=tool_probe_registry.verified_capabilities,
+                replan_available_capabilities, replan_repair_evidence, replan_preparation_artifact = (
+                    prepare_planner_capabilities(f"SEMANTIC_REPLAN_{replan_cycles:02d}")
                 )
                 try:
                     plan = integrity_coordinator.run_read_only(
@@ -3530,7 +3578,7 @@ def main(argv: list[str] | None = None) -> int:
                             available_verification_capabilities=sorted(
                                 replan_available_capabilities
                             ),
-                            manifest_repair_evidence=planner_repair_evidence,
+                            manifest_repair_evidence=replan_repair_evidence,
                             replan_context=(
                                 "The previous technical/proof model was rejected. "
                                 "USER TASK CONTRACT and product intent are unchanged; "
@@ -3620,6 +3668,7 @@ def main(argv: list[str] | None = None) -> int:
                     StageResultCode.PLANNER_READY,
                     artifacts=(
                         replan_artifact,
+                        replan_preparation_artifact,
                         replan_reset_artifact,
                         rejected_patch_artifact,
                     ),

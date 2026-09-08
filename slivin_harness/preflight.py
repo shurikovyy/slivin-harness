@@ -321,6 +321,7 @@ class StaticToolchainPreflightResult:
     reason_codes: tuple[str, ...]
     candidate_unchanged: bool = True
     private_details: dict[str, Any] = field(default_factory=dict)
+    tool_probe_evidence: ToolProbeBatchResult | None = None
 
     @property
     def passed(self) -> bool:
@@ -409,6 +410,9 @@ class ToolProbeRegistry:
         self.output_limit = max(128, int(output_limit))
         self.private_log_limit = max(1024, int(private_log_limit))
         self._verified_capabilities: set[str] = set()
+        # Controller probe requirements survive invalidation; PASS evidence does not.
+        self._requested_capabilities: set[str] = set()
+        self._toolchain_binding = dict(self.toolchain)
         self._verified_python_bindings: set[tuple[str, str]] = set()
         self._verified_jest_configs: set[str] = set()
         self._known_jest_configs: dict[str, JestConfigProbe] = {}
@@ -422,6 +426,24 @@ class ToolProbeRegistry:
         return frozenset(self._verified_capabilities)
 
     @property
+    def requested_capabilities(self) -> frozenset[str]:
+        return frozenset(self._requested_capabilities)
+
+    def bind_toolchain(self, toolchain: Mapping[str, str]) -> None:
+        current = {str(key): str(value) for key, value in toolchain.items()}
+        for key, capabilities in (
+            ("node", (Capability.NODE.value, Capability.JEST.value)),
+            ("jest", (Capability.JEST.value,)),
+            ("project_python", (Capability.PROJECT_PYTHON.value,)),
+        ):
+            if current.get(key) != self._toolchain_binding.get(key):
+                self.invalidate(*capabilities)
+        if current.get("python") != self._toolchain_binding.get("python"):
+            self._verified_python_bindings.clear()
+        self.toolchain = current
+        self._toolchain_binding = dict(current)
+
+    @property
     def resolved_executables(self) -> tuple[dict[str, Any], ...]:
         return tuple(self._resolved_public[key] for key in sorted(self._resolved_public))
 
@@ -432,6 +454,8 @@ class ToolProbeRegistry:
     def invalidate(self, *capabilities: str) -> None:
         for capability in capabilities:
             self._verified_capabilities.discard(str(capability))
+        if Capability.JEST.value in capabilities:
+            self._verified_jest_configs.clear()
 
     def invalidate_all_evidence(self) -> None:
         self._verified_capabilities.clear()
@@ -811,7 +835,9 @@ class ToolProbeRegistry:
         batch_id: str,
         python_placeholders: Iterable[str] = (),
         jest_configs: Iterable[JestConfigProbe] = (),
+        replace_jest_configs: bool = False,
     ) -> ToolProbeBatchResult:
+        self.bind_toolchain(self.toolchain)
         requested = set(str(item) for item in capabilities) & set(TOOL_BACKED_CAPABILITIES)
         python_resolutions = tuple(
             {
@@ -834,10 +860,16 @@ class ToolProbeRegistry:
             requested.add(Capability.PROJECT_PYTHON.value)
         if Capability.JEST.value in requested:
             requested.add(Capability.NODE.value)
+        self._requested_capabilities.update(requested)
         supplied_configs = {
             item.cache_key: item for item in jest_configs
         }
-        self._known_jest_configs.update(supplied_configs)
+        if replace_jest_configs:
+            # Fresh Planner preparation derives configs from current owner checks,
+            # never from paths that existed only in a rejected candidate.
+            self._known_jest_configs = dict(supplied_configs)
+        else:
+            self._known_jest_configs.update(supplied_configs)
         configs = (
             tuple(
                 sorted(
@@ -1062,6 +1094,7 @@ class ToolProbeRegistry:
                 else:
                     guarded_operation()
         except RuntimeProjectionIntegrityError as exc:
+            self.invalidate_all_evidence()
             return ToolProbeBatchResult(
                 requested_capabilities=tuple(sorted(requested)),
                 verified_capabilities=tuple(sorted(requested & self._verified_capabilities)),
@@ -1071,6 +1104,7 @@ class ToolProbeRegistry:
                 integrity_reason_code=exc.reason_code,
             )
         except GitControlIntegrityError as exc:
+            self.invalidate_all_evidence()
             return ToolProbeBatchResult(
                 requested_capabilities=tuple(sorted(requested)),
                 verified_capabilities=tuple(sorted(requested & self._verified_capabilities)),
@@ -1080,6 +1114,7 @@ class ToolProbeRegistry:
                 integrity_reason_code=exc.reason_code,
             )
         except TrustedBatchIntegrityError as exc:
+            self.invalidate_all_evidence()
             return ToolProbeBatchResult(
                 requested_capabilities=tuple(sorted(requested)),
                 verified_capabilities=tuple(sorted(requested & self._verified_capabilities)),
@@ -1093,6 +1128,10 @@ class ToolProbeRegistry:
             self._verified_capabilities = new_verified
             self._verified_python_bindings = new_python_bindings
             self._verified_jest_configs = new_jest_configs
+        else:
+            # A failed new config/tool probe cannot leave an earlier PASS active.
+            self.invalidate(*requested)
+            self._verified_python_bindings.clear()
         return ToolProbeBatchResult(
             requested_capabilities=tuple(sorted(requested)),
             verified_capabilities=tuple(sorted(requested & self._verified_capabilities)),
@@ -1229,6 +1268,8 @@ def _run_static_toolchain_preflight_operation(
     harness_root: Path,
     toolchain: Mapping[str, str],
     probe_registry: ToolProbeRegistry,
+    batch_id: str,
+    refresh_known_tools: bool,
 ) -> StaticToolchainPreflightResult:
     """Validate manifest-known commands without executing tests or scripts."""
 
@@ -1359,13 +1400,22 @@ def _run_static_toolchain_preflight_operation(
             }
         )
 
-    probe_result = ToolProbeBatchResult((), (), (), (), ())
+    probe_result = ToolProbeBatchResult(tuple(sorted(requested_capabilities)), (), (), (), ())
     if not reasons:
+        if refresh_known_tools:
+            requested_capabilities.update(probe_registry.requested_capabilities)
+            if Capability.JEST.value in requested_capabilities and not jest_configs:
+                # Previously admitted tool, but no current owner explicit config:
+                # validate auto discovery in this workspace, not an old config path.
+                jest_configs.add(JestConfigProbe(
+                    cache_key="auto:" + str(canonical_path(workspace)), path=None,
+                ))
         probe_result = probe_registry.ensure_capabilities(
             requested_capabilities,
-            batch_id="static-toolchain-preflight",
+            batch_id=batch_id,
             python_placeholders=python_placeholders,
             jest_configs=jest_configs,
+            replace_jest_configs=True,
         )
         reasons.extend(probe_result.reason_codes)
 
@@ -1389,6 +1439,7 @@ def _run_static_toolchain_preflight_operation(
             "probe_commands": list(probe_registry.private_probe_commands),
             "integrity_reason_code": probe_result.integrity_reason_code,
         },
+        tool_probe_evidence=probe_result,
     )
 
 
@@ -1426,6 +1477,8 @@ def run_static_toolchain_preflight(
     toolchain: Mapping[str, str],
     probe_registry: ToolProbeRegistry,
     candidate_baseline_sha: str | None = None,
+    batch_id: str = "static-toolchain-preflight",
+    refresh_known_tools: bool = False,
 ) -> StaticToolchainPreflightResult:
     """Run static preflight with the canonical candidate pre/post guard.
 
@@ -1444,6 +1497,9 @@ def run_static_toolchain_preflight(
             baseline_sha=candidate_baseline_sha,
             excluded_prefixes=_candidate_excludes(probe_registry),
         )
+        # Bind before probing. A late bind would discard the newly refreshed PASS.
+        probe_registry.bind_candidate_identity(before.candidate_id)
+    probe_registry.bind_toolchain(toolchain)
     try:
         result = _run_static_toolchain_preflight_operation(
             checks,
@@ -1451,6 +1507,8 @@ def run_static_toolchain_preflight(
             harness_root=harness_root,
             toolchain=toolchain,
             probe_registry=probe_registry,
+            batch_id=batch_id,
+            refresh_known_tools=refresh_known_tools,
         )
     except Exception as exc:
         operation_error = exc
@@ -1500,6 +1558,9 @@ def run_static_toolchain_preflight(
     if operation_error is not None:
         raise operation_error
     assert result is not None
+    if not result.passed:
+        probe_registry.invalidate_all_evidence()
+        result = replace(result, verified_capabilities=())
     if before is not None and after is not None:
         probe_registry.bind_candidate_identity(after.candidate_id)
         private_details = dict(result.private_details)

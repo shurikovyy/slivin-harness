@@ -68,6 +68,15 @@ proof route or return honest `BLOCKED`; a second infeasible READY stops as
 `PLANNER_CAPABILITY_INFEASIBLE`. The retained post-plan gate still handles
 later Contract expansion and newly discovered requirements.
 
+The same preparation runs before every fresh Planner after semantic reset and
+project runtime rebuild. Candidate identity and current toolchain references are
+bound before stale probes run. Controller probe descriptors survive invalidation;
+old PASS evidence and rejected candidate config paths do not. Required Jest
+version/config and project Python version/venv-binding evidence is refreshed before
+capabilities are passed to Planner. Optional unused Python is not made mandatory.
+An immutable `planner_tool_evidence_NN.json` records current bindings, executed and
+reused evidence, and typed failures; failed refresh stops before the agent turn.
+
 The command placeholder contract preserves the Phase 5 runtime: `{python}` uses
 the worktree-local `project_python` when it exists, then configured `python`, and
 only then the Harness interpreter. `{project_python}` has no fallback and needs

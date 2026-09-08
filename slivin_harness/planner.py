@@ -828,6 +828,10 @@ Trusted preflight до изменений:
 AVAILABLE_VERIFICATION_CAPABILITIES:
 {json.dumps(sorted(set(available_verification_capabilities)), ensure_ascii=False)}
 
+Controller tool probes confirm entrypoint/config loading in Controller context.
+They do not prove exploratory command permissions in the Planner sandbox or product test PASS.
+A cache write permission failure is not evidence that the executable is absent.
+
 MANIFEST_REPAIR_EVIDENCE:
 {json.dumps(list(manifest_repair_evidence), ensure_ascii=False, indent=2)}
 

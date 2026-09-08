@@ -164,6 +164,17 @@ Capability-aware planning сохраняется: Controller сообщает т
 полный artifact, сохраняя closure и синхронизируя proof в обеих consumer arrays.
 Повторный невыполнимый READY даёт `PLANNER_CAPABILITY_INFEASIBLE` до compiler.
 
+Controller обязан готовить актуальное tool evidence до каждого initial/fresh
+Planner: current candidate binding → завершённый reset/runtime rebuild → current
+owner toolchain/config references → refresh stale probes → проверка результата →
+available capabilities. Инвалидация означает необходимость перепроверки, а не
+отсутствие инструмента. Прежний descriptor разрешает запустить probe, но прежний
+PASS или configured path не заменяют свежего evidence. Rejected candidate-only
+config/test paths не переносятся в новую модель. Required probe failure даёт
+controlled stop до Planner; owner gates и post-plan gates не ослабляются.
+Controller tool/config probe PASS, возможность exploratory команды в read-only
+Planner sandbox и PASS продуктовых tests — три разных утверждения.
+
 Semantic preservation requirement и proof route не равны. `PRESERVE-1` сохраняет
 обязательное user behavior; `evidence_plan.preservation` выбирает способ доказать его
 и не расширяет product scope до исправления всего baseline debt. Absolute PASS broad

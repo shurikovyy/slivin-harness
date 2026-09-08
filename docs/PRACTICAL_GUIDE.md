@@ -1,4 +1,4 @@
-# Практическая работа с Slivin Harness 0.8.0a27
+# Практическая работа с Slivin Harness 0.8.0a28
 
 ## Установка и self-check
 
@@ -11,8 +11,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемый финал:
 
 ```text
-0.8.0a27
-DOCS_SYNC_PASS harness=0.8.0a27 ...
+0.8.0a28
+DOCS_SYNC_PASS harness=0.8.0a28 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -310,6 +310,8 @@ wrong technical model
 → rejected patch saved outside workspace
 → candidate reset to recorded baseline
 → task-specific checks/runtime attempt reset
+→ refresh stale tool/config probes against current candidate/runtime
+→ PLANNER_TOOL_EVIDENCE_PASS (or controlled stop before Planner)
 → fresh Planner
 → new Contract/Verification Plan
 → fresh Implementer thread

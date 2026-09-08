@@ -144,6 +144,9 @@ timeout_seconds = 30
         related: bool = False,
         blind_related: bool = False,
         terminal_failure: str | None = None,
+        jest_refresh: bool = False,
+        jest_refresh_failure: str | None = None,
+        runtime_rebuild: str | None = None,
     ) -> tuple[int, Path, str]:
         root = Path(tempfile.mkdtemp(prefix="slivin-main-workflow-"))
         repo = self.make_repo(root)
@@ -161,6 +164,36 @@ timeout_seconds = 30
             owner_allowed_paths=owner_allowed_paths,
             with_check_repair=check_repair,
         )
+        if jest_refresh:
+            # Deterministic subprocess fixture, not an installed Node/Jest smoke.
+            jest = root / "probe_jest.py"
+            jest.write_text(
+                "import sys\nfrom pathlib import Path\n"
+                "failure = Path(__file__).with_suffix('.failure')\n"
+                "mode = failure.read_text() if failure.exists() else ''\n"
+                "if '--version' in sys.argv:\n    print('29.7.0')\n"
+                "elif '--showConfig' in sys.argv:\n"
+                "    if mode == 'config':\n        raise SystemExit(8)\n"
+                "    if mode == 'candidate':\n        Path('target.txt').write_text('probe mutation')\n"
+                "    if mode == 'git':\n"
+                "        import subprocess\n"
+                "        path = subprocess.check_output(['git', 'rev-parse', '--git-path', 'info/exclude'], text=True).strip()\n"
+                "        with Path(path).open('a') as handle:\n            handle.write('probe-mutation\\n')\n"
+                "    config = Path(sys.argv[sys.argv.index('--config') + 1])\n"
+                "    assert config.read_text() == 'module.exports = {};\\n'\n"
+                "    print('{}')\n"
+                "else:\n    assert Path('target.txt').read_text().strip() == 'after'\n",
+                encoding="utf-8",
+            )
+            (repo / "jest.config.cjs").write_text("module.exports = {};\n", encoding="utf-8")
+            git(repo, "add", "jest.config.cjs")
+            git(repo, "commit", "-m", "Synthetic owner config")
+            with manifest.open("a", encoding="utf-8") as handle:
+                handle.write('\n[[checks]]\nname = "Owner Jest regression"\nfeedback = "repair"\n'
+                             'command = ["{node}", "{jest}", "--config", "{workspace}/jest.config.cjs"]\n'
+                             'timeout_seconds = 30\n')
+        if runtime_rebuild == "unused":
+            manifest.write_text(manifest.read_text(encoding="utf-8").replace("{python}", "{harness_python}"), encoding="utf-8")
         run_root = root / "run"
 
         class _Recorder(task_runner.RunRecorder):
@@ -172,6 +205,16 @@ timeout_seconds = 30
             return valid_task_contract()
 
         def fake_planner(*_args, **_kwargs):
+            if jest_refresh:
+                self.assertIn("JEST", _kwargs["available_verification_capabilities"],
+                              "Each Planner needs refreshed Jest version/config evidence after reset")
+                if jest_refresh_failure and (run_root / "replan_01_reset.json").exists():
+                    self.fail("A failing mandatory refresh must stop before the fresh Planner")
+                if runtime_rebuild:
+                    self.assertEqual(
+                        "PROJECT_PYTHON" in _kwargs["available_verification_capabilities"],
+                        runtime_rebuild == "required",
+                    )
             if planner_exception is not None:
                 raise planner_exception
             plan = valid_plan()
@@ -305,6 +348,11 @@ timeout_seconds = 30
                 report["post_patch_impact"]["not_affected_consumers"] = []
             if implementer_replan and implementer_calls == 1:
                 report.update(status="REPLAN_REQUIRED", terminal_reason_kind="TECHNICAL_MODEL_DIVERGENCE", reason="The actual patch requires a fresh technical model.", evidence=["reader.py assumptions must be rechecked from baseline."])
+            if jest_refresh_failure and implementer_calls == 1:
+                if jest_refresh_failure == "missing":
+                    jest.unlink()
+                else:
+                    jest.with_suffix(".failure").write_text(jest_refresh_failure, encoding="utf-8")
             if reuse_old_impact and previous_impact is not None:
                 report["post_patch_impact"] = previous_impact
             previous_impact = copy.deepcopy(report["post_patch_impact"])
@@ -359,6 +407,16 @@ timeout_seconds = 30
             },
             "workspace": {"root": str(root / "workspaces")},
         }
+        if jest_refresh:
+            local_config["projects"]["demo"]["toolchain"] = {
+                "node": sys.executable, "jest": str(jest),
+            }
+        if runtime_rebuild:
+            local_config["projects"]["demo"]["runtime"] = {
+                "bootstrap_python": sys.executable,
+                "expected_python": f"{sys.version_info.major}.{sys.version_info.minor}",
+                "venv": ".venv", "dependency_files": [],
+            }
         with (
             mock.patch.object(task_runner, "RunRecorder", _Recorder),
             mock.patch.object(task_runner, "load_local_config", return_value=(local_config, None)),
@@ -445,7 +503,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a27")
+        self.assertEqual(build_identity["version"], "0.8.0a28")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)

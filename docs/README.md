@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a27
+# Документация Slivin Harness 0.8.0a28
 
-Актуальная версия: **0.8.0a27 — Baseline-aware Proof Model Replan**.
+Актуальная версия: **0.8.0a28 — Planner Tool Evidence Refresh**.
 
 Основные документы:
 

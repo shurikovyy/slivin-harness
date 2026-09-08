@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a27 — Phase 7
+# Архитектура Slivin Harness 0.8.0a28 — Phase 7
 
 ## Назначение
 
-`0.8.0a27` требует typed impact closure в `planner.v5` до `READY`, сохраняет
+`0.8.0a28` требует typed impact closure в `planner.v5` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a27
+Harness                     0.8.0a28
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -225,12 +225,36 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a27`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a28`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
 
 ## 4. Step 1 — Planner
+
+Initial Planner и semantic replan от Implementer/Evaluator используют общий
+`prepare_planner_capabilities()`. Он наблюдает candidate после завершённого reset
+и runtime rebuild, затем вызывает guarded static preflight по текущим manifest
+checks и уже санитизированному toolchain. Candidate binding выполняется **до**
+probes; повторный bind того же candidate не инвалидирует новый PASS.
+
+`ToolProbeRegistry` хранит Controller probe requirements отдельно от accepted
+evidence. Stale JEST требует новых version/config probes; runtime invalidation
+также требует новых version/venv-binding probes для ранее необходимого
+PROJECT_PYTHON. Неиспользуемый optional Python не становится обязательным.
+Current owner checks задают explicit/auto config; если ранее проверенный Jest
+больше не имеет owner explicit config, проверяется auto-discovery текущего
+workspace. Пути config из rejected candidate не переиспользуются. Изменение
+toolchain reference тоже инвалидирует соответствующее evidence.
+
+`planner-tool-evidence.v1` (`planner_tool_evidence_NN.json`) имеет private authority
+и immutable public mirror: reason, candidate_id, runtime_id, revision_snapshot,
+tool_probe_evidence с requested/verified/reused capabilities и выполненными probes,
+available_capabilities, reason_codes и candidate_unchanged. Raw probe commands/logs
+остаются private. `PLANNER_TOOL_EVIDENCE_REFRESH_FAILED` останавливает stage до
+agent turn; console показывает `PLANNER_TOOL_EVIDENCE_PASS` либо
+`PLANNER_TOOL_EVIDENCE_FAIL`. Corrective turn использует тот же проверенный snapshot
+внутри read-only Planner operation. Post-plan/dynamic gates сохраняют свои checks.
 
 `planner.v5` исследует current behavior, intended contract, root cause или extension point, consumers, state model, risks и typed evidence plan.
 
@@ -585,7 +609,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a27` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a28` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 ## 14. Что считается завершённым
 

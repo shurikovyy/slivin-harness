@@ -714,6 +714,7 @@ machine-readable workflow и versioned Run State
 + static candidate pre/post identity and Controller-private raw probe logs
 + exact harness version/Git build identity for each run
 + probe-backed tool capabilities with retained post-plan on-demand gate
++ shared initial/replan Planner preparation refreshes stale tool/config evidence before agent turns
 + capability-aware Planner proof routing with one bounded corrective turn
 + worktree-local project-runtime bootstrap and drift reconciliation
 + Controller-private Contract Closure Record

@@ -76,6 +76,8 @@ class PlannerCapabilityNegotiationTests(unittest.TestCase):
         self.assertIn('"DOCS_SYNC"', prompt)
         self.assertIn("MANIFEST_REPAIR_EVIDENCE", prompt)
         self.assertIn("Node regression", prompt)
+        self.assertIn("entrypoint/config loading in Controller context", prompt)
+        self.assertIn("not evidence that the executable is absent", prompt)
 
     def test_one_corrective_turn_reuses_thread_and_accepts_feasible_plan(self) -> None:
         first = _plan_with_capability("PROJECT_PYTHON")
