@@ -1,4 +1,4 @@
-# Slivin Harness 0.8.0a28 — Phase 7
+# Slivin Harness 0.8.0a29 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
@@ -7,7 +7,17 @@ Slivin Harness управляет автономной работой Codex в �
 technical impact radius. Пользователь задаёт observable intent и ограничения;
 перечислять consumers, файлы и regression cases он не обязан.
 
-`0.8.0a28` quality-core требует typed Planner Impact Closure до `READY` в `planner.v5`
+**Затем прочитайте [журнал решений D-001–D-024](docs/DECISIONS.md)** — причины выбора,
+отвергнутые варианты и границы доказанного; после него — актуальную архитектуру.
+
+Planner/Evaluator используют общий scratch-only permission profile: project, tests,
+dependencies и Git controls остаются read-only, а каждый fresh thread получает
+собственный writable session/cache root. Codex 0.153.4 сохраняет project context
+при отдельном session cwd. Поддержку и границы проверяет opt-in
+[native cached-Jest smoke](docs/WINDOWS_SETUP.md#native-scoped-scratch-acceptance),
+отдельно от Controller probes и product correctness.
+
+`0.8.0a29` quality-core требует typed Planner Impact Closure до `READY` в `planner.v5`
 и post-patch Implementer Impact Closure до `COMPLETE` в `implementer.v5`.
 Implementer проверяет Planner model по реальному diff, пересматривает consumers,
 добавляет discoveries через Controller expansion и рассматривает каждый changed path.
@@ -104,7 +114,7 @@ post-plan и dynamic gates остаются обязательными. Tool pro
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a28`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a29`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
@@ -358,7 +368,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a28 ...
+DOCS_SYNC_PASS harness=0.8.0a29 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -372,7 +382,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a28` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a29` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

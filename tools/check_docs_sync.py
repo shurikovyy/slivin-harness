@@ -65,6 +65,7 @@ from task_runner import (
 EXPECTED_MAIN_DOCS = {
     "ARCHITECTURE.md",
     "AUTONOMOUS_ENGINEERING_CONTRACT.md",
+    "DECISIONS.md",
     "HISTORY.md",
     "PHASE4_EXECUTION.md",
     "PHASE5_CONTRACT_RUNTIME.md",
@@ -78,7 +79,6 @@ EXPECTED_MAIN_DOCS = {
 }
 REMOVED_DOCS = {
     "CURRENT_STATE.md",
-    "DECISIONS.md",
     "DECISION_TEMPLATE.md",
     "HANDOFF_PROTOCOL.md",
     "MAINTAINING_HARNESS.md",
@@ -119,7 +119,7 @@ def _check_one_h1(path: Path) -> None:
 
 
 def main() -> int:
-    _assert(__version__ == "0.8.0a28", f"Unexpected Harness version: {__version__}")
+    _assert(__version__ == "0.8.0a29", f"Unexpected Harness version: {__version__}")
     _assert(MANIFEST_VERSION == 2, f"Unexpected manifest version: {MANIFEST_VERSION}")
     _assert(PLANNER_PROTOCOL_VERSION == "planner.v5", PLANNER_PROTOCOL_VERSION)
     _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v3", IMPLEMENTATION_CONTRACT_VERSION)
@@ -188,9 +188,20 @@ def main() -> int:
     actual_docs = {path.name for path in docs_dir.glob("*.md")}
     _assert(actual_docs == EXPECTED_MAIN_DOCS, f"Unexpected docs set: {sorted(actual_docs)}")
     _assert(not any((docs_dir / name).exists() for name in REMOVED_DOCS), "Removed docs returned")
+    # Structural navigation/record completeness, not a proof of rationale quality.
+    decisions = (docs_dir / "DECISIONS.md").read_text(encoding="utf-8")
+    entries = re.split(r"(?m)^## (D-\d{3})\. ", decisions)
+    ids = entries[1::2]
+    _assert(len(ids) >= 24 and len(ids) == len(set(ids)), "Decision IDs must be unique; preserve D-001 through D-024")
+    _assert({f"D-{index:03}" for index in range(1, 25)} <= set(ids), "Stable decision IDs disappeared")
+    for decision_id, body in zip(ids, entries[2::2]):
+        for field in ("Статус", "Реализация", "Проблема", "Решение", "Отвергнут", "Последствия", "Пересмотр"):
+            _assert(field.lower() in body.lower(), f"{decision_id} is missing {field}")
+    for path in (ROOT / "README.md", ROOT / "AGENTS.md", docs_dir / "README.md", docs_dir / "HISTORY.md", docs_dir / "AUTONOMOUS_ENGINEERING_CONTRACT.md"):
+        _assert("DECISIONS.md" in path.read_text(encoding="utf-8"), f"{path.name} must link the decision journal")
     _assert((ROOT / "slivin_harness" / "impact.py").is_file(), "Shared impact validation module is missing")
 
-    markdown_files = [ROOT / "README.md", ROOT / "CHANGELOG.md"]
+    markdown_files = [ROOT / "README.md", ROOT / "CHANGELOG.md", ROOT / "AGENTS.md"]
     markdown_files.extend(sorted(docs_dir.glob("*.md")))
     markdown_files.append(ROOT / "cases" / "matrix-all-matching" / "README.md")
     for path in markdown_files:
@@ -202,7 +213,7 @@ def main() -> int:
         for path in [ROOT / "README.md", docs_dir / "ARCHITECTURE.md", docs_dir / "QUALITY_MODEL.md"]
     )
     for marker in (
-        "0.8.0a28",
+        "0.8.0a29",
         "version = 2",
         "task-contract.v1",
         "planner.v5",

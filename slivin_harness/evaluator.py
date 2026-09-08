@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from slivin_harness.app_server import CodexAppServer
+from slivin_harness.execution import ExecutionRole
 from slivin_harness.impact import impact_paths, impact_text, safe_impact_path, validate_owner_prose_boundary
 from slivin_harness.implementer import validate_implementation_impact_closure
 from slivin_harness.phase6 import BLIND_AUDIT_VERSION
@@ -608,7 +609,7 @@ def run_evaluator(
         raise RuntimeError("Evaluator requires immutable blind persistence and current-candidate guards")
     thread_id = codex.start_thread(
         cwd=workspace,
-        sandbox="read-only",
+        execution_role=ExecutionRole.EVALUATOR,
         developer_instructions=EVALUATOR_INSTRUCTIONS,
         on_started=on_thread_started,
     )

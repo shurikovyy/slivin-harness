@@ -1,11 +1,148 @@
 from __future__ import annotations
 
 import os
+import copy
 import tempfile
 import unittest
 from pathlib import Path
 
 from slivin_harness.app_server import CodexAppServer, TurnTimeoutError
+from slivin_harness.execution import ExecutionBroker, ExecutionRole, ScopedExecutionPolicyError
+
+
+class ScopedRoleAppServerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="slivin-scoped-wire-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.project = root / "project"
+        self.project.mkdir()
+        self.broker = ExecutionBroker(workspace=self.project, run_root=root / "run", private_root=root / "private")
+        self.server = CodexAppServer(Path("codex"), execution_broker=self.broker,
+            process_env={"TEMP": str(root / "old-app-server"), "TMP": str(root / "old-app-server")})
+        self.calls: list[tuple[str, dict]] = []
+        self.responses: list[dict] = []
+        self.override_response = lambda response: response
+
+        def request(method, params, **kwargs):
+            self.calls.append((method, copy.deepcopy(params)))
+            if method == "thread/start":
+                response = {"thread": {"id": f"thread-{len(self.responses)}"},
+                    "cwd": params["cwd"], "runtimeWorkspaceRoots": [params["cwd"]],
+                    "approvalPolicy": "never", "activePermissionProfile": {"id": params["permissions"], "extends": None},
+                    "sandbox": {"type": "workspaceWrite", "writableRoots": [], "networkAccess": False,
+                        "excludeTmpdirEnvVar": True, "excludeSlashTmp": True},
+                    "instructionSources": [str(self.project / "AGENTS.md")]}
+                response = self.override_response(response)
+                self.responses.append(response)
+                return response
+            return {"turn": {"id": "turn-1"}}
+
+        self.server.request = request
+        self.server._ensure_alive = lambda **kwargs: None
+
+    def complete_turn(self, thread):
+        messages = iter([
+            {"method": "item/completed", "params": {"item": {"type": "agentMessage", "phase": "final_answer", "text": "done"}}},
+            {"method": "turn/completed", "params": {"turn": {"id": "turn-1", "status": "completed"}}},
+        ])
+        self.server._receive_raw_optional = lambda timeout: next(messages)
+        return self.server.run_turn(thread_id=thread, prompt="diagnose", heartbeat_interval=0)
+
+    def test_initial_corrective_replan_and_evaluator_turns_use_scoped_context(self) -> None:
+        process_environment = dict(self.server.process_env)
+        contexts = []
+        for role in (ExecutionRole.PLANNER, ExecutionRole.PLANNER, ExecutionRole.EVALUATOR, ExecutionRole.EVALUATOR):
+            thread = self.server.start_thread(cwd=self.project, execution_role=role, developer_instructions="role instructions")
+            start = self.calls[-1][1]
+            self.assertNotIn("sandbox", start)
+            self.assertFalse(start["ephemeral"])
+            self.assertEqual(start["approvalPolicy"], "never")
+            self.assertIn(str(self.project.resolve()), start["developerInstructions"])
+            self.assertIn("nested repository instructions", start["developerInstructions"])
+            config = start["config"]
+            self.assertEqual(config[f"permissions.{start['permissions']}.filesystem"], {":root": "read", start["cwd"]: "write"})
+            self.assertEqual(config["shell_environment_policy.set"]["TEMP"], start["cwd"])
+            for _ in range(2):  # Planner corrective / Evaluator B retain the same thread.
+                self.assertEqual(self.complete_turn(thread), "done")
+                turn = self.calls[-1][1]
+                self.assertEqual(turn["threadId"], thread)
+                self.assertNotIn("cwd", turn)
+                self.assertNotIn("permissions", turn)
+                self.assertNotIn("approvalPolicy", turn)
+                self.assertNotIn("sandboxPolicy", turn)
+            contexts.append(start["cwd"])
+            metadata = self.server.get_thread_metadata(thread)["harness_execution_context"]
+            self.assertEqual(metadata["reported_policy_validation"], "PASS")
+            self.assertEqual(metadata["filesystem_probe_result"], "NOT_RUN_BY_THREAD_START")
+        self.assertEqual(len(set(contexts)), 4)
+        self.assertEqual(self.server.process_env, process_environment)
+
+    def test_legacy_override_and_missing_controller_context_fail_closed(self) -> None:
+        with self.assertRaisesRegex(ScopedExecutionPolicyError, "legacy sandbox"):
+            self.server.start_thread(cwd=self.project, execution_role=ExecutionRole.PLANNER, sandbox="workspace-write")
+        with self.assertRaises(ScopedExecutionPolicyError):
+            CodexAppServer(Path("codex")).start_thread(cwd=self.project, execution_role=ExecutionRole.EVALUATOR)
+        self.assertFalse(self.calls)
+
+    def test_replan_retires_scoped_threads_before_scratch_cleanup(self) -> None:
+        threads = [self.server.start_thread(cwd=self.project, execution_role=role)
+            for role in (ExecutionRole.PLANNER, ExecutionRole.EVALUATOR)]
+        self.server.retire_readonly_threads()
+        self.assertEqual([params["threadId"] for method, params in self.calls if method == "thread/archive"], threads)
+        self.assertFalse(self.server._role_contexts)
+        self.server.retire_readonly_threads()  # Idempotent; no legacy thread is touched.
+        self.assertEqual(sum(method == "thread/archive" for method, _ in self.calls), 2)
+        with self.assertRaisesRegex(ScopedExecutionPolicyError, "THREAD_RETIRED"):
+            self.complete_turn(threads[0])
+        self.broker.clear_role_scratch(ExecutionRole.PLANNER)
+        fresh = self.server.start_thread(cwd=self.project, execution_role=ExecutionRole.PLANNER)
+        self.assertNotIn(fresh, threads)
+
+    def test_failed_retirement_keeps_context_and_rejects_cleanup_route(self) -> None:
+        thread = self.server.start_thread(cwd=self.project, execution_role=ExecutionRole.PLANNER)
+        def fail(method, params, **kwargs):
+            raise RuntimeError("cannot archive session")
+        self.server.request = fail
+        with self.assertRaisesRegex(ScopedExecutionPolicyError, "ROLE_EXECUTION_RETIRE_FAILED"):
+            self.server.retire_readonly_threads()
+        self.assertIn(thread, self.server._role_contexts)
+
+    def test_reported_project_write_grant_or_wrong_profile_is_rejected(self) -> None:
+        mutations = (
+            lambda r: r["sandbox"].update(writableRoots=[str(self.project)]),
+            lambda r: r["activePermissionProfile"].update(id=":workspace"),
+            lambda r: r["sandbox"].update(excludeTmpdirEnvVar=False),
+            lambda r: r["sandbox"].update(networkAccess=True),
+            lambda r: r.update(cwd=str(self.project)),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                def override(response):
+                    mutate(response)
+                    return response
+                self.override_response = override
+                with self.assertRaisesRegex(ScopedExecutionPolicyError, "POLICY_MISMATCH"):
+                    self.server.start_thread(cwd=self.project, execution_role=ExecutionRole.PLANNER)
+        self.assertFalse(self.server._role_contexts)
+
+    def test_temporary_instruction_inheritance_is_rejected(self) -> None:
+        def override(response):
+            response["instructionSources"].append(str(self.project / ".harness_tmp" / "AGENTS.md"))
+            return response
+        self.override_response = override
+        with self.assertRaisesRegex(ScopedExecutionPolicyError, "INSTRUCTION_CONTAMINATION"):
+            self.server.start_thread(cwd=self.project, execution_role=ExecutionRole.EVALUATOR)
+
+    def test_unsupported_profile_has_typed_error_without_fallback(self) -> None:
+        def unsupported(method, params, **kwargs):
+            self.calls.append((method, params))
+            raise RuntimeError("named permissions unsupported by installed runtime")
+        self.server.request = unsupported
+        with self.assertRaisesRegex(ScopedExecutionPolicyError, "ROLE_EXECUTION_POLICY_UNAVAILABLE"):
+            self.server.start_thread(cwd=self.project, execution_role=ExecutionRole.PLANNER)
+        self.assertEqual(len(self.calls), 1)
+        self.assertNotIn("sandbox", self.calls[0][1])
 
 
 class AppServerTests(unittest.TestCase):
@@ -63,6 +200,7 @@ class AppServerTests(unittest.TestCase):
             self.assertEqual(thread_id, "thread-1")
             self.assertEqual(captured[0][1]["sandbox"], sandbox)
             self.assertEqual(captured[0][1]["approvalPolicy"], "never")
+            self.assertTrue(captured[0][1]["ephemeral"])
 
     def test_thread_start_rejects_policy_type_name_as_sandbox_mode(self) -> None:
         server = CodexAppServer(Path("codex"))

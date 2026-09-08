@@ -25,6 +25,8 @@ class _FakeCodex:
         self.turns: list[dict] = []
 
     def start_thread(self, **kwargs) -> str:
+        assert kwargs["execution_role"].value == "planner"
+        assert "sandbox" not in kwargs
         self.started += 1
         callback = kwargs.get("on_started")
         if callback:

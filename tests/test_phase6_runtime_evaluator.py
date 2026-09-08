@@ -621,7 +621,8 @@ class _FakeEvaluatorServer:
         self.sandboxes: list[str] = []
 
     def start_thread(self, **kwargs) -> str:
-        self.sandboxes.append(kwargs["sandbox"])
+        self.sandboxes.append(kwargs["execution_role"].value)
+        assert "sandbox" not in kwargs
         return "fresh-evaluator-thread"
 
     def run_turn(self, **kwargs) -> str:
@@ -670,7 +671,7 @@ class TwoPhaseEvaluatorTests(unittest.TestCase):
         )
         self.assertEqual(observed_audit, audit)
         self.assertEqual(observed_verdict, verdict)
-        self.assertEqual(server.sandboxes, ["read-only"])
+        self.assertEqual(server.sandboxes, ["evaluator"])
         self.assertEqual(server.thread_ids, ["fresh-evaluator-thread"] * 2)
         self.assertNotIn("IMPLEMENTATION CONTRACT", server.prompts[0])
         self.assertNotIn("CONTROLLER EVIDENCE", server.prompts[0])

@@ -197,7 +197,8 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
                     self.assertIn(marker, prompt)
 
         server, plane, result = self.run_phases(observer=inspect)
-        self.assertEqual(server.threads[0]["sandbox"], "read-only")
+        self.assertEqual(server.threads[0]["execution_role"].value, "evaluator")
+        self.assertNotIn("sandbox", server.threads[0])
         self.assertEqual(result[0], expected_blind)
         with self.assertRaisesRegex(RuntimeError, "Immutable artifact"):
             plane.write_json_once("blind.json", self.audit, visibility=ArtifactVisibility.PRIVATE)
@@ -641,6 +642,9 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
                 thread = f"thread-{self.thread_count}"
                 self.workspaces[thread] = Path(kwargs["cwd"])
                 return thread
+
+            def retire_readonly_threads(self):
+                pass
 
             def run_turn(self, **kwargs):
                 workspace = self.workspaces[kwargs["thread_id"]]

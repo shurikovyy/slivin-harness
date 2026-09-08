@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.0a29 — Scoped scratch for read-only roles
+
+- Planner/Evaluator share a Controller-owned execution context: project remains read-only; each fresh thread selects a unique writable session/cache root using installed Codex 0.153.4 named permission profiles. Turns retain the same policy and never inherit a whole-project write grant.
+- Scoped sessions retain local Codex rollouts so semantic reset can archive them before clearing their cwd. Scratch creation preserves inherited Windows permissions and cleanup handles long cache paths; no global ACL or persistent configuration changes are introduced.
+- Validate reported profile/root/environment ownership, preserve repository instruction discovery and explicit project command cwd, and fail closed on unsupported/mismatched profiles. Intake, Implementer, Controller guards and tool-evidence refresh retain their contracts.
+- Add wiring regressions and an opt-in native cached-Jest smoke with cold/warm/fresh sessions, intentional assertion failure, actual denied canary mutations and project/runtime/Git invariance evidence. Requested/reported policy is kept separate from actual filesystem verification.
+- Integrate the retrospective D-001–D-024 decision journal, preserved alternatives and evidence limits; README/docs/AGENTS provide the mission → decisions → architecture reading route. Role wire protocols remain unchanged.
+
 ## 0.8.0a28 — Planner tool evidence refresh
 
 - Unified initial/replan Planner preparation: bind the current candidate after reset/runtime rebuild, resolve current owner checks, refresh stale tool/config probes, then publish available capabilities. Invalidated evidence triggers verification and never substitutes for a new PASS.

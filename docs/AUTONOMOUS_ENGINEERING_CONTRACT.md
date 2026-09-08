@@ -351,6 +351,22 @@ checks, runtime proof при необходимости, Evaluator и Final Gate
 Candidate/Git integrity, runtime projection, static preflight, reconstructed
 verification и benchmark isolation не ослабляются этим документом.
 
+## Журнал решений и execution evidence
+
+Существенное решение и его изменение записываются в [DECISIONS.md](DECISIONS.md)
+в том же patch: проблема, проверенные основания, выбор и причина, реально
+рассмотренные альтернативы, издержки, preservation boundaries, статус решения
+отдельно от реализации и условия пересмотра. Stable D-IDs и опровергнутые выводы
+сохраняются. REJECTED/SUPERSEDED подход нельзя возвращать без новых evidence или
+изменения intent владельцем. Достаточно читать применимые записи по карте решений.
+
+Planner/Evaluator вправе выполнять исследовательские проверки в собственном
+Controller-selected writable scratch при read-only project/tests/dependencies.
+Environment path не является permission grant. Requested policy, reported policy,
+фактические filesystem операции, Controller probe и выполненный product assertion
+доказывают разные свойства. Native acceptance описан в
+[Windows setup](WINDOWS_SETUP.md#native-scoped-scratch-acceptance), rationale — D-018.
+
 ## Anti-coaching / benchmark integrity
 
 Нельзя улучшать качество агента путём добавления в пользовательский prompt

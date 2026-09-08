@@ -1,13 +1,14 @@
-# Документация Slivin Harness 0.8.0a28
+# Документация Slivin Harness 0.8.0a29
 
-Актуальная версия: **0.8.0a28 — Planner Tool Evidence Refresh**.
+Актуальная версия: **0.8.0a29 — Scoped Scratch for Read-only Roles**.
 
 Основные документы:
 
 - **[`AUTONOMOUS_ENGINEERING_CONTRACT.md`](AUTONOMOUS_ENGINEERING_CONTRACT.md) — нормативный autonomy contract; прочитайте первым.** Пользователь задаёт intent, агент сам исследует impact radius и не получает hidden benchmark подсказки;
+- **[`DECISIONS.md`](DECISIONS.md) — журнал причин, отвергнутых вариантов и evidence; прочитайте применимые D-записи вторым;**
+- **[`ARCHITECTURE.md`](ARCHITECTURE.md) — актуальные ownership, artifacts и связи модулей; следующий шаг после миссии и решений;**
 - [`WORKFLOW.md`](WORKFLOW.md) — понятная Step 0–7 схема, генерируемая из кода;
 - [`workflow.v6.json`](workflow.v6.json) — та же state machine в machine-readable виде;
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — ownership, artifacts и связи модулей;
 - [`QUALITY_MODEL.md`](QUALITY_MODEL.md) — что именно доказывает каждый слой;
 - [`PRACTICAL_GUIDE.md`](PRACTICAL_GUIDE.md) — запуск и чтение artifacts;
 - [`WINDOWS_SETUP.md`](WINDOWS_SETUP.md) — Windows/Git Bash setup;

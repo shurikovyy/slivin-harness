@@ -25,7 +25,7 @@ from slivin_harness.control_plane import (
     ControllerPlane,
     SelfVerifyBinding,
 )
-from slivin_harness.execution import ExecutionBroker, ExecutionRole
+from slivin_harness.execution import ExecutionBroker, ExecutionRole, ScopedExecutionPolicyError
 from slivin_harness.git_integrity import (
     CandidateWorkspaceBaseline,
     CandidateInventoryError,
@@ -2797,6 +2797,7 @@ def main(argv: list[str] | None = None) -> int:
             runtime_tmp=runtime_tmp,
             process_env=app_server_env,
             execution_policy=app_server_policy.to_dict(),
+            execution_broker=execution_broker,
         ) as codex:
             print("=== USER TASK CONTRACT ===")
             task_contract = integrity_coordinator.run_read_only(
@@ -3525,14 +3526,15 @@ def main(argv: list[str] | None = None) -> int:
 
                 # Clear role scratch so the new agents see repository facts,
                 # not temporary probes from the rejected attempt.
+                # A scoped session uses scratch as cwd; release its Windows
+                # directory handles before removing the rejected attempt.
+                codex.retire_readonly_threads()
                 for role in (
                     ExecutionRole.PLANNER,
                     ExecutionRole.IMPLEMENTER,
                     ExecutionRole.EVALUATOR,
                 ):
-                    scratch = execution_broker.scratch_root(role)
-                    shutil.rmtree(scratch, ignore_errors=True)
-                    scratch.mkdir(parents=True, exist_ok=True)
+                    execution_broker.clear_role_scratch(role)
 
                 # Restore the authoritative project environment to the clean
                 # baseline as well. Replan is intentionally expensive and
@@ -4985,6 +4987,19 @@ def main(argv: list[str] | None = None) -> int:
         print(success_code.value)
         print(f"TOTAL_ELAPSED: {time.monotonic() - started:.2f}s")
         return 0
+    except ScopedExecutionPolicyError as exc:
+        if recorder is not None:
+            recorder.write_authoritative_json(
+                "role_execution_policy_failure.json",
+                {"schema_version": "role-execution-policy-failure.v1", "status": "FAIL",
+                 "reason_code": exc.reason_code, "reason": str(exc)},
+            )
+        if run_state is not None:
+            run_state.fail_active_stage(reason_code=exc.reason_code, detail=str(exc))
+        print("HARNESS_TASK_STOPPED:", exc, file=sys.stderr)
+        if recorder is not None:
+            print("RUN_DIR:", recorder.root, file=sys.stderr)
+        return 2
     except HarnessControlledStop as exc:
         print("HARNESS_TASK_STOPPED:", exc, file=sys.stderr)
         if session is not None:

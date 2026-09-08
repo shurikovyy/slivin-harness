@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import os
 import unittest
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from slivin_harness.execution import (
     EnforcementLevel,
     ExecutionBroker,
     ExecutionRole,
+    ScopedExecutionPolicyError,
 )
 
 
@@ -103,6 +105,59 @@ class ExecutionBrokerTests(unittest.TestCase):
         roots = {broker.scratch_root(role) for role in ExecutionRole}
         self.assertEqual(len(roots), len(ExecutionRole))
         self.assertTrue(all(is_within(workspace / ".harness_tmp", root) for root in roots))
+
+    def test_scoped_context_aligns_only_write_root_and_all_cache_paths(self) -> None:
+        broker, workspace, private = self.make_broker()
+        for role in (ExecutionRole.PLANNER, ExecutionRole.EVALUATOR):
+            context = broker.prepare_readonly_role(role)
+            self.assertEqual(context.project_root, workspace.resolve())
+            self.assertNotEqual(context.scratch_root, context.project_root)
+            config = context.thread_config()
+            self.assertEqual(config[f"permissions.{context.profile_id}.filesystem"], {
+                ":root": "read", str(context.scratch_root): "write",
+            })
+            self.assertNotIn(str(private), str(config))
+            env = context.cache_environment()
+            for key in ("TEMP", "TMP", "TMPDIR", "XDG_CACHE_HOME", "NPM_CONFIG_CACHE"):
+                self.assertTrue(is_within(context.scratch_root, Path(env[key])), key)
+            self.assertEqual(context.thread_settings()["cwd"], env["TEMP"])
+            self.assertNotIn("sandbox", context.thread_settings())
+
+    def test_fresh_roles_and_replans_do_not_inherit_temporary_files(self) -> None:
+        broker, _, _ = self.make_broker()
+        old = broker.prepare_readonly_role(ExecutionRole.PLANNER)
+        (old.scratch_root / "rejected-probe.txt").write_text("old model", encoding="utf-8")
+        fresh = broker.prepare_readonly_role(ExecutionRole.PLANNER)
+        evaluator = broker.prepare_readonly_role(ExecutionRole.EVALUATOR)
+        self.assertEqual(len({old.scratch_root, fresh.scratch_root, evaluator.scratch_root}), 3)
+        self.assertFalse(list(fresh.scratch_root.iterdir()))
+        self.assertFalse(list(evaluator.scratch_root.iterdir()))
+        self.assertNotEqual(old.profile_id, fresh.profile_id)
+        self.assertNotEqual(old.cache_environment()["TEMP"], evaluator.cache_environment()["TEMP"])
+
+    def test_intake_and_implementer_cannot_accidentally_select_scoped_role(self) -> None:
+        broker, _, _ = self.make_broker()
+        for role in (ExecutionRole.INTAKE, ExecutionRole.IMPLEMENTER, ExecutionRole.CONTROLLER_CHECK):
+            with self.assertRaises(ScopedExecutionPolicyError):
+                broker.prepare_readonly_role(role)
+
+    def test_reset_removes_long_jest_cache_paths_without_touching_peer_or_project(self) -> None:
+        broker, workspace, _ = self.make_broker()
+        context = broker.prepare_readonly_role(ExecutionRole.PLANNER)
+        cache = context.scratch_root / "jest"
+        cache.mkdir()
+        path = cache / ("haste-map-" + "a" * 180)
+        target = "\\\\?\\" + str(path) if os.name == "nt" else str(path)
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write("cached")
+        peer = broker.prepare_readonly_role(ExecutionRole.EVALUATOR)
+        canary = workspace / "source.txt"
+        canary.write_text("source", encoding="utf-8")
+        broker.clear_role_scratch(ExecutionRole.PLANNER)
+        self.assertFalse(context.scratch_root.exists())
+        self.assertEqual(list(broker.scratch_root(ExecutionRole.PLANNER).iterdir()), [])
+        self.assertTrue(peer.scratch_root.is_dir())
+        self.assertEqual(canary.read_text(encoding="utf-8"), "source")
 
 
 if __name__ == "__main__":

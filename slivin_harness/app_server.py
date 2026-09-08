@@ -16,6 +16,7 @@ class TurnTimeoutError(RuntimeError):
 from typing import Callable
 
 from slivin_harness.output_schema import validate_strict_output_schema
+from slivin_harness.execution import ExecutionBroker, ExecutionRole, RoleExecutionContext, ScopedExecutionPolicyError
 
 
 def _phase4_inactivity_expired(
@@ -56,6 +57,7 @@ class CodexAppServer:
         runtime_tmp: Path | None = None,
         process_env: dict[str, str] | None = None,
         execution_policy: dict | None = None,
+        execution_broker: ExecutionBroker | None = None,
     ) -> None:
         self.codex_cmd = codex_cmd
         self.client_name = client_name
@@ -64,6 +66,9 @@ class CodexAppServer:
         self.runtime_tmp = runtime_tmp
         self.process_env = dict(process_env) if process_env is not None else None
         self.execution_policy = execution_policy
+        self.execution_broker = execution_broker
+        self._role_contexts: dict[str, RoleExecutionContext] = {}
+        self._retired_threads: set[str] = set()
 
         self.process: subprocess.Popen[str] | None = None
         self._messages: queue.Queue[dict] = queue.Queue()
@@ -145,7 +150,9 @@ class CodexAppServer:
                     "title": self.client_title,
                     "version": self.client_version,
                 },
-                "capabilities": {"experimentalApi": False},
+                # Named permission profiles and their provenance are exposed by
+                # the installed 0.153.4 experimental App Server schema.
+                "capabilities": {"experimentalApi": self.execution_broker is not None},
             },
         )
         self.notify("initialized", {})
@@ -325,28 +332,72 @@ class CodexAppServer:
             timeout=120,
         )
 
+    def retire_readonly_threads(self) -> None:
+        """Release rejected role sessions before deleting their Windows cwd.
+
+        Archive preserves the rollout for audit and shuts down the session;
+        unsubscribe alone can retain an idle thread and its working-directory
+        handle. Only this client's scoped Planner/Evaluator threads are retired.
+        """
+        for thread_id in tuple(self._role_contexts):
+            try:
+                self.request("thread/archive", {"threadId": thread_id})
+            except RuntimeError as exc:
+                raise ScopedExecutionPolicyError("ROLE_EXECUTION_RETIRE_FAILED", str(exc)) from exc
+            self._retired_threads.add(thread_id)
+            del self._role_contexts[thread_id]
+
     def start_thread(
         self,
         *,
         cwd: Path,
-        sandbox: str,
+        sandbox: str | None = None,
+        execution_role: ExecutionRole | None = None,
         developer_instructions: str | None = None,
         on_started: Callable[[dict], None] | None = None,
     ) -> str:
-        sandbox_modes = {"read-only", "workspace-write"}
-        if sandbox not in sandbox_modes:
+        context: RoleExecutionContext | None = None
+        if execution_role is not None:
+            if sandbox is not None or self.execution_broker is None:
+                raise ScopedExecutionPolicyError(
+                    "ROLE_EXECUTION_CONTEXT_REQUIRED",
+                    "Scoped roles require a Controller broker and cannot accept a legacy sandbox override",
+                )
+            if cwd.resolve() != self.execution_broker.workspace:
+                raise ScopedExecutionPolicyError("ROLE_EXECUTION_PROJECT_MISMATCH", "Role project differs from Controller workspace")
+            context = self.execution_broker.prepare_readonly_role(execution_role)
+        elif sandbox not in {"read-only", "workspace-write"}:
             raise RuntimeError(f"Unsupported sandbox mode: {sandbox}")
         params: dict = {
             "cwd": str(cwd.resolve()),
             # thread/start expects SandboxMode values, not camelCase SandboxPolicy types.
-            "sandbox": sandbox,
             "approvalPolicy": "never",
             "ephemeral": True,
         }
+        if context is None:
+            params["sandbox"] = sandbox
+        else:
+            params.update(context.thread_settings())
+            params["config"] = context.thread_config()
+            # 0.153.4 cannot archive an ephemeral thread (no rollout found).
+            # Scoped sessions need deterministic shutdown before their cwd is
+            # cleared on replan, so preserve their rollout for thread/archive.
+            params["ephemeral"] = False
+            developer_instructions = (developer_instructions or "") + "\n\n" + context.instructions()
         if developer_instructions:
             params["developerInstructions"] = developer_instructions
-        thread = self.request("thread/start", params)["thread"]
+        try:
+            response = self.request("thread/start", params)
+        except RuntimeError as exc:
+            if context is not None:
+                raise ScopedExecutionPolicyError("ROLE_EXECUTION_POLICY_UNAVAILABLE", str(exc)) from exc
+            raise
+        thread = dict(response["thread"])
         thread_id = str(thread["id"])
+        if context is not None:
+            thread["harness_execution_context"] = context.validate_response(response)
+            self._role_contexts[thread_id] = context
+            print(f"ROLE_EXECUTION_POLICY: {context.role.value} | scratch={context.scratch_root} | reported=PASS | filesystem_probe=NOT_RUN")
         self._thread_metadata[thread_id] = thread
         if on_started:
             on_started(thread)
@@ -396,11 +447,23 @@ class CodexAppServer:
             for item in skill_items
         )
         turn_params: dict = {"threadId": thread_id, "input": turn_input}
+        if thread_id in self._retired_threads:
+            raise ScopedExecutionPolicyError("ROLE_EXECUTION_THREAD_RETIRED", "A semantic reset requires a fresh role thread")
+        context = self._role_contexts.get(thread_id)
+        # Inherit the validated thread context, including corrective/Evaluator B
+        # turns. In 0.153.4, re-selecting `permissions` at turn/start reloads the
+        # base config without thread-local profiles. This API accepts no caller
+        # cwd/sandbox/permissions overrides, so it cannot widen the thread grant.
         if output_schema is not None:
             validate_strict_output_schema(output_schema)
             turn_params["outputSchema"] = output_schema
 
-        turn_id = str(self.request("turn/start", turn_params)["turn"]["id"])
+        try:
+            turn_id = str(self.request("turn/start", turn_params)["turn"]["id"])
+        except RuntimeError as exc:
+            if context is not None:
+                raise ScopedExecutionPolicyError("ROLE_EXECUTION_TURN_REJECTED", str(exc)) from exc
+            raise
         started = time.monotonic()
         last_real_activity = started
         inactivity_timeout = max(0.0, float(timeout))

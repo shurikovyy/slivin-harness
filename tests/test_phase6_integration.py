@@ -84,6 +84,9 @@ class _FakeCodexAppServer:
     def start_thread(self, **_kwargs) -> str:
         return "implementer-thread"
 
+    def retire_readonly_threads(self) -> None:
+        pass
+
 
 class Phase6ExecutableIntegrationTests(unittest.TestCase):
     def test_phase6_protocols_remain_available(self) -> None:
@@ -432,6 +435,9 @@ timeout_seconds = 30
 
             def start_thread(self, **_kwargs):
                 return "thread"
+
+            def retire_readonly_threads(self):
+                pass
 
         plan = valid_plan()
         plan["evidence_plan"]["regression"] = [

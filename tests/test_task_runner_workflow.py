@@ -40,6 +40,7 @@ def git(repo: Path, *args: str) -> str:
 class _FakeCodexAppServer:
     def __init__(self, *_args, **_kwargs) -> None:
         self._thread_index = 0
+        self.retire_count = 0
 
     def __enter__(self) -> "_FakeCodexAppServer":
         return self
@@ -50,6 +51,9 @@ class _FakeCodexAppServer:
     def start_thread(self, **_kwargs) -> str:
         self._thread_index += 1
         return f"thread-{self._thread_index}"
+
+    def retire_readonly_threads(self) -> None:
+        self.retire_count += 1
 
 
 class TaskRunnerWorkflowIntegrationTests(unittest.TestCase):
@@ -205,6 +209,8 @@ timeout_seconds = 30
             return valid_task_contract()
 
         def fake_planner(*_args, **_kwargs):
+            if (run_root / "replan_01_reset.json").exists():
+                self.assertEqual(_args[0].retire_count, 1, "Retire old scoped sessions before preparing a fresh Planner")
             if jest_refresh:
                 self.assertIn("JEST", _kwargs["available_verification_capabilities"],
                               "Each Planner needs refreshed Jest version/config evidence after reset")
@@ -459,6 +465,23 @@ timeout_seconds = 30
         self.assertFalse((run_root / "verification_plan_01.json").exists())
         self.assertFalse((run_root / "implementation_report_01.json").exists())
 
+    def test_unsupported_role_policy_is_a_controlled_failure_before_implementation(self) -> None:
+        from slivin_harness.execution import ScopedExecutionPolicyError
+
+        result, run_root, output = self.run_case(
+            benchmark=False, risk="medium",
+            planner_exception=ScopedExecutionPolicyError(
+                "ROLE_EXECUTION_POLICY_UNAVAILABLE", "Installed runtime rejected the scoped profile"
+            ),
+        )
+        self.assertEqual(result, 2, output)
+        self.assertIn("ROLE_EXECUTION_POLICY_UNAVAILABLE", output)
+        self.assertNotIn("Traceback", output)
+        diagnostic = json.loads((run_root / "role_execution_policy_failure.json").read_text(encoding="utf-8"))
+        self.assertEqual(diagnostic["reason_code"], "ROLE_EXECUTION_POLICY_UNAVAILABLE")
+        self.assertEqual(diagnostic["status"], "FAIL")
+        self.assertFalse((run_root / "implementation_report_01.json").exists())
+
     def test_production_run_records_all_steps_and_terminal_pass(self) -> None:
         result, run_root, output = self.run_case(benchmark=False)
         self.assertEqual(result, 0, output)
@@ -503,7 +526,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a28")
+        self.assertEqual(build_identity["version"], "0.8.0a29")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)

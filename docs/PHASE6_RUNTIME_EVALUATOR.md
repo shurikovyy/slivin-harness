@@ -2,6 +2,12 @@
 
 > Historical Phase 6 document. Phase 7 (`0.8.0a12`) completed clean semantic replan, one-candidate Final Gate, transactional delivery and benchmark isolation. See [Phase 7 Final Gate](PHASE7_FINAL_GATE.md).
 
+Обе Evaluator phases используют один scratch-only execution context, общий с
+Planner: project read-only, уникальный writable session/cache root, `approvalPolicy=never`.
+Fresh review после repair получает пустой новый scratch; disclosure порядка A/B
+не меняется. Requested/reported policy и actual native verification разделены;
+см. [Windows native acceptance](WINDOWS_SETUP.md#native-scoped-scratch-acceptance).
+
 Phase 6 закрывает два оставшихся quality-gap после локальных Controller checks:
 
 ```text

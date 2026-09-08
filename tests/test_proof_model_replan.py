@@ -173,6 +173,9 @@ timeout_seconds = 30
                 self.threads[thread] = kwargs
                 return thread
 
+            def retire_readonly_threads(self):
+                pass
+
             def run_turn(self, **kwargs):
                 thread = kwargs["thread_id"]
                 workspace = Path(self.threads[thread]["cwd"])

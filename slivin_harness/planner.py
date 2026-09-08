@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from slivin_harness.app_server import CodexAppServer
+from slivin_harness.execution import ExecutionRole
 from slivin_harness.protocol import (
     ArtifactContractError,
     PLANNER_PROTOCOL_VERSION,
@@ -806,7 +807,7 @@ def run_planner(
     validate_task_contract(task_contract)
     thread_id = codex.start_thread(
         cwd=workspace,
-        sandbox="read-only",
+        execution_role=ExecutionRole.PLANNER,
         developer_instructions=PLANNER_INSTRUCTIONS,
         on_started=on_thread_started,
     )

@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a28 — Phase 7
+# Архитектура Slivin Harness 0.8.0a29 — Phase 7
 
 ## Назначение
 
-`0.8.0a28` требует typed impact closure в `planner.v5` до `READY`, сохраняет
+`0.8.0a29` требует typed impact closure в `planner.v5` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a28
+Harness                     0.8.0a29
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -225,7 +225,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a28`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a29`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -609,7 +609,42 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a28` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a29` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+
+Planner/Evaluator используют один `RoleExecutionContext` (`role-execution-context.v1`)
+из `ExecutionBroker.prepare_readonly_role()`. Project root остаётся контекстом repository,
+а session cwd — уникальный `.harness_tmp/<role>/session-*`. Named permission profile
+даёт filesystem root read и только этому session root write; network выключен,
+approvalPolicy=never. Команды явно используют project workdir без дополнительного
+write grant. TEMP/TMP/TMPDIR и cache environment задаются per-thread; общий App Server
+environment не перенастраивается между ролями. Turns наследуют проверенный thread
+context без cwd/permission overrides: в 0.153.4 повторный выбор profile на turn/start
+перезагружает base config без thread-local profile и отклоняется.
+
+Codex 0.153.4 unelevated Windows не исполняет split writable roots при project session cwd;
+поэтому session root совпадает с единственным writable root. Ancestor discovery сохраняет
+repository AGENTS.md; применимые вложенные instructions читаются по project path.
+Reported instruction sources из `.harness_tmp` отклоняются, чтобы stale temporary
+instructions не попадали в fresh роль. Initial/replan Planner и fresh Evaluator получают
+пустые отдельные roots. Перед очисткой semantic reset архивирует старые scoped
+threads, сохраняя rollout и освобождая session cwd. Scoped sessions materialized:
+0.153.4 не поддерживает archive для ephemeral thread. Intake/Implementer сохраняют
+прежний ephemeral setting. Повторный turn на retired thread
+запрещён. Затем очищаются только проверенные role roots;
+Windows extended-length paths поддерживают длинные Jest cache names, cleanup errors
+не скрываются. Corrective Planner и Evaluator A/B сохраняют свой root.
+Порядок blind persistence/disclosure и candidate/Git/runtime guards не меняется.
+
+Предварительный `execution_policies.json` описывает role allocation boundary,
+не grant на весь parent scratch. Конкретный единственный writable root выбирается
+только per-thread context.
+
+`harness_execution_context` в thread metadata отделяет requested policy, reported
+effective projection и `filesystem_probe_result=NOT_RUN_BY_THREAD_START`.
+Несовместимый runtime/ответ даёт typed `role_execution_policy_failure.json`, без
+небезопасного fallback. Native enforcement проверяется отдельно
+[воспроизводимым smoke](WINDOWS_SETUP.md#native-scoped-scratch-acceptance); D-018
+в [журнале решений](DECISIONS.md) фиксирует ограничения и отвергнутые механизмы.
 
 ## 14. Что считается завершённым
 

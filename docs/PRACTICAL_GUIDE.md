@@ -1,4 +1,4 @@
-# Практическая работа с Slivin Harness 0.8.0a28
+# Практическая работа с Slivin Harness 0.8.0a29
 
 ## Установка и self-check
 
@@ -11,10 +11,21 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемый финал:
 
 ```text
-0.8.0a28
-DOCS_SYNC_PASS harness=0.8.0a28 ...
+0.8.0a29
+DOCS_SYNC_PASS harness=0.8.0a29 ...
 HARNESS_SELF_CHECK_PASS
 ```
+
+## Read-only role execution diagnostics
+
+`ROLE_EXECUTION_POLICY` показывает роль, отдельный scratch и результат проверки
+reported policy. `filesystem_probe=NOT_RUN` означает, что этот metadata record сам
+не выполнял canary probe. Ошибка поддержки/несовпадения сохраняется в
+`role_execution_policy_failure.json`; расширения sandbox по fallback нет.
+Для проверки реальных прав и cached Jest используйте
+[opt-in native smoke](WINDOWS_SETUP.md#native-scoped-scratch-acceptance).
+Текущий Planner tool-evidence refresh по-прежнему предшествует дорогому Planner turn;
+Controller config probe и role sandbox test — разные evidence.
 
 ## Intake artifact repair
 

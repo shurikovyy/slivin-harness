@@ -1,4 +1,12 @@
-# Модель качества Slivin Harness 0.8.0a28 — Phase 7
+# Модель качества Slivin Harness 0.8.0a29 — Phase 7
+
+Для Planner/Evaluator различаются requested scratch-only policy, reported App Server
+policy и результаты реальных sandbox operations. Metadata PASS не означает запуск
+assertion: opt-in [native acceptance](WINDOWS_SETUP.md#native-scoped-scratch-acceptance)
+проверяет cached Jest и denied project/dependency/neighbor mutations в одном execution
+path. Controller tool probes не заменяют этот слой. Scratch исключён из candidate/patch;
+candidate/Git/runtime guards остаются дополнительной проверкой. Rationale и границы
+доказанного записаны в [D-018 и D-021](DECISIONS.md).
 
 Нормативный autonomy contract: **[AUTONOMOUS_ENGINEERING_CONTRACT.md](AUTONOMOUS_ENGINEERING_CONTRACT.md)**.
 User scope задаёт observable результат и explicit ограничения; technical impact

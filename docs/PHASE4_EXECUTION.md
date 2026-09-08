@@ -155,6 +155,13 @@ The Execution Broker records whether a filesystem/network boundary is `ENFORCED`
 OS-enforced sandbox. Projects may require an enforced runner through their capability
 policy; otherwise the actual enforcement level is preserved in Controller evidence.
 
+Planner/Evaluator use the shared scratch-only `RoleExecutionContext`: a fresh named
+profile, role-local cache environment and session root, with explicit project command
+cwd. Intake retains read-only mode; Implementer retains managed-candidate workspace-write.
+Controller checks and held-out guards are unchanged. The
+[native acceptance command](WINDOWS_SETUP.md#native-scoped-scratch-acceptance) checks
+actual denied writes and cached assertions separately from reported policy metadata.
+
 ## Current alpha boundary
 
 `0.8.0a6` introduced the Phase 4 primitives. Phase 5 (`0.8.0a8`) implemented automatic Contract/Verification Plan recompilation and optional worktree-local `.venv` bootstrap/rebuild. Phase 6 (`0.8.0a9`) adds executable runtime proof and the two-phase Evaluator. A universal OS-enforced Controller subprocess sandbox remains pending; the Broker still records `ADVISORY`/`UNAVAILABLE` honestly instead of labelling it enforced.

@@ -458,7 +458,8 @@ class PlannerImpactClosureTests(unittest.TestCase):
 
         class FakeCodex:
             def start_thread(self, **kwargs) -> str:
-                outer.assertEqual(kwargs["sandbox"], "read-only")
+                outer.assertEqual(kwargs["execution_role"].value, "planner")
+                outer.assertNotIn("sandbox", kwargs)
                 return "planner-thread"
 
             def run_turn(self, **kwargs) -> str:

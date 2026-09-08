@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import uuid
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
@@ -10,6 +12,13 @@ from typing import Iterable, Mapping
 from slivin_harness.control_plane import canonical_path, is_within
 
 EXECUTION_BROKER_VERSION = "execution-broker.v1"
+ROLE_EXECUTION_CONTEXT_VERSION = "role-execution-context.v1"
+
+
+class ScopedExecutionPolicyError(RuntimeError):
+    def __init__(self, reason_code: str, message: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(f"{reason_code}: {message}")
 
 
 class ExecutionRole(str, Enum):
@@ -27,6 +36,126 @@ class EnforcementLevel(str, Enum):
     ENFORCED = "ENFORCED"
     ADVISORY = "ADVISORY"
     UNAVAILABLE = "UNAVAILABLE"
+
+
+@dataclass(frozen=True)
+class RoleExecutionContext:
+    """Controller-owned project/read + session scratch/write context.
+
+    Codex 0.153.4's native unelevated sandbox requires its session root to
+    coincide with the writable root. Command cwd may still be the project.
+    """
+
+    role: ExecutionRole
+    project_root: Path
+    scratch_root: Path
+    profile_id: str
+
+    def cache_environment(self) -> dict[str, str]:
+        return {
+            "TEMP": str(self.scratch_root),
+            "TMP": str(self.scratch_root),
+            "TMPDIR": str(self.scratch_root),
+            "XDG_CACHE_HOME": str(self.scratch_root / "cache"),
+            "NPM_CONFIG_CACHE": str(self.scratch_root / "npm"),
+            "SLIVIN_HARNESS_WORKSPACE": str(self.project_root),
+            "SLIVIN_HARNESS_EXECUTION_ROLE": self.role.value,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+        }
+
+    def thread_config(self) -> dict:
+        # Select a fresh named profile, never extend legacy workspace grants.
+        # Native unelevated Windows cannot enforce deny-read/split-root rules.
+        # Preserve legacy read access; the sole write grant is this scratch.
+        return {
+            f"permissions.{self.profile_id}.filesystem": {
+                ":root": "read", str(self.scratch_root): "write",
+            },
+            f"permissions.{self.profile_id}.network.enabled": False,
+            "shell_environment_policy.set": self.cache_environment(),
+        }
+
+    def thread_settings(self) -> dict:
+        return {
+            "cwd": str(self.scratch_root),
+            "permissions": self.profile_id,
+            "approvalPolicy": "never",
+        }
+
+    def instructions(self) -> str:
+        return (
+            "CONTROLLER EXECUTION CONTEXT:\n"
+            f"Project root: {self.project_root}\n"
+            f"Session root and sole writable scratch: {self.scratch_root}\n"
+            "The project, its tests, dependencies and Git controls are read-only. "
+            "Resolve repository-relative paths against the project root above; "
+            "set command workdir/cwd to that project root for tests, searches and Git diff. "
+            "Changing command cwd does not grant project writes. Follow the project's "
+            "AGENTS.md and applicable nested repository instructions. The session root "
+            "is inside the project so ancestor repository instruction discovery is retained. "
+            "Use the provided role-local TEMP/TMP/TMPDIR and cache paths for diagnostics; "
+            "do not use other roles' scratch or previous attempts. No permission escalation."
+        )
+
+    def requested_metadata(self) -> dict:
+        return {
+            "schema_version": ROLE_EXECUTION_CONTEXT_VERSION,
+            "role": self.role.value,
+            "project_root": str(self.project_root),
+            "session_root": str(self.scratch_root),
+            "scratch_root": str(self.scratch_root),
+            "profile_id": self.profile_id,
+            "filesystem": {":root": "read", str(self.scratch_root): "write"},
+            "network_access": False,
+            "approval_policy": "never",
+            "environment": self.cache_environment(),
+            "turn_policy": "INHERIT_THREAD_CONTEXT",
+        }
+
+    def validate_response(self, response: Mapping) -> dict:
+        policy = response.get("sandbox", {})
+        profile = response.get("activePermissionProfile", {}) or {}
+        if not isinstance(policy, Mapping) or not isinstance(profile, Mapping):
+            raise ScopedExecutionPolicyError("ROLE_EXECUTION_POLICY_MISMATCH", "Malformed App Server permission metadata")
+        roots = policy.get("writableRoots", [])
+        expected_root = str(self.scratch_root)
+        if (
+            response.get("cwd") != expected_root
+            or response.get("runtimeWorkspaceRoots") != [expected_root]
+            or response.get("approvalPolicy") != "never"
+            or profile.get("id") != self.profile_id
+            or profile.get("extends") is not None
+            or policy.get("type") != "workspaceWrite"
+            or not isinstance(roots, list)
+            or any(root != expected_root for root in roots)
+            or policy.get("networkAccess") is not False
+            or policy.get("excludeTmpdirEnvVar") is not True
+            or policy.get("excludeSlashTmp") is not True
+        ):
+            raise ScopedExecutionPolicyError(
+                "ROLE_EXECUTION_POLICY_MISMATCH", "App Server did not report the requested scratch-only policy"
+            )
+        sources = response.get("instructionSources")
+        if not isinstance(sources, list) or any(
+            not isinstance(path, str) or is_within(self.project_root / ".harness_tmp", Path(path))
+            for path in sources
+        ):
+            raise ScopedExecutionPolicyError(
+                "ROLE_EXECUTION_INSTRUCTION_CONTAMINATION",
+                "Repository instructions must not be inherited from temporary role artifacts",
+            )
+        return {
+            "requested": self.requested_metadata(),
+            "reported": {key: response[key] for key in (
+                "cwd", "runtimeWorkspaceRoots", "approvalPolicy", "sandbox",
+                "activePermissionProfile", "instructionSources",
+            )},
+            "reported_policy_validation": "PASS",
+            # Metadata is not a filesystem probe; native acceptance records its
+            # own actual operations without claiming universal enforcement.
+            "filesystem_probe_result": "NOT_RUN_BY_THREAD_START",
+        }
 
 
 @dataclass(frozen=True)
@@ -167,13 +296,57 @@ class ExecutionBroker:
         root.mkdir(parents=True, exist_ok=True)
         return canonical_path(root)
 
+    def prepare_readonly_role(self, role: ExecutionRole) -> RoleExecutionContext:
+        if role not in {ExecutionRole.PLANNER, ExecutionRole.EVALUATOR}:
+            raise ScopedExecutionPolicyError("ROLE_EXECUTION_ROLE_INVALID", "Only Planner/Evaluator use scoped scratch")
+        parent = self._checked_role_scratch_root(role)
+        # mkdtemp uses mode 0700, which creates a protected owner-only DACL on
+        # Windows/Python 3.13+. That prevents the restricted-token runner from
+        # reading its own scratch. Use normal inherited directory permissions;
+        # the selected Codex profile supplies the scoped write boundary.
+        scratch = parent / ("session-" + uuid.uuid4().hex)
+        scratch.mkdir(exist_ok=False)
+        scratch = canonical_path(scratch)
+        return RoleExecutionContext(role, self.workspace, scratch, "harness_" + role.value + "_" + scratch.name.replace("-", "_"))
+
+    def _checked_role_scratch_root(self, role: ExecutionRole) -> Path:
+        parent = self.workspace / ".harness_tmp" / role.value
+        for path in (parent.parent, parent):
+            if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+                raise ScopedExecutionPolicyError("ROLE_EXECUTION_SCRATCH_UNSAFE", "Role scratch cannot be a link/junction")
+        parent.mkdir(parents=True, exist_ok=True)
+        if not is_within(self.workspace / ".harness_tmp", parent):
+            raise ScopedExecutionPolicyError("ROLE_EXECUTION_SCRATCH_UNSAFE", "Role scratch escaped workspace")
+        return parent
+
+    def clear_role_scratch(self, role: ExecutionRole) -> None:
+        if role not in {ExecutionRole.PLANNER, ExecutionRole.IMPLEMENTER, ExecutionRole.EVALUATOR}:
+            raise ScopedExecutionPolicyError("ROLE_EXECUTION_ROLE_INVALID", "Only attempt role scratch may be reset")
+        root = canonical_path(self._checked_role_scratch_root(role))
+        # Containment/link checks above precede deletion. Jest cache names can
+        # exceed MAX_PATH; normal rmtree can leave such children behind on Windows.
+        target = str(root)
+        if os.name == "nt" and not target.startswith("\\\\?\\"):
+            target = "\\\\?\\UNC\\" + target[2:] if target.startswith("\\\\") else "\\\\?\\" + target
+        try:
+            shutil.rmtree(target)
+            root.mkdir()
+        except OSError as exc:
+            raise ScopedExecutionPolicyError("ROLE_EXECUTION_SCRATCH_CLEANUP_FAILED", str(exc)) from exc
+
     def policy_for(self, role: ExecutionRole) -> ExecutionPolicy:
         scratch = self.scratch_root(role)
         if role == ExecutionRole.IMPLEMENTER:
             writable = (str(self.workspace),)
             fs_level = EnforcementLevel.ENFORCED
             notes = ("Codex workspace-write sandbox; Controller private plane is outside cwd.",)
-        elif role in {ExecutionRole.INTAKE, ExecutionRole.PLANNER, ExecutionRole.EVALUATOR}:
+        elif role in {ExecutionRole.PLANNER, ExecutionRole.EVALUATOR}:
+            writable = (str(scratch),)
+            fs_level = EnforcementLevel.ADVISORY
+            notes = (
+                "Each fresh thread selects a named scratch-only permission profile and unique session/cache root; project remains read-only. Requested/reported policy and native probe results are separate evidence.",
+            )
+        elif role == ExecutionRole.INTAKE:
             writable = (str(scratch),)
             fs_level = EnforcementLevel.ADVISORY
             notes = (

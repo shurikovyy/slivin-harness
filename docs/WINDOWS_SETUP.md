@@ -177,9 +177,62 @@ capability probe and skips only that unsupported condition.
 
 ## Two-phase Evaluator
 
-Evaluator uses a fresh read-only App Server thread. Phase A is persisted before Phase B. Both
-phase boundaries re-check candidate identity. Evaluator scratch is writable; candidate files
-must remain unchanged.
+Evaluator uses a fresh scratch-only permission profile shared with the Planner execution
+contract below. Phase A is persisted before Phase B. Both phase boundaries re-check
+candidate identity. Evaluator scratch is writable; candidate files remain read-only.
+
+## Native scoped scratch acceptance
+
+Codex 0.153.4's generated experimental App Server schema supports `permissions` on
+thread/start and turn/start, per-thread `config`, `activePermissionProfile` and
+`runtimeWorkspaceRoots`. Harness enables that API, creates a unique named profile
+with `:root = read` and the role scratch `= write`, disables network and keeps
+`approvalPolicy=never`. It does not combine this with legacy `sandbox` overrides.
+
+The native unelevated restricted-token runner rejects split writable roots when
+the session cwd remains the project. Harness therefore uses
+`<project>/.harness_tmp/<role>/session-*` as the session root and sole write root.
+The agent sets command workdir to the project for repository-relative tests/search/Git.
+Ancestor AGENTS.md discovery remains available; nested instructions are read in the
+project context. A fresh session is empty and cannot inherit temporary AGENTS.md. Scratch uses ordinary
+inherited mkdir permissions: Python 3.13+ mkdtemp mode 0700 creates a protected DACL
+that the tested restricted-token runner cannot read. No manual ACL grants are added.
+TEMP/TMP/TMPDIR, XDG and npm cache settings belong to that thread, not the shared
+App Server scratch. Semantic reset archives old scoped threads before deleting their
+session cwd; their rollouts remain in local Codex storage for audit. These scoped
+sessions are materialized because 0.153.4 cannot archive an ephemeral thread.
+Intake/Implementer retain their previous ephemeral setting. Reset uses validated extended-length paths on Windows
+to remove long Jest cache names; cleanup errors are reported, not ignored. Corrective turns and Evaluator A/B retain the same context.
+
+Requested settings and reported effective metadata are saved as
+`harness_execution_context` in thread evidence. A mismatched/unsupported profile
+stops with a typed diagnostic; there is no broad-write fallback. Metadata validation
+does not label actual filesystem probes PASS. Read access remains the prior broad
+read access: the tested unelevated runner rejects deny-read rules. This change does
+not claim new OS-enforced private-read isolation or a universal Controller sandbox.
+See [D-018](DECISIONS.md) for evidence and rejected alternatives.
+
+Run the opt-in LLM-backed smoke with existing installed tools and an existing
+`node_modules` tree. Use a new output directory outside Harness and the source project/runtime:
+
+```powershell
+py tools/smoke_readonly_scratch.py --codex C:\Tools\codex-cli\node_modules\.bin\codex.cmd --node C:\Tools\node\node.exe --runtime-source C:\DisposableRuntime\node_modules --output C:\Temp\scratch-acceptance-new
+```
+
+The tool physically copies dependencies, initializes only a disposable synthetic Git
+repository and runs production `CodexAppServer`/`ExecutionBroker` with real Planner and
+Evaluator instructions. It never installs packages or changes ACL/config/sandbox access.
+It records actual command/cwd/exit/output, thread policy, versions, cached cold/warm and
+fresh-role Jest passes, an executed intentional assertion failure, scratch write/read,
+and denied absolute/relative project/test/dependency/Git/private/peer/neighbor operations.
+Peer checks also target the granted scratch of another active role in both directions;
+an ungranted sibling directory alone does not prove per-thread isolation.
+Continuations check the same policy; fresh Planner follows scratch cleanup. Existing
+unit/integration tests additionally cover real `run_planner` corrective/replan and
+Evaluator blind A→immutable persistence→B routing; the native smoke does not certify
+semantic role output or a full product trial. Child `spawnSync` is recorded separately.
+Source runtime fingerprints and candidate/Git/runtime guards check invariance.
+Logs remain outside Git. This opt-in check is not part of offline self-check.
 
 ## Final Gate и delivery
 
