@@ -262,7 +262,7 @@ config target не сканируется и не изменяется. Candidat
 После Evaluator PASS Controller строит patch proof, materializes fresh proof
 runtime и повторяет static preflight, repair checks и benchmark held-out в clean
 reconstruction repo. Только `reconstructed-verification.v1=PASS` разрешает
-`final-acceptance.v3`; перед Final Acceptance также обязателен `user-follow-up.v1`.
+`final-acceptance.v3`; перед Final Acceptance также обязателен `user-follow-up.v2`.
 Для `apply_to_source` используется короткий cross-platform
 delivery lock в Git common-dir. Controller повторно проверяет source HEAD, clean
 state и preimages до apply, а затем exact patch/postimages.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from slivin_harness.boundaries import boundary
+
 import copy
 import json
 import re
@@ -8,8 +10,11 @@ from typing import Any, Callable, Mapping, Sequence
 
 from slivin_harness.app_server import CodexAppServer
 from slivin_harness.execution import ExecutionRole
-from slivin_harness.impact import impact_paths, impact_text, safe_impact_path, validate_owner_prose_boundary
+from slivin_harness.impact import impact_paths, impact_text, safe_impact_path, validate_owner_prose_boundary, validate_impact_structure
 from slivin_harness.implementer import validate_implementation_impact_closure
+from slivin_harness.source_records import source_ref
+from slivin_harness.report_recovery import ReportCorrectionState, ReportRecoveryStop, MAX_REPORT_CORRECTIONS, correction_prompt
+from slivin_harness.protocol import ArtifactContractError
 from slivin_harness.phase6 import BLIND_AUDIT_VERSION
 from slivin_harness.protocol import EVALUATOR_PROTOCOL_VERSION, ensure_exact_keys, require_string_list, require_type
 from slivin_harness.verification import PROOF_TARGET_SCHEMA, validate_proof_target
@@ -68,8 +73,8 @@ _CHALLENGE_DISPOSITIONS = {
     "blind_consumer_dispositions": ("COVERED_IN_SCOPE", "MISCLASSIFIED_NOT_AFFECTED", "MISCLASSIFIED_OUT_OF_SCOPE", "MISSING"),
     "planner_consumer_dispositions": ("CONFIRMED", "UNSUPPORTED", "IMPLEMENTATION_GAP"),
     "implementer_consumer_dispositions": ("CONFIRMED", "UNSUPPORTED", "INCOMPLETE"),
-    "not_affected_dispositions": ("CONFIRMED_NOT_AFFECTED", "ACTUALLY_AFFECTED", "INSUFFICIENT_EVIDENCE"),
-    "related_follow_up_dispositions": ("CONFIRMED_OUT_OF_SCOPE", "ACTUALLY_IN_SCOPE", "UNSUPPORTED"),
+    "not_affected_dispositions": ("CONFIRMED_NOT_AFFECTED", "ACTUALLY_AFFECTED", "INSUFFICIENT_EVIDENCE", "PROMOTED_IN_SCOPE"),
+    "related_follow_up_dispositions": ("CONFIRMED_OUT_OF_SCOPE", "ACTUALLY_IN_SCOPE", "UNSUPPORTED", "PROMOTED_IN_SCOPE"),
     "changed_path_dispositions": ("UNDERSTOOD", "SUSPICIOUS", "UNJUSTIFIED"),
 }
 
@@ -84,12 +89,12 @@ def _challenge_schema() -> dict:
             reference = "reference"
             enums["source"] = ("BLIND", "PLANNER", "IMPLEMENTER")
         else:
-            reference = "path" if group == "changed_path_dispositions" else "name"
-        schema = _rows(text=(reference, "reason"), lists=("evidence_paths", "evidence", "finding_ids"), enums=enums)
+            reference = "path" if group == "changed_path_dispositions" else "reference"
+        schema = _rows(text=((reference, "reason") if group.startswith("blind_") or group == "changed_path_dispositions" else (reference, "source_revision", "reason")), lists=("evidence_paths", "evidence", "finding_ids"), enums=enums)
         if group.startswith("blind_"):
             fields = schema["items"]["properties"]
             fields["matches"] = _rows(
-                text=("name",),
+                text=("reference", "source_revision"),
                 enums={"source": ("PLANNER", "IMPLEMENTER"), "classification": ("CHANGED_CONTRACT", "IN_SCOPE", "NOT_AFFECTED", "RELATED_OUT_OF_SCOPE")},
             )
             schema["items"]["required"].append("matches")
@@ -201,7 +206,7 @@ PHASE B — independent impact challenge:
 - Каждый blind contract, blind affected consumer, Planner IN_SCOPE и Implementer DISCOVERED
   consumer получает evidence-backed disposition. Independently challenge каждый NOT_AFFECTED
   и RELATED_OUT_OF_SCOPE из всех трёх ledgers; source=BLIND references используют impact_id,
-  source=PLANNER/IMPLEMENTER — name. Не считай согласие двух прежних агентов доказательством.
+  source=PLANNER/IMPLEMENTER — exact reference=source_id and source_revision from canonical source_ref. Never regenerate inherited names or text. Не считай согласие двух прежних агентов доказательством.
 - Каждый actual changed path получает UNDERSTOOD/SUSPICIOUS/UNJUSTIFIED с repository evidence.
   Dispositions содержат concrete reason, existing evidence_paths и evidence. coverage_summary
   объясняет полноту challenge, но не заменяет ни одной строки.
@@ -280,7 +285,10 @@ def _validate_rows(rows: object, schema: Mapping[str, Any], *, workspace: Path, 
             value = row[key]
             key_field = f"{row_field}.{key}"
             if kind["type"] == "string":
-                impact_text(value, field=key_field)
+                if key == "source_revision" and row.get("source") == "BLIND":
+                    require_type(value, str, field=key_field)
+                else:
+                    impact_text(value, field=key_field)
                 if "enum" in kind and value not in kind["enum"]:
                     raise RuntimeError(f"{key_field} enum invalid")
             elif kind["items"]["type"] == "object":
@@ -308,6 +316,7 @@ def _exact_paths(paths: Sequence[str], changed_paths: Sequence[str], *, workspac
     impact_paths(normalized, field=field, workspace=workspace, allow_missing=True)
 
 
+@boundary("B10")
 def validate_blind_audit(
     audit: Mapping[str, Any], *, workspace: Path, candidate_id: str,
     changed_paths: Sequence[str], owner_allowed_paths: Sequence[str] = (),
@@ -322,6 +331,7 @@ def validate_blind_audit(
     if audit["candidate_id"] != candidate_id:
         raise RuntimeError("Blind audit is stale for the current candidate")
     analysis = audit["impact_analysis"]
+    validate_impact_structure(analysis, schema=BLIND_IMPACT_SCHEMA, workspace=workspace, field="impact_analysis")
     require_type(analysis, dict, field="impact_analysis")
     fields = BLIND_IMPACT_SCHEMA["properties"]
     ensure_exact_keys(analysis, allowed=fields, required=fields, field="impact_analysis")
@@ -397,11 +407,32 @@ def _impact_sources(
     blind_audit: Mapping[str, Any], planner_impact_closure: Mapping[str, Any] | None,
     implementation_impact_closure: Mapping[str, Any],
 ) -> dict[str, Mapping[str, Any]]:
+    planner = copy.deepcopy(planner_impact_closure or {})
+    records = implementation_impact_closure["source_inventory"]["records"]
+    for group in ("changed_contracts", "in_scope_consumers", "not_affected_consumers", "related_out_of_scope"):
+        origins = [record for record in records if record["author"] == "PLANNER" and record["group"] == group]
+        if [record["claim"] for record in origins] != planner.get(group, []):
+            raise RuntimeError("Evaluator Planner origins do not match the current source records")
+        planner[group] = [dict(copy.deepcopy(record["claim"]), source_ref=source_ref(record)) for record in origins]
+    implementer = copy.deepcopy(implementation_impact_closure["post_patch_impact"])
+    promoted = {event["source_ref"]["source_id"] for event in implementation_impact_closure["source_inventory"]["transitions"]}
+    for record in records:
+        if record["author"] != "PLANNER" and record["source_id"] in promoted:
+            implementer[record["group"]].append(dict(copy.deepcopy(record["claim"]), source_ref=source_ref(record)))
     return {
         "BLIND": blind_audit["impact_analysis"],
-        "PLANNER": planner_impact_closure or {},
-        "IMPLEMENTER": implementation_impact_closure["post_patch_impact"],
+        "PLANNER": planner,
+        "IMPLEMENTER": implementer,
     }
+
+
+
+def _validate_origin_reference(row: Mapping[str, Any], origins: Sequence[Mapping[str, Any]]) -> str:
+    identifier = row["reference"]
+    record = next((item for item in origins if item["source_ref"]["source_id"] == identifier), None)
+    if record is None or record["source_ref"]["source_revision"] != row["source_revision"]:
+        raise RuntimeError("Evaluator reference is unknown or has a stale source revision")
+    return identifier
 
 
 def validate_impact_challenge(
@@ -410,6 +441,7 @@ def validate_impact_challenge(
     implementation_impact_closure: Mapping[str, Any], changed_paths: Sequence[str],
 ) -> None:
     challenge = evaluation["impact_challenge"]
+    validate_impact_structure(challenge, schema=IMPACT_CHALLENGE_SCHEMA, workspace=workspace, field="impact_challenge")
     require_type(challenge, dict, field="impact_challenge")
     fields = IMPACT_CHALLENGE_SCHEMA["properties"]
     ensure_exact_keys(challenge, allowed=fields, required=fields, field="impact_challenge")
@@ -420,13 +452,13 @@ def validate_impact_challenge(
     expected = {
         "blind_contract_dispositions": {row["impact_id"] for row in sources["BLIND"]["changed_contracts"]},
         "blind_consumer_dispositions": {row["impact_id"] for row in sources["BLIND"]["affected_consumers"]},
-        "planner_consumer_dispositions": {_name(row["name"]) for row in sources["PLANNER"].get("in_scope_consumers", [])},
-        "implementer_consumer_dispositions": {_name(row["name"]) for row in sources["IMPLEMENTER"]["in_scope_consumers"] if row["source"] == "DISCOVERED"},
+        "planner_consumer_dispositions": {row["source_ref"]["source_id"] for row in sources["PLANNER"].get("in_scope_consumers", [])},
+        "implementer_consumer_dispositions": {row["source_ref"]["source_id"] for row in sources["IMPLEMENTER"]["in_scope_consumers"] if row["source"] == "DISCOVERED"},
         "changed_path_dispositions": {safe_impact_path(path, field="changed_paths") for path in changed_paths},
     }
     for group, input_group in (("not_affected_dispositions", "not_affected_consumers"), ("related_follow_up_dispositions", "related_out_of_scope")):
         expected[group] = {
-            (source, row["impact_id"] if source == "BLIND" else _name(row["name"]))
+            (source, row["impact_id"] if source == "BLIND" else row["source_ref"]["source_id"])
             for source, ledger in sources.items() for row in ledger.get(input_group, [])
         }
     final_ids = {row["finding_id"] for row in evaluation["findings"]}
@@ -439,20 +471,25 @@ def validate_impact_challenge(
             if group.startswith("blind_"):
                 key = row["impact_id"]
                 for match in row["matches"]:
-                    valid_names = {_name(item["name"]) for item in sources[match["source"]].get(classifications[match["classification"]], [])}
-                    if _name(match["name"]) not in valid_names:
-                        raise RuntimeError("Blind impact match must reference an existing normalized ledger row")
+                    _validate_origin_reference(match, sources[match["source"]].get(classifications[match["classification"]], []))
                     contract_match = match["classification"] == "CHANGED_CONTRACT"
                     if contract_match != (group == "blind_contract_dispositions"):
                         raise RuntimeError("Blind contract/consumer match classification is invalid")
                 if group == "blind_consumer_dispositions" and row["disposition"] == "COVERED_IN_SCOPE" and not any(match["classification"] == "IN_SCOPE" for match in row["matches"]):
                     raise RuntimeError("COVERED_IN_SCOPE requires an actual IN_SCOPE ledger reference")
             elif "source" in row:
-                key = (row["source"], row["reference"] if row["source"] == "BLIND" else _name(row["reference"]))
+                key = (row["source"], row["reference"])
+                if row["source"] == "BLIND":
+                    if row["source_revision"]:
+                        raise RuntimeError("Blind references have independent IDs and no prior-source revision")
+                else:
+                    input_group = "not_affected_consumers" if group == "not_affected_dispositions" else "related_out_of_scope"
+                    _validate_origin_reference(row, sources[row["source"]].get(input_group, []))
             elif "path" in row:
                 key = safe_impact_path(row["path"], field="changed_path_dispositions.path")
             else:
-                key = _name(row["name"])
+                source = "PLANNER" if group == "planner_consumer_dispositions" else "IMPLEMENTER"
+                key = _validate_origin_reference(row, sources[source].get("in_scope_consumers", []))
             if key in seen:
                 raise RuntimeError(f"{group} contains duplicate dispositions")
             seen.add(key)
@@ -460,6 +497,18 @@ def validate_impact_challenge(
             if len(finding_ids) != len(set(finding_ids)) or not set(finding_ids) <= final_ids:
                 raise RuntimeError("Impact finding_ids must uniquely reference existing final findings")
             negative = row["disposition"] != dispositions[0]
+            if row["disposition"] == "PROMOTED_IN_SCOPE":
+                transition = next((event for event in implementation_impact_closure["source_inventory"]["transitions"]
+                                   if event["source_ref"] == {"source_id": row["reference"],
+                                                              "source_revision": row["source_revision"]}), None)
+                target_id = transition["target_ref"]["source_id"] if transition else None
+                target = next((item for item in sources["IMPLEMENTER"]["in_scope_consumers"]
+                               if item["source_ref"]["source_id"] == target_id), None)
+                confirmation = next((item for item in challenge["implementer_consumer_dispositions"]
+                                     if item["reference"] == target_id and item["disposition"] == "CONFIRMED"), None)
+                if row["source"] == "BLIND" or target is None or confirmation is None:
+                    raise RuntimeError("PROMOTED_IN_SCOPE requires an admitted promotion and independently confirmed current target")
+                negative = False
             if negative and not finding_ids:
                 raise RuntimeError("Every negative impact disposition requires a corresponding final finding")
             if negative and evaluation["status"] == EvaluatorStatus.PASS.value:
@@ -475,6 +524,7 @@ def validate_impact_challenge(
     _exact_paths([row["path"] for row in challenge["changed_path_dispositions"]], changed_paths, workspace=workspace, field="changed_path_dispositions")
 
 
+@boundary("B11")
 def validate_evaluation_artifact(
     evaluation: Mapping[str, Any], *, blind_audit: Mapping[str, Any], workspace: Path,
     candidate_id: str, changed_paths: Sequence[str],
@@ -579,6 +629,7 @@ def validate_evaluation_artifact(
     )
 
 
+@boundary("B10")
 def run_evaluator(
     codex: CodexAppServer,
     *,
@@ -599,6 +650,7 @@ def run_evaluator(
     revision_binding: Mapping[str, Any],
     on_blind_audit: Callable[[dict[str, Any]], None],
     on_phase_complete: Callable[[str], None],
+    on_raw_report: Callable[[str, int, str], None] | None = None,
     runtime_probe_guidance: list[str] | None = None,
     explicit_skills: list[dict[str, str]] | None = None,
     on_heartbeat: Callable[[dict], None] | None = None,
@@ -613,6 +665,27 @@ def run_evaluator(
         developer_instructions=EVALUATOR_INSTRUCTIONS,
         on_started=on_thread_started,
     )
+
+    def admit_phase(phase: str, prompt: str, schema: dict, validate) -> dict:
+        correction = ReportCorrectionState()
+        for attempt in range(MAX_REPORT_CORRECTIONS + 1):
+            raw = codex.run_turn(
+                thread_id=thread_id, prompt=prompt, output_schema=schema,
+                skills=explicit_skills, on_heartbeat=on_heartbeat,
+                timeout=timeout if not attempt else min(timeout, 300),
+            )
+            if on_raw_report is not None:
+                on_raw_report(phase, attempt, raw)
+            on_phase_complete(phase)
+            report = _parse_json(raw, label=f"Evaluator {phase}")
+            correction.observe(report)
+            try:
+                validate(report)
+                return report
+            except ArtifactContractError as error:
+                fields = correction.next_fields(error, attempt=attempt)
+                prompt = correction_prompt(error, fields=fields, role=f"Evaluator {phase}")
+        raise ReportRecoveryStop("REPORT_CORRECTION_EXHAUSTED")
     phase_a_prompt = f"""
 PHASE A — BLIND DISCOVERY.
 
@@ -640,17 +713,9 @@ Current candidate id:
 Не вставляй весь diff в ответ. Верни independent impact_analysis с собственными IDs,
 outward search evidence и exact changed-path review в immutable structured blind audit.
 """.strip()
-    raw_audit = codex.run_turn(
-        thread_id=thread_id,
-        prompt=phase_a_prompt,
-        output_schema=BLIND_AUDIT_SCHEMA,
-        skills=explicit_skills,
-        on_heartbeat=on_heartbeat,
-        timeout=timeout,
-    )
-    on_phase_complete("PHASE_A")
-    blind_audit = _parse_json(raw_audit, label="Evaluator Phase A")
-    validate_blind_audit(blind_audit, workspace=workspace, candidate_id=candidate_id, changed_paths=changed_paths, owner_allowed_paths=owner_allowed_paths)
+    blind_audit = admit_phase("PHASE_A", phase_a_prompt, BLIND_AUDIT_SCHEMA,
+        lambda value: validate_blind_audit(value, workspace=workspace, candidate_id=candidate_id,
+                                         changed_paths=changed_paths, owner_allowed_paths=owner_allowed_paths))
     # The Controller persists the blind artifact before any Contract/check framing
     # is disclosed to the same evaluator thread.
     on_blind_audit(copy.deepcopy(blind_audit))
@@ -661,6 +726,7 @@ outward search evidence и exact changed-path review в immutable structured bli
         contract=implementation_contract, changed_paths=changed_paths, revision_binding=revision_binding,
     )
     planner_impact = copy.deepcopy(plan["impact_closure"]) if plan is not None else None
+    disclosed_sources = _impact_sources(blind_audit, planner_impact, implementation_impact_closure)
 
     phase_b_prompt = f"""
 PHASE B — INDEPENDENT IMPACT CHALLENGE.
@@ -675,7 +741,7 @@ IMPLEMENTATION CONTRACT:
 {json.dumps(implementation_contract, ensure_ascii=False, indent=2)}
 
 NORMALIZED PLANNER IMPACT CLOSURE:
-{json.dumps(planner_impact, ensure_ascii=False, indent=2)}
+{json.dumps(disclosed_sources["PLANNER"], ensure_ascii=False, indent=2)}
 
 CONTROLLER-NORMALIZED IMPLEMENTATION IMPACT CLOSURE:
 {json.dumps(implementation_impact_closure, ensure_ascii=False, indent=2)}
@@ -701,19 +767,10 @@ blind contract/consumer ID, каждый Planner IN_SCOPE, Implementer DISCOVERE
 и RELATED_OUT_OF_SCOPE всех источников и каждый actual changed path ровно один раз.
 Negative dispositions требуют final finding_ids и запрещают PASS. Новые findings разрешены.
 """.strip()
-    raw_verdict = codex.run_turn(
-        thread_id=thread_id,
-        prompt=phase_b_prompt,
-        output_schema=EVALUATOR_SCHEMA,
-        skills=explicit_skills,
-        on_heartbeat=on_heartbeat,
-        timeout=timeout,
-    )
-    on_phase_complete("PHASE_B")
-    verdict = _parse_json(raw_verdict, label="Evaluator Phase B")
-    validate_evaluation_artifact(
-        verdict, blind_audit=blind_audit, workspace=workspace, candidate_id=candidate_id,
+    verdict = admit_phase("PHASE_B", phase_b_prompt, EVALUATOR_SCHEMA,
+        lambda value: validate_evaluation_artifact(
+        value, blind_audit=blind_audit, workspace=workspace, candidate_id=candidate_id,
         changed_paths=changed_paths, planner_impact_closure=planner_impact,
         implementation_impact_closure=implementation_impact_closure, owner_allowed_paths=owner_allowed_paths,
-    )
+    ))
     return blind_audit, verdict

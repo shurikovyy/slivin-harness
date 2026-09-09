@@ -6,8 +6,8 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
-PLANNER_PROTOCOL_VERSION = "planner.v5"
-EVALUATOR_PROTOCOL_VERSION = "evaluator.v6"
+PLANNER_PROTOCOL_VERSION = "planner.v6"
+EVALUATOR_PROTOCOL_VERSION = "evaluator.v7"
 MANIFEST_VERSION = 2
 
 
@@ -38,6 +38,21 @@ class ArtifactContractError(RuntimeError):
             "expected": self.expected,
             "actual": self.actual,
         }
+
+
+class ArtifactDiagnosticBatch(ArtifactContractError):
+    """Independent diagnostics; first-error attributes remain useful to callers."""
+
+    def __init__(self, diagnostics: list[ArtifactContractError]) -> None:
+        if not diagnostics:
+            raise ValueError("A diagnostic batch cannot be empty")
+        first = diagnostics[0]
+        super().__init__(code=first.code, field=first.field, message=first.message,
+                         expected=first.expected, actual=first.actual)
+        self.diagnostics = tuple(diagnostics)
+
+    def feedback(self) -> dict[str, object | None]:
+        return {**super().feedback(), "diagnostics": [item.feedback() for item in self.diagnostics]}
 
 
 def stable_fingerprint(value: object, *, length: int = 16) -> str:

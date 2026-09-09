@@ -31,7 +31,7 @@ def report_for(contract, plan, paths, *, status="COMPLETE", kind="NONE"):
         "contract_evidence": [{"item_id": row["id"], "status": "VERIFIED", "evidence": ["Both public readers reject expired entries and retain fresh reads."]} for row in contract["items"]] if status == "COMPLETE" else [],
         "self_verification": {"status": "PASS", "command": "self", "evidence": ["SELF_VERIFY_PASS"], "receipt_id": ""},
         "additional_check_paths": [], "registered_checks": [], "discovered_obligations": [], "blockers": [],
-    }, plan=plan, changed_paths=paths)
+    }, plan=plan, changed_paths=paths, contract=contract)
 
 
 class TerminalReasonTests(unittest.TestCase):
@@ -85,7 +85,7 @@ class TerminalReasonTests(unittest.TestCase):
 
 
 class ProofModelWorkflowTests(unittest.TestCase):
-    def run_case(self, *, owner_legacy_gate=False, broken_reader=False):
+    def run_case(self, *, owner_legacy_gate=False, broken_reader=False, technical_review=False):
         root = Path(tempfile.mkdtemp(prefix="slivin-proof-replan-"))
         repo = root / "repo"
         repo.mkdir()
@@ -150,7 +150,7 @@ command = ["{python}", "target_tests.py"]
 timeout_seconds = 30
 ''' + extra, encoding="utf-8")
         run_root = root / "run"
-        observed = {"planner": [], "implementer": [], "self_verify": [], "evaluator": 0, "contracts": []}
+        observed = {"planner": [], "proof_reviews": [], "implementer": [], "self_verify": [], "evaluator": 0, "contracts": []}
         test = self
 
         class Recorder(task_runner.RunRecorder):
@@ -181,16 +181,32 @@ timeout_seconds = 30
                 workspace = Path(self.threads[thread]["cwd"])
                 prompt = kwargs["prompt"]
                 version = kwargs["output_schema"]["properties"]["protocol_version"]["enum"][0]
-                if version == "planner.v5":
+                if version == "proof-route-review.v1":
+                    observed["proof_reviews"].append(thread)
+                    test.assertEqual((workspace / "shared_state.py").read_text(encoding="utf-8"), fixed)
+                    test.assertIn("PROOF_MODEL_DIVERGENCE", prompt)
+                    test.assertIn("LEGACY_LABEL_BASELINE_RED", prompt)
+                    contract = observed["contracts"][-1]
+                    if technical_review:
+                        return json.dumps(dict(protocol_version=version, status="TECHNICAL_REPLAN_REQUIRED",
+                            candidate_id=task_runner.build_candidate_identity(workspace).candidate_id,
+                            contract_fingerprint=contract["fingerprint"], reason="The prior technical dependency model omitted direct readers and must be rebuilt.",
+                            evidence=["reader_b uses direct eligibility; inspect all callers from clean baseline."], changes=[]))
+                    return json.dumps(dict(protocol_version=version, status="READY",
+                        candidate_id=task_runner.build_candidate_identity(workspace).candidate_id,
+                        contract_fingerprint=contract["fingerprint"],
+                        reason="Public reader requirements are unchanged; independent legacy label assertions do not prove them.",
+                        evidence=["Actual baseline and candidate legacy assertion match, label has no entry-state dependency; both reader assertions execute."],
+                        changes=[dict(item_id="PRESERVE-1", reason="Use both actual reader assertions for preservation.",
+                            evidence=["target_tests.py executes fresh and expired entry cases for both readers."], proofs=[proof(targeted_claim)])]))
+                if version == "planner.v6":
                     observed["planner"].append((thread, prompt))
                     test.assertEqual(task_runner.collect_changed_paths(workspace), [])
                     test.assertEqual((workspace / "shared_state.py").read_text(encoding="utf-8"), initial)
                     test.assertEqual(execute(workspace, "legacy_unrelated_tests.py").returncode, baseline.returncode)
                     test.assertIn(json.dumps(task, ensure_ascii=False, indent=2), prompt)
                     if len(observed["planner"]) > 1:
-                        test.assertIn("PROOF_MODEL_DIVERGENCE", prompt)
-                        test.assertIn(broad_claim, prompt)
-                        test.assertIn("LEGACY_LABEL_BASELINE_RED", prompt)
+                        test.assertIn("TECHNICAL_MODEL_DIVERGENCE" if technical_review else "PROOF_MODEL_DIVERGENCE", prompt)
                         test.assertIn("product intent are unchanged", prompt)
                         test.assertNotIn("REJECTED_SOLUTION_MARKER", prompt)
                         test.assertNotIn(fixed.strip(), prompt)
@@ -204,9 +220,16 @@ timeout_seconds = 30
             workspace = kwargs["workspace"]
             observed["implementer"].append(kwargs["thread_id"])
             observed["contracts"].append(copy.deepcopy(kwargs["implementation_contract"]))
-            test.assertEqual(task_runner.collect_changed_paths(workspace), [])
+            if len(observed["implementer"]) == 1 or (technical_review and len(observed["implementer"]) == 2):
+                test.assertEqual(task_runner.collect_changed_paths(workspace), [])
+            else:
+                test.assertIn("shared_state.py", task_runner.collect_changed_paths(workspace))
+                test.assertEqual((workspace / "shared_state.py").read_text(encoding="utf-8"), fixed)
             if len(observed["implementer"]) > 1:
-                test.assertNotEqual(observed["implementer"][0], kwargs["thread_id"])
+                if technical_review:
+                    test.assertNotEqual(observed["implementer"][0], kwargs["thread_id"])
+                else:
+                    test.assertEqual(observed["implementer"][0], kwargs["thread_id"])
                 test.assertFalse(kwargs["stamp_path"].exists())
             (workspace / "shared_state.py").write_text(fixed, encoding="utf-8")
             if broken_reader:
@@ -221,6 +244,9 @@ timeout_seconds = 30
             test.assertEqual((workspace / "legacy_unrelated_tests.py").read_text(encoding="utf-8"), files["legacy_unrelated_tests.py"])
             first = len(observed["implementer"]) == 1
             report = report_for(kwargs["implementation_contract"], kwargs["plan"], task_runner.collect_changed_paths(workspace), status="REPLAN_REQUIRED" if first else "COMPLETE", kind="PROOF_MODEL_DIVERGENCE" if first else "NONE")
+            if not first and not any(row["group"] == "related_out_of_scope" for row in kwargs["implementation_contract"]["source_inventory"]["records"]):
+                report["post_patch_impact"]["related_out_of_scope"].append(dict(
+                    observation_id="legacy-label", **make_plan(2)["impact_closure"]["related_out_of_scope"][0]))
             if first:
                 report["summary"] = "REJECTED_SOLUTION_MARKER: implementation prose must not enter the next Planner."
                 report["reason"] = "Invalid Planner-derived proof route: " + broad_claim
@@ -259,20 +285,23 @@ timeout_seconds = 30
             result = task_runner.main([str(manifest)])
         return result, run_root, observed, output.getvalue()
 
-    def test_baseline_red_proof_replans_cleanly_and_delivers_follow_up(self):
+    def test_baseline_red_proof_preserves_candidate_and_delivers_follow_up(self):
         result, root, observed, output = self.run_case()
         self.assertEqual(result, 0, output)
-        self.assertEqual(len(observed["planner"]), 2)
-        self.assertEqual(len(observed["implementer"]), 2)
-        self.assertEqual(observed["self_verify"], [0, 0])
+        self.assertEqual(len(observed["planner"]), 1)
+        self.assertEqual(len(observed["proof_reviews"]), 1)
+        self.assertEqual(len(observed["implementer"]), 3)
+        self.assertEqual(observed["self_verify"], [0, 0, 0])
         self.assertEqual(observed["evaluator"], 1)
-        self.assertTrue((root / "replan_01_reset.json").is_file())
-        self.assertIn("shared_state.py", (root / "replan_01_rejected_candidate.patch").read_text(encoding="utf-8"))
+        self.assertFalse((root / "replan_01_reset.json").exists())
+        self.assertTrue((root / "proof_route_review_01.json").is_file())
         preserves = [next(item for item in contract["items"] if item["id"] == "PRESERVE-1") for contract in observed["contracts"]]
         self.assertEqual(preserves[0]["requirement"], preserves[1]["requirement"])
-        self.assertNotEqual(preserves[0]["required_proof"], preserves[1]["required_proof"])
+        self.assertEqual(preserves[0]["required_proof"], preserves[1]["required_proof"])
+        self.assertEqual(observed["contracts"][0]["proof_routes"], [])
+        self.assertEqual(observed["contracts"][1]["proof_routes"][0]["item_id"], "PRESERVE-1")
         registries = list(root.rglob("check_registry*.json"))
-        self.assertTrue(registries)
+        self.assertTrue(list(root.glob("verification_plan*.json")))
         for registry in registries:
             self.assertNotIn("legacy_unrelated_tests.py", registry.read_text(encoding="utf-8"))
         handoff = json.loads((root / "user_follow_up_report.json").read_text(encoding="utf-8"))
@@ -286,11 +315,20 @@ timeout_seconds = 30
     def test_owner_baseline_red_gate_remains_hard_after_proof_replan(self):
         result, root, observed, output = self.run_case(owner_legacy_gate=True)
         self.assertNotEqual(result, 0, output)
-        self.assertEqual(len(observed["planner"]), 2)
+        self.assertEqual(len(observed["planner"]), 1)
         self.assertTrue(all(code != 0 for code in observed["self_verify"]))
         self.assertEqual(observed["evaluator"], 0)
         self.assertFalse((root / "final_acceptance.json").exists())
         self.assertIn("trusted self-verification PASS", output)
+
+    def test_independent_technical_review_uses_semantic_reset_and_completes(self):
+        result, root, observed, output = self.run_case(technical_review=True)
+        self.assertEqual(result, 0, output)
+        self.assertEqual(len(observed["planner"]), 2)
+        self.assertEqual(len(observed["proof_reviews"]), 1)
+        self.assertTrue((root / "replan_01_reset.json").is_file())
+        self.assertFalse((root / "replan_02_reset.json").exists())
+        self.assertTrue((root / "final_acceptance.json").is_file())
 
     def test_affected_reader_failure_is_not_excused_by_independent_baseline_debt(self):
         result, root, observed, output = self.run_case(broken_reader=True)

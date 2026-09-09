@@ -61,10 +61,6 @@ def synthetic_plan() -> dict:
         ("Value reader", "reader_a.py", "read_value", "returning a value", "Expired values are not returned; fresh values are returned."),
         ("Availability reader", "reader_b.py", "can_read", "reporting availability", "Expired entries are unavailable; fresh entries are available."),
     )]
-    plan["affected_consumers"] = [{
-        "name": row["name"], "why_affected": row["why_affected"],
-        "must_verify": row["required_behavior"], "required_proof": copy.deepcopy(row["required_proof"]),
-    } for row in consumers]
     plan["impact_closure"] = {
         "applicable": True,
         "changed_contracts": [{
@@ -172,13 +168,15 @@ class PlannerImpactClosureTests(unittest.TestCase):
             self.plan["impact_closure"]["changed_contracts"][0]["evidence_paths"] = ["linked/external.py"]
             self.reject("UNSAFE_PATH")
 
-    def test_in_scope_consumer_cannot_disappear_from_affected_consumers(self) -> None:
-        self.plan["affected_consumers"].pop()
-        self.reject("IMPACT_CONSUMER_MISMATCH")
+    def test_legacy_duplicate_consumer_ledger_is_rejected(self) -> None:
+        self.plan["affected_consumers"] = []
+        self.reject("UNKNOWN_FIELDS")
 
-    def test_affected_consumer_cannot_be_missing_from_closure(self) -> None:
-        self.plan["impact_closure"]["in_scope_consumers"].pop()
-        self.reject("IMPACT_CONSUMER_MISMATCH")
+    def test_every_authoritative_consumer_is_compiled_once(self) -> None:
+        self.validate()
+        items = build_implementation_contract(self.plan, task_contract=self.task_contract)["items"]
+        self.assertEqual([row["id"] for row in items if row["type"] == "consumer"], ["CONSUMER-1", "CONSUMER-2"])
+        self.assertIn("Expired entries are unavailable; fresh entries are available.", next(row["requirement"] for row in items if row["id"] == "CONSUMER-2"))
 
     def test_not_affected_requires_concrete_evidence_and_reason(self) -> None:
         for key in ("name", "paths", "symbols", "why_considered", "reason", "evidence"):
@@ -223,22 +221,24 @@ class PlannerImpactClosureTests(unittest.TestCase):
         self.plan["impact_closure"]["not_affected_consumers"][0]["name"] = "Value reader"
         self.reject("IMPACT_DUPLICATE_CONSUMER")
         self.plan = synthetic_plan()
-        self.plan["affected_consumers"].append(copy.deepcopy(self.plan["affected_consumers"][0]))
+        self.plan["impact_closure"]["in_scope_consumers"].append(copy.deepcopy(self.plan["impact_closure"]["in_scope_consumers"][0]))
         self.reject("IMPACT_DUPLICATE_CONSUMER")
 
-    def test_proof_cannot_be_weakened_or_replaced(self) -> None:
+    def test_source_proof_is_compiled_without_model_rewriting(self) -> None:
         for key, value in (("claim", "A different assertion."), ("level", "LIVE_LOCAL"), ("capabilities", ["JEST"])):
             with self.subTest(key=key):
                 self.plan = synthetic_plan()
-                self.plan["affected_consumers"][0]["required_proof"][key] = value
-                self.reject("IMPACT_PROOF_MISMATCH")
+                self.plan["impact_closure"]["in_scope_consumers"][0]["required_proof"][key] = value
+                from slivin_harness.verification import merged_required_proof
+                item = next(row for row in build_implementation_contract(self.plan, task_contract=self.task_contract)["items"] if row["id"] == "CONSUMER-1")
+                self.assertEqual(item["required_proof"], merged_required_proof([self.plan["impact_closure"]["in_scope_consumers"][0]["required_proof"]], fallback_claim=""))
 
     def test_behavior_cannot_be_dropped_from_compiler_input(self) -> None:
-        for key in ("why_affected", "must_verify"):
+        for key in ("why_affected", "required_behavior"):
             with self.subTest(key=key):
                 self.plan = synthetic_plan()
-                self.plan["affected_consumers"][0][key] = "Different obligation."
-                self.reject("IMPACT_BEHAVIOR_MISMATCH")
+                self.plan["impact_closure"]["in_scope_consumers"][0][key] = ""
+                self.reject("IMPACT_EVIDENCE_EMPTY")
 
     def non_applicable_plan(self) -> dict:
         plan = synthetic_plan()
@@ -250,7 +250,6 @@ class PlannerImpactClosureTests(unittest.TestCase):
             "observed_behavior": ["README.md contains a prose typo."],
             "existing_contract": ["The document explains usage."], "evidence": ["README.md explanatory paragraph."],
         }
-        plan["affected_consumers"] = []
         plan["evidence_plan"] = {"regression": [proof("README.md spelling is corrected.")], "preservation": [], "consumers": [], "boundaries": []}
         closure = plan["impact_closure"]
         closure.update(applicable=False, changed_contracts=[], in_scope_consumers=[], not_affected_consumers=[], related_out_of_scope=[])
@@ -293,7 +292,7 @@ class PlannerImpactClosureTests(unittest.TestCase):
         # only the Controller retains the real behavioral user Task Contract.
         for group in ("changed_contracts", "in_scope_consumers", "not_affected_consumers", "related_out_of_scope"):
             self.assertEqual(self.plan["impact_closure"][group], [])
-        self.assertEqual(self.plan["affected_consumers"], [])
+        self.assertNotIn("affected_consumers", self.plan)
         self.assertEqual(self.plan["risks"], [])
         self.assertFalse(self.plan["state_model"]["applicable"])
         for group in ("representations", "authority", "lifecycle", "boundaries"):
@@ -422,7 +421,7 @@ class PlannerImpactClosureTests(unittest.TestCase):
             self.assertIn(source["name"], item["requirement"])
             self.assertIn(source["required_behavior"], item["requirement"])
             self.assertEqual(item["required_proof"], merged_required_proof([source["required_proof"]], fallback_claim="unused"))
-        serialized = json.dumps(contract)
+        serialized = json.dumps(contract["items"])
         for group in ("not_affected_consumers", "related_out_of_scope"):
             for source in self.plan["impact_closure"][group]:
                 self.assertNotIn(source["name"], serialized)
@@ -443,10 +442,6 @@ class PlannerImpactClosureTests(unittest.TestCase):
                 "required_proof": proof(f"{symbol} preserves fresh and excludes expired values."),
             }
             self.plan["impact_closure"]["in_scope_consumers"].append(row)
-            self.plan["affected_consumers"].append({
-                "name": row["name"], "why_affected": row["why_affected"],
-                "must_verify": row["required_behavior"], "required_proof": copy.deepcopy(row["required_proof"]),
-            })
             self.plan["impact_closure"]["search_evidence"][0]["evidence_paths"].append(path)
         self.validate()
         contract = build_implementation_contract(self.plan, task_contract=self.task_contract)
@@ -464,7 +459,7 @@ class PlannerImpactClosureTests(unittest.TestCase):
 
             def run_turn(self, **kwargs) -> str:
                 outer.assertEqual(kwargs["output_schema"], PLANNER_SCHEMA)
-                outer.assertIn("planner.v5", kwargs["prompt"])
+                outer.assertIn("planner.v6", kwargs["prompt"])
                 return json.dumps(outer.plan)
 
         result = run_planner(

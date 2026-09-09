@@ -6,13 +6,13 @@ Phase 4 connects the approved Step 3 and Step 4 contracts to the executable Harn
 It does not add another model role. It strengthens the writable implementation loop and
 moves authoritative verification state into the Controller private plane.
 
-Current `implementer.v5` COMPLETE also requires post-patch impact closure against the
+Current `implementer.v6` COMPLETE also requires post-patch impact closure against the
 actual candidate. The report reconciles Planner contracts/consumers, reviews every
 changed path (including deletions), preserves related follow-ups and maps all newly
 discovered consumers/risks to Controller Contract expansion. A technical-model
 divergence requires REPLAN_REQUIRED. After any repair the impact sweep and final
 self-verification run again; previous candidate evidence is stale. Controller records
-the validated result as candidate-bound `implementation-impact-closure.v1`.
+the validated result as candidate-bound `implementation-impact-closure.v2`.
 
 The strict report also requires `terminal_reason_kind`: COMPLETE → NONE;
 REPLAN_REQUIRED → TECHNICAL_MODEL_DIVERGENCE or PROOF_MODEL_DIVERGENCE;
@@ -27,7 +27,7 @@ Semantic preservation and owner-configured gates remain mandatory.
 ```text
 IMPLEMENTATION_CONTRACT_READY
         ↓
-IMPLEMENTER v2 (historical Phase 4 protocol; current release uses implementer.v5)
+IMPLEMENTER v2 (historical Phase 4 protocol; current release uses implementer.v6)
         │
         ├─ COMPLETE
         ├─ REPLAN_REQUIRED
@@ -190,7 +190,9 @@ product code until a different runner happens to pass.
 
 `run_implementer_report()` persists raw output privately before validation. For typed
 local errors in populated post-patch `symbols`, `evidence` or `evidence_paths`, Controller
-returns the exact field/code and permits at most two corrective turns in the same thread.
+returns all independently diagnosable safe field/code errors in one batch and permits
+at most two corrective turns in the same thread. A malformed parent blocks only its
+children. Mixed local/semantic diagnostics cannot become a cosmetic correction.
 Only identified evidence arrays can change. Findings, order, names, classification,
 behavior, proof, discoveries, registered checks and all other report fields are frozen.
 Concrete documentation link targets/heading anchors are valid identifiers; empty arrays
@@ -199,14 +201,18 @@ and invented code functions are not a substitute for repository evidence.
 Correction does not authorize project/test/runtime/Git writes or permission changes.
 Existing runtime/Git guards wrap the turn; physical candidate comparison occurs before
 any receipt validation. Mutation or changed claims yields a controlled stop. Correction
-timeouts do not get additional timeout continuation turns. Exhaustion produces
+timeouts do not get additional timeout continuation turns. Repeated diagnostics without
+progress stop with `REPORT_CORRECTION_NO_PROGRESS`. Exhaustion produces
 `IMPLEMENTER_REPORT_CORRECTION_EXHAUSTED`, without Final Acceptance. Semantic model
 conflicts, missing consumers, failing checks and capabilities are not cosmetic retries.
 
 Every attempt has a separate private raw artifact and diagnostic; public outcomes expose
 codes/fields without raw private values. `terminal_candidate_observation.json` records
 current physical files, or UNKNOWN with an explicitly stale previous identity if observation
-is unsafe/unavailable. Successful correction still runs the full validator and existing
+is unsafe/unavailable, including timeout/unknown transport before any raw report.
+`candidate-checkpoint.v1` privately seals physical changed file bytes/deletions, baseline,
+source inventory, build digest and known evidence before validation. It is unverified
+and does not authorize acceptance or cross-process resume. Successful correction still runs the full validator and existing
 trusted checks, binding and Contract expansion; it does not itself prove COMPLETE.
 
 Real installed-tool acceptance (no LLM/sandbox turns):

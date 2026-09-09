@@ -76,7 +76,7 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
             path=state_root / "run_state.json",
             task_id="TASK",
             harness_version="test",
-            workflow_version="workflow.v6",
+            workflow_version="workflow.v7",
             mode=WorkflowMode.PRODUCTION,
             pipeline_profile=PipelineProfile.FULL,
         )

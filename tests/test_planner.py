@@ -120,7 +120,6 @@ class PlannerCapabilityNegotiationTests(unittest.TestCase):
     def test_corrective_turn_updates_both_copies_of_consumer_proof(self) -> None:
         first, corrected = valid_plan(), valid_plan()
         for plan, capabilities in ((first, ["PROJECT_PYTHON"]), (corrected, ["JEST", "NODE"])):
-            plan["affected_consumers"][0]["required_proof"]["capabilities"] = list(capabilities)
             plan["impact_closure"]["in_scope_consumers"][0]["required_proof"]["capabilities"] = list(reversed(capabilities))
         codex = _FakeCodex([first, corrected])
         result = self._run(codex, ["JEST", "NODE"])

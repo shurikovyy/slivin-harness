@@ -111,8 +111,8 @@ class WorkflowDefinitionTests(unittest.TestCase):
         self.assertIn("runtime_verification", encoded)
         self.assertIn("CANDIDATE_CHANGED_AFTER_EVALUATION", encoded)
         self.assertEqual(len(snapshot["stages"]), 8)
-        self.assertEqual(snapshot["contract_versions"]["planner"], "planner.v5")
-        self.assertEqual(snapshot["phase_layers"]["user_follow_up"], "user-follow-up.v1")
+        self.assertEqual(snapshot["contract_versions"]["planner"], "planner.v6")
+        self.assertEqual(snapshot["phase_layers"]["user_follow_up"], "user-follow-up.v2")
         self.assertEqual(snapshot["phase_layers"]["final_acceptance"], "final-acceptance.v3")
 
     def test_rendered_workflow_is_understandable_and_generated(self) -> None:

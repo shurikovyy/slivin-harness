@@ -2,8 +2,8 @@
 
 > Этот файл генерируется из `slivin_harness/workflow.py`. Не редактируйте таблицы вручную; запустите `./py tools/render_workflow_docs.py`.
 
-- Harness: **0.8.0a30**
-- Workflow schema: **workflow.v6**
+- Harness: **0.8.0a31**
+- Workflow schema: **workflow.v7**
 - Реализуемая фаза: **phase7-final-gate-delivery-benchmark**
 
 ## Понятная схема
@@ -83,6 +83,7 @@ attempt_id
 
 | Trigger | Инвалидировать начиная с | Возобновить с | Новый attempt | Почему |
 | --- | --- | --- | :---: | --- |
+| `PROOF_ROUTE_CHANGED` | `implementation_contract` | `implementation_contract` | нет | Пересмотр proof route сохраняет candidate и product claims, инвалидируя downstream evidence. |
 | `TASK_CONTRACT_CHANGED` | `planner` | `planner` | да | Изменение пользовательского контракта инвалидирует всё техническое reasoning. |
 | `REPLAN_REQUIRED` | `planner` | `planner` | да | Ошибка технической модели требует нового независимого planning attempt. |
 | `CONTRACT_EXPANDED` | `implementation_contract` | `implementation_contract` | нет | Новый consumer/risk меняет Definition of Done и обнуляет downstream evidence. |
@@ -101,11 +102,11 @@ attempt_id
 machine-readable workflow и versioned Run State
 + private Controller plane / Execution Broker foundation
 + USER TASK CONTRACT task-contract.v1
-+ PLANNER planner.v5
-+ IMPLEMENTATION CONTRACT implementation-contract.v3
++ PLANNER planner.v6
++ IMPLEMENTATION CONTRACT implementation-contract.v4
 + typed VERIFICATION PLAN verification-plan.v1
-+ IMPLEMENTER implementer.v5
-+ candidate-bound implementation-impact-closure.v1 before Implementer completion
++ IMPLEMENTER implementer.v6
++ candidate-bound implementation-impact-closure.v2 before Implementer completion
 + transactional Contract / Verification Plan expansion
 + canonical .worktreeinclude exposure policy
 + strict static toolchain preflight before semantic baseline and agent stages
@@ -120,18 +121,18 @@ machine-readable workflow и versioned Run State
 + LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE runtime scenario executor
 + fresh readback / cleanup / read-only result contracts
 + candidate, source and runtime-only-file immutability guards
-+ two-phase BLIND EVALUATOR evaluator.v6
++ two-phase BLIND EVALUATOR evaluator.v7
 + immutable blind-audit.v2 before Contract/check framing
 + Controller evidence audit without Planner/Implementer prose
 + Final Gate quality reconciliation bound to one candidate/revision vector
 + patch reconstruction from the recorded baseline
-+ mandatory user-follow-up.v1 before held-out with public immutable delivery
++ mandatory user-follow-up.v2 before held-out with public immutable delivery
 + immutable final-acceptance.v3 binding user handoff and delivery-record.v2
 + transactional apply_to_source with source guards and safe rollback
 + standalone sanitized historical benchmark repository
 + classified hidden held-out exam without repair feedback
 + clean semantic replan reset with fresh Planner and Implementer threads
-+ generated WORKFLOW.md / workflow.v6.json
++ generated WORKFLOW.md / workflow.v7.json
 ```
 
 Phase 7 завершает quality-core. Universal OS-enforced Controller subprocess sandbox, встроенная browser automation и универсальные typed wrappers для 1С/БД/Airflow остаются отдельными platform/project capabilities; Harness не выдаёт advisory isolation за OS-enforced sandbox. После Windows self-check этой версии следующий обязательный checkpoint — реальный historical `_90` trial, а не новая архитектурная фаза.

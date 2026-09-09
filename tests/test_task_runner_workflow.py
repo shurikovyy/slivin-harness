@@ -153,6 +153,7 @@ timeout_seconds = 30
         runtime_rebuild: str | None = None,
         trusted_js_toolchain: dict | None = None,
         malformed_report: bool = False,
+        framework_rebind: bool = False,
     ) -> tuple[int, Path, str]:
         root = Path(tempfile.mkdtemp(prefix="slivin-main-workflow-"))
         repo = self.make_repo(root)
@@ -295,16 +296,21 @@ timeout_seconds = 30
             if check_repair and implementer_calls > 1:
                 reader = workspace / "reader.py"
                 reader.write_text(reader.read_text(encoding="utf-8") + "\n# Reader reviewed during repair.\n", encoding="utf-8")
+            rebind_request = framework_rebind and implementer_calls == 3
+            if rebind_request:
+                (workspace / 'native.test.cjs').write_text("test('target state', () => expect(require('node:fs').readFileSync('target.txt', 'utf8').trim()).toBe('after'));\n", encoding='utf-8')
+                (workspace / 'jest.config.cjs').write_text("module.exports={testRegex:'(?:native|unit)\\\\.test\\\\.cjs$',testEnvironment:'node'};\n", encoding='utf-8')
             command = list(kwargs["self_verify_command"])
-            subprocess.run(command, cwd=workspace, check=True)
-            self.assertTrue(
+            if not rebind_request:
+                subprocess.run(command, cwd=workspace, check=True)
+            self.assertEqual(
                 task_runner.verify_self_verification_stamp(
                     workspace=workspace,
                     stamp_path=Path(kwargs["stamp_path"]),
                     control_plane=kwargs.get("control_plane"),
                     run_state=kwargs.get("run_state"),
                     check_registry_digest=kwargs.get("check_registry_digest"),
-                )
+                ), not rebind_request,
             )
             contract = kwargs["implementation_contract"]
             report = {
@@ -327,6 +333,11 @@ timeout_seconds = 30
                 "additional_check_paths": [],
                 "blockers": [],
             }
+            if rebind_request:
+                report.update(status='BLOCKED', terminal_reason_kind='INFRASTRUCTURE_BLOCKED',
+                    reason='The current registered file now uses Jest assertions; Controller must recompile its existing path and config before self-verification.',
+                    evidence=['native.test.cjs now calls expect; jest.config.cjs selects both suites.'])
+                report['self_verification']['status'] = 'NOT_RUN'
             if with_discovery or with_runtime_discovery or promote_not_affected or discovery_risk:
                 report["registered_checks"] = (
                     [{"kind": "check_id", "value": "git.diff-check"}]
@@ -358,21 +369,29 @@ timeout_seconds = 30
                 report["discovered_obligations"] = []
             if trusted_js_toolchain:
                 report["registered_checks"] = [{"kind": "path", "value": p} for p in ("native.test.cjs", "unit.test.cjs")]
-            attach_post_patch_impact(report, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace))
+            attach_post_patch_impact(report, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace), contract=contract)
             if malformed_report:
-                report["post_patch_impact"]["related_out_of_scope"].append({
+                if not any(row["source_id"].endswith("-documentation-navigation") for row in contract["source_inventory"]["records"]):
+                    report["post_patch_impact"]["related_out_of_scope"].append({
+                    "observation_id": "documentation-navigation",
                     "name": "Documentation navigation", "paths": ["README.md"], "symbols": ["README.md#usage"],
                     "relation": "Usage documentation describes the reader.", "reason": "Navigation does not change target state.",
                     "evidence": ["README.md Usage heading lacks a navigation example."],
                     "suggested_follow_up": "Add a navigation example below the Usage heading.",
                 })
             if related and kwargs["plan"] is None:
-                report["post_patch_impact"]["related_out_of_scope"] = [related_finding()]
+                if not any(row["source_id"].endswith("-metrics-follow-up") for row in contract["source_inventory"]["records"]):
+                    report["post_patch_impact"]["related_out_of_scope"] = [dict(related_finding(), observation_id="metrics-follow-up")]
             for row in report["post_patch_impact"]["in_scope_consumers"] + report["post_patch_impact"]["new_risks"]:
                 if row["name"] == "Integration sibling":
                     row.update(paths=["reader_b.py"], symbols=["read_summary"])
             if promote_not_affected:
-                report["post_patch_impact"]["not_affected_consumers"] = []
+                target = next((row["observation_id"] for row in report["post_patch_impact"]["in_scope_consumers"] if row["name"] == "Integration sibling"), None)
+                if target:
+                    outside_ids = {row["source_id"] for row in contract["source_inventory"]["records"] if row["group"] == "not_affected_consumers"}
+                    for row in report["post_patch_impact"]["source_assessments"]:
+                        if row["source_ref"]["source_id"] in outside_ids:
+                            row.update(disposition="PROMOTE", promotion_id=target)
             if implementer_replan and implementer_calls == 1:
                 report.update(status="REPLAN_REQUIRED", terminal_reason_kind="TECHNICAL_MODEL_DIVERGENCE", reason="The actual patch requires a fresh technical model.", evidence=["reader.py assumptions must be rechecked from baseline."])
             if jest_refresh_failure and implementer_calls == 1:
@@ -490,7 +509,8 @@ timeout_seconds = 30
             for call in planner_validation.call_args_list:
                 self.assertEqual(call.kwargs["owner_allowed_paths"], owner_allowed_paths)
         if trusted_js_toolchain and result == 0:
-            self.assertEqual(implementer_calls, 2, "One registration expansion, no compiler/replan loop")
+            self.assertEqual(implementer_calls, 4 if framework_rebind else 2,
+                "Initial registration, then one Controller repair and one changed-framework rebind when requested")
             self.assertEqual(len(set(implementer_threads)), 1)
             self.assertEqual(correction_count, int(malformed_report))
             self.assertEqual(evaluator_calls, 1)
@@ -576,7 +596,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a30")
+        self.assertEqual(build_identity["version"], "0.8.0a31")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)
@@ -764,7 +784,7 @@ timeout_seconds = 30
         self.assertIsNotNone(report["source_bindings"]["plan_fingerprint"])
         self.assertIsNone(report["source_bindings"]["evaluation_fingerprint"])
         self.assertEqual(report["follow_ups"][0]["review_status"], "DECLARED_OUT_OF_SCOPE_FAST")
-        self.assertEqual([row["source"] for row in report["follow_ups"][0]["provenance"]], ["IMPLEMENTER"])
+        self.assertEqual([row["source"] for row in report["follow_ups"][0]["provenance"]], ["PLANNER", "IMPLEMENTER"])
         self.assertTrue((run_root / "replan_01_reset.json").exists())
         self.assertFalse((run_root / "evaluation_01.json").exists())
 
@@ -848,7 +868,7 @@ timeout_seconds = 30
         self.assertEqual(result, 0, output)
         self.assertFalse((root / "implementation_impact_closure_01.json").exists())
         artifact = json.loads((root / "implementation_impact_closure_02.json").read_text(encoding="utf-8"))
-        self.assertEqual(artifact["schema_version"], "implementation-impact-closure.v1")
+        self.assertEqual(artifact["schema_version"], "implementation-impact-closure.v2")
         self.assertEqual(artifact["post_patch_impact"]["not_affected_consumers"], [])
         final = json.loads((root / "implementation_report_02.json").read_text(encoding="utf-8"))
         self.assertTrue(any(row["item_id"] == "CONSUMER-DISCOVERED-1" and row["status"] == "VERIFIED" for row in final["contract_evidence"]))
@@ -986,7 +1006,7 @@ timeout_seconds = 30
                 "registered_checks": [],
                 "discovered_obligations": [],
                 "blockers": [],
-            }, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace))
+            }, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace), contract=contract)
 
         output = io.StringIO()
         with (

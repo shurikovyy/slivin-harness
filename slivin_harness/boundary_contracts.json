@@ -1,0 +1,1173 @@
+{
+  "schema_version": "boundary-contracts.v1",
+  "boundaries": [
+    {
+      "boundary_id": "B01",
+      "schemas": [
+        "static-toolchain-preflight.v1",
+        "role-execution-context.v1",
+        "candidate.v1"
+      ],
+      "ownership": "Controller owns executable/config/runtime/policy bindings; role may observe only its scoped context.",
+      "preconditions": "Current physical candidate and completed reset/rebuild are bound before capability publication.",
+      "postconditions": "Only current successful probes become available capabilities; failure prevents Planner and never widens permissions.",
+      "evidence_dependencies": "Executable/config identity, candidate and runtime revision; private probe result; requested/effective role policy.",
+      "allowed_outcomes": [
+        "FRESH_CAPABILITIES",
+        "TYPED_UNAVAILABLE_STOP",
+        "INTEGRITY_STOP"
+      ],
+      "recovery_contract": "Reuse unchanged evidence; invalidate and refresh changed evidence once before consumer; failed refresh is explicit.",
+      "checkpoint_contract": "Private probe logs and typed public failure precede agent startup; rejected config is not reused after reset.",
+      "families": {
+        "input": {
+          "expectation": "Reject missing tools, incompatible policy or Controller context.",
+          "unittest_ids": [
+            "test_static_toolchain_preflight.StaticToolchainPreflightTests.test_missing_bare_executable_and_directory_executable_are_blocked",
+            "test_app_server.ScopedRoleAppServerTests.test_legacy_override_and_missing_controller_context_fail_closed",
+            "test_app_server.ScopedRoleAppServerTests.test_reported_project_write_grant_or_wrong_profile_is_rejected"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Current initial/warm evidence and role scratch are usable; configured paths alone do not prove availability.",
+          "unittest_ids": [
+            "test_planner_tool_evidence_refresh.PlannerToolEvidenceRegistryTests.test_initial_and_unchanged_evidence_reuse",
+            "test_execution.ExecutionBrokerTests.test_scoped_context_aligns_only_write_root_and_all_cache_paths",
+            "test_planner.PlannerCapabilityNegotiationTests.test_configured_tool_claim_without_probe_is_not_available"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Candidate/runtime/tool/config changes revoke prior evidence before Planner.",
+          "unittest_ids": [
+            "test_planner_tool_evidence_refresh.PlannerToolEvidenceWorkflowTests.test_jest_evidence_refreshes_before_implementer_triggered_replan",
+            "test_planner_tool_evidence_refresh.PlannerToolEvidenceWorkflowTests.test_evaluator_replan_uses_the_same_preparation",
+            "test_planner_tool_evidence_refresh.PlannerToolEvidenceRegistryTests.test_changed_toolchain_reference_requires_new_probe",
+            "test_planner_tool_evidence_refresh.PlannerToolEvidenceRegistryTests.test_rejected_config_is_not_carried_into_fresh_explicit_or_auto_probe"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Refresh succeeds without semantic reset; required refresh failure prevents Planner; scoped thread retirement is ordered.",
+          "unittest_ids": [
+            "test_planner_tool_evidence_refresh.PlannerToolEvidenceWorkflowTests.test_failed_refresh_stops_before_planner_with_typed_evidence",
+            "test_planner_tool_evidence_refresh.PlannerToolEvidenceWorkflowTests.test_real_runtime_rebuild_refreshes_only_required_project_python",
+            "test_app_server.ScopedRoleAppServerTests.test_replan_retires_scoped_threads_before_scratch_cleanup"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "task_runner.main.prepare_planner_capabilities",
+        "slivin_harness.preflight.run_static_toolchain_preflight"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B02",
+      "schemas": [
+        "task-contract.v1"
+      ],
+      "ownership": "Owner raw intent is authoritative; Intake normalizes only exact source spans; Controller validates/persists.",
+      "preconditions": "Raw request and explicit owner boundaries available, no Planner/benchmark solution hints.",
+      "postconditions": "READY retains verbatim source authority; true explicit contradiction alone can request user decision.",
+      "evidence_dependencies": "Raw request text and task-contract fingerprint.",
+      "allowed_outcomes": [
+        "READY",
+        "NEEDS_USER_DECISION",
+        "BOUNDED_INVALID_STOP"
+      ],
+      "recovery_contract": "Bounded structural/conditional-scope correction in same normalization task, without changing owner intent.",
+      "checkpoint_contract": "Persist admitted task contract before Planner/Contract compiler; failed attempts remain diagnostic.",
+      "families": {
+        "input": {
+          "expectation": "Non-verbatim or unsupported source claims are rejected.",
+          "unittest_ids": [
+            "test_phase3_contracts.PhaseThreeContractTests.test_task_contract_rejects_non_verbatim_source",
+            "test_protocol.ProtocolContractTests.test_task_contract_requires_exact_source_text"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Valid owner task reaches READY; direct contradiction remains user decision.",
+          "unittest_ids": [
+            "test_phase3_contracts.PhaseThreeContractTests.test_ready_task_contract_preserves_raw_and_verbatim_sources",
+            "test_phase3_contracts.PhaseThreeContractTests.test_direct_contradiction_still_requires_user_decision"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Changed raw intent cannot reuse old task-contract authority.",
+          "unittest_ids": [
+            "test_release_contracts.ProofReviewMatrixTests.test_changed_raw_intent_rejects_previous_task_authority"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Conditional scope is repaired without invented contradiction; correction exhaustion is bounded.",
+          "unittest_ids": [
+            "test_phase3_contracts.PhaseThreeContractTests.test_normalizer_repairs_ready_artifact_that_mislabels_conditional_scope_as_ambiguity",
+            "test_phase3_contracts.PhaseThreeContractTests.test_normalizer_artifact_repair_is_bounded",
+            "test_release_contracts.PersistenceTransitionTests.test_before_and_ambiguous_after_writes_recover_without_duplicate_stage_effects"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "slivin_harness.task_contract.run_task_contract_normalizer"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B03",
+      "schemas": [
+        "planner.v6",
+        "impact-sources.v1"
+      ],
+      "ownership": "Planner owns technical hypotheses; Controller owns owner boundaries, capabilities and source identity.",
+      "preconditions": "Validated task contract, current repository and fresh capability evidence; read-only project and scoped scratch.",
+      "postconditions": "READY has complete impact closure; all IN_SCOPE consumers compile exactly once; prior claims are not product truth.",
+      "evidence_dependencies": "Repository paths/symbols/search evidence, current candidate guard, task fingerprint and tool evidence.",
+      "allowed_outcomes": [
+        "READY",
+        "REPLAN_OR_BLOCKED_DIAGNOSIS",
+        "CAPABILITY_CORRECTION",
+        "INVALID_STOP"
+      ],
+      "recovery_contract": "One capability correction may revise proof route, retaining owner authority; no infinite infeasible READY loop.",
+      "checkpoint_contract": "Admitted Planner artifact precedes Controller source inventory and Contract; rejected model stays separate.",
+      "families": {
+        "input": {
+          "expectation": "Require concrete changed contracts/search evidence and forbid unknown protocol fields.",
+          "unittest_ids": [
+            "test_planner_impact_closure.PlannerImpactClosureTests.test_ready_requires_changed_contracts",
+            "test_planner_impact_closure.PlannerImpactClosureTests.test_ready_requires_search_evidence",
+            "test_protocol.ProtocolContractTests.test_unknown_plan_fields_are_rejected"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Multiple concrete consumers and owner prose exception are handled without truncation or self-authorization.",
+          "unittest_ids": [
+            "test_planner_impact_closure.PlannerImpactClosureTests.test_valid_ready_covers_multiple_concrete_consumers",
+            "test_planner_impact_closure.PlannerImpactClosureTests.test_large_concrete_ledger_is_not_truncated_by_compactness_limits",
+            "test_planner_impact_closure.PlannerImpactClosureTests.test_behavioral_change_cannot_bypass_with_false_and_empty_arrays"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Fresh/reset Planner sees current capabilities and preserves owner-boundary authority during correction.",
+          "unittest_ids": [
+            "test_planner_tool_evidence_refresh.PlannerToolEvidenceWorkflowTests.test_jest_evidence_refreshes_before_implementer_triggered_replan",
+            "test_planner_impact_closure.PlannerImpactClosureTests.test_owner_boundary_survives_initial_and_corrective_planner_validation"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Feasible correction progresses; repeated infeasible READY stops before compiler.",
+          "unittest_ids": [
+            "test_planner.PlannerCapabilityNegotiationTests.test_one_corrective_turn_reuses_thread_and_accepts_feasible_plan",
+            "test_planner.PlannerCapabilityNegotiationTests.test_second_infeasible_ready_plan_is_controlled",
+            "test_planner.PlannerCapabilityNegotiationTests.test_corrective_blocked_plan_is_preserved"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "slivin_harness.planner.run_planner",
+        "slivin_harness.planner.validate_plan_artifact"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B04",
+      "schemas": [
+        "implementation-contract.v4",
+        "verification-plan.v1",
+        "impact-sources.v1"
+      ],
+      "ownership": "Controller compiles immutable owner/Planner source claims into item IDs; role output does not edit Contract.",
+      "preconditions": "Validated current task/Planner artifacts; explicit proof targets and unambiguous current source inventory.",
+      "postconditions": "All acceptance/preservation/consumer/risk obligations retained; effective proof profiles/capabilities and owner gates compiled.",
+      "evidence_dependencies": "Task/plan/Contract fingerprints, source revisions, required proof profiles and owner check definitions.",
+      "allowed_outcomes": [
+        "COMPILED_DEFINITION",
+        "CAPABILITY_GAP_STOP",
+        "INVALID_INPUT_STOP"
+      ],
+      "recovery_contract": "Compilation is pure and deterministic; corrected input/review recompiles and invalidates downstream evidence.",
+      "checkpoint_contract": "Controller persists Contract and Verification Plan before Implementer; neither raw model DTO is acceptance.",
+      "families": {
+        "input": {
+          "expectation": "Typed proof/capability summaries and source semantics are strict.",
+          "unittest_ids": [
+            "test_phase3_contracts.PhaseThreeContractTests.test_tampered_capability_summary_is_rejected",
+            "test_planner_impact_closure.PlannerImpactClosureTests.test_source_proof_is_compiled_without_model_rewriting",
+            "test_planner_impact_closure.PlannerImpactClosureTests.test_behavior_cannot_be_dropped_from_compiler_input"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Retain every IN_SCOPE item and every runtime proof; outside findings stay outside obligations.",
+          "unittest_ids": [
+            "test_planner_impact_closure.PlannerImpactClosureTests.test_contract_compiler_retains_every_in_scope_and_excludes_other_classes",
+            "test_implementer.ImplementerContractTests.test_contract_keeps_user_requirements_and_consumers_explicit",
+            "test_phase3_contracts.PhaseThreeContractTests.test_multiple_runtime_profiles_are_preserved"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "New definition revokes existing receipt/evidence.",
+          "unittest_ids": [
+            "test_run_state.RunStateTests.test_contract_expansion_invalidates_implementer_and_downstream",
+            "test_control_plane.ControlPlaneTests.test_private_receipt_is_bound_to_every_revision_dimension"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Controller recompile and capability gate prevent unsafe continuation.",
+          "unittest_ids": [
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_new_runtime_requirement_rechecks_capability_gate_before_continuation",
+            "test_release_contracts.PersistenceTransitionTests.test_before_and_ambiguous_after_writes_recover_without_duplicate_stage_effects"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "slivin_harness.implementer.build_implementation_contract",
+        "slivin_harness.verification.compile_verification_plan"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B05",
+      "schemas": [
+        "implementer.v6",
+        "implementation-impact-closure.v2",
+        "implementation-report-recovery.v1"
+      ],
+      "ownership": "Implementer owns assessments/new observations and candidate; Controller owns immutable origins, admission and receipts.",
+      "preconditions": "Current Contract inventory and changed paths; candidate checkpoint before large report validation.",
+      "postconditions": "COMPLETE requires all exact current refs, current trusted self-verification and complete actual impact; unsafe changes never become cosmetic repair.",
+      "evidence_dependencies": "Physical candidate, source/Contract/plan/revision binding, registered checks and Controller receipt.",
+      "allowed_outcomes": [
+        "VALID_COMPLETE",
+        "REPORT_ONLY_CORRECTION",
+        "PRODUCT_REPAIR",
+        "PROOF_OR_TECHNICAL_REPLAN",
+        "TERMINAL_STOP"
+      ],
+      "recovery_contract": "Collect all safe independent leaf diagnostics; one batch may correct 3/5/25 errors; bounded turns/no progress; candidate/claims frozen.",
+      "checkpoint_contract": "Raw report private; current candidate bytes and referenced evidence durable before validation; terminal state never presents baseline as current.",
+      "families": {
+        "input": {
+          "expectation": "Missing/unknown/stale sources, malformed parents and unsafe paths cannot be accepted.",
+          "unittest_ids": [
+            "test_systemic_reliability.SourceOwnershipTests.test_missing_duplicate_unknown_and_stale_origins_rejected",
+            "test_implementer_impact_closure.ImplementerImpactClosureTests.test_post_patch_wire_block_is_mandatory",
+            "test_implementer_impact_closure.ImplementerImpactClosureTests.test_escaping_and_generic_evidence_are_rejected"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Honest COMPLETE reconciles origins, current sweep and actual paths; non-COMPLETE may retain partial evidence.",
+          "unittest_ids": [
+            "test_implementer_impact_closure.ImplementerImpactClosureTests.test_full_complete_reconciles_model_consumers_and_actual_diff",
+            "test_implementer_impact_closure.ImplementerImpactClosureTests.test_non_complete_can_use_empty_partial_ledger"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Prior impact/receipt cannot validate repaired candidate or altered source revision.",
+          "unittest_ids": [
+            "test_implementer_impact_closure.ImplementerImpactClosureTests.test_artifact_binds_candidate_plan_contract_paths_and_revisions",
+            "test_implementer_impact_closure.ImplementerImpactClosureTests.test_repair_changes_candidate_and_invalidates_old_closure",
+            "test_runner_report_recovery.ReportRecoveryTests.test_receipt_recheck_failure_cannot_follow_validation_with_complete"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Batch repairs progress without changing candidate/claims; timeout and no progress are bounded.",
+          "unittest_ids": [
+            "test_systemic_reliability.BatchProgressTests.test_independent_errors_recover_in_one_batch",
+            "test_runner_report_recovery.ReportRecoveryTests.test_no_progress_stops_early_and_preserves_raw_and_terminal_inventory",
+            "test_runner_report_recovery.ReportRecoveryTests.test_correction_cannot_drop_findings_consumers_or_checks",
+            "test_systemic_reliability.BatchProgressTests.test_same_path_candidate_mutation_is_rejected_during_report_repair",
+            "test_release_contracts.AdmissionMatrixTests.test_local_leaf_correction_cannot_turn_challenge_into_confirmation"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "task_runner.run_implementer_report"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B06",
+      "schemas": [
+        "check-registry.v1",
+        "controller compiled check specifications"
+      ],
+      "ownership": "Controller resolves allowlisted paths/check IDs into executable templates; role cannot supply shell commands.",
+      "preconditions": "Safe current test paths, owner specs and resolved executable/config capabilities.",
+      "postconditions": "Correct NODE_TEST/JEST compiler route; registry digest binds exact active compiled commands/config and retains owner commands.",
+      "evidence_dependencies": "Test framework signals, config/test paths, compiled registry digest, executable identities.",
+      "allowed_outcomes": [
+        "COMPILED_CHECKS",
+        "IDEMPOTENT_NO_CHANGE",
+        "TYPED_RUNNER_FAILURE"
+      ],
+      "recovery_contract": "Recompile on actual framework/config drift and invalidate affected verification; no arbitrary runner fallback.",
+      "checkpoint_contract": "Persist registry/compiled specs before receipt; failed resolution has typed diagnostics and current candidate observation.",
+      "families": {
+        "input": {
+          "expectation": "Reject arbitrary command/path escape and ambiguous/unavailable framework.",
+          "unittest_ids": [
+            "test_phase4_execution.CheckRegistryTests.test_registry_rejects_escape_and_arbitrary_command",
+            "test_runner_report_recovery.RunnerResolutionTests.test_native_import_forms_and_literal_comments",
+            "test_runner_report_recovery.RunnerResolutionTests.test_native_without_jest_and_missing_node"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Same suffix can compile to different correct frameworks; owner templates remain unchanged.",
+          "unittest_ids": [
+            "test_runner_report_recovery.RunnerResolutionTests.test_same_suffix_different_frameworks",
+            "test_runner_report_recovery.RunnerResolutionTests.test_owner_commands_unchanged_and_no_substring_coverage",
+            "test_native_trusted_runners.NativeTrustedRunnerTests.test_real_assertions_generated_runner_controller_and_rebind"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Framework switch changes digest; repeated unchanged compilation is idempotent.",
+          "unittest_ids": [
+            "test_runner_report_recovery.RunnerResolutionTests.test_registry_binds_compiled_runner_idempotently"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Production repair changing test framework/config recompiles, refreshes probes, and successfully replays assertions.",
+          "unittest_ids": [
+            "test_runner_report_recovery.RunnerResolutionTests.test_registry_binds_compiled_runner_idempotently",
+            "test_native_trusted_runners.NativeTrustedRunnerTests.test_repair_framework_config_rebind_reaches_current_reconstruction"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "task_runner.build_dynamic_check_specs",
+        "slivin_harness.phase4.CheckRegistry.bind_compiled_specs"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B07",
+      "schemas": [
+        "contract-expansion.v1",
+        "implementation-contract.v4",
+        "verification-plan.v1"
+      ],
+      "ownership": "Role declares observations/findings; Controller admits immutable origins and expands active obligations.",
+      "preconditions": "Validated observations/evaluation and current Contract/Verification Plan; discovery already has concrete evidence.",
+      "postconditions": "Old items/source claims remain; new items appear once; corresponding proof/capability requirements are active before continuation.",
+      "evidence_dependencies": "Observation IDs and source revisions, current definition fingerprints, owner specs, registry digest.",
+      "allowed_outcomes": [
+        "EXPANDED_CURRENT_DEFINITION",
+        "IDEMPOTENT_DUPLICATE",
+        "CAPABILITY_OR_SOURCE_CONFLICT_STOP"
+      ],
+      "recovery_contract": "Duplicate admitted discovery has no repeated expansion side effect; incomplete new work continues same thread with fresh self-verification.",
+      "checkpoint_contract": "Both active definitions and revision increments persist coherently; no half-published evidence can be accepted.",
+      "families": {
+        "input": {
+          "expectation": "Discovery requires typed proof; conflicting repeated observation cannot rewrite source.",
+          "unittest_ids": [
+            "test_phase5_contract_runtime.ContractExpansionTests.test_discovery_requires_typed_proof",
+            "test_systemic_reliability.SourceOwnershipTests.test_discovery_idempotency_and_conflicting_payload"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Material consumer/risk additions compile before final COMPLETE and capability checks.",
+          "unittest_ids": [
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_discovery_recompiles_active_contract_and_verification_plan",
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_post_patch_new_risk_expands_before_final_complete",
+            "test_phase5_contract_runtime.ContractExpansionTests.test_new_runtime_proof_is_not_silently_collapsed"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Old receipt and downstream state are invalid after expansion.",
+          "unittest_ids": [
+            "test_run_state.RunStateTests.test_contract_expansion_invalidates_implementer_and_downstream",
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_new_runtime_requirement_rechecks_capability_gate_before_continuation"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Repeated discovery does not grow obligations; expansion continues same thread.",
+          "unittest_ids": [
+            "test_phase5_contract_runtime.ContractExpansionTests.test_duplicate_discovery_is_idempotent",
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_post_patch_promoted_consumer_expands_in_same_thread",
+            "test_release_contracts.PersistenceTransitionTests.test_before_and_ambiguous_after_writes_recover_without_duplicate_stage_effects"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "task_runner.main.recompile_active_definition",
+        "slivin_harness.phase5.expand_contract_and_verification_plan"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B08",
+      "schemas": [
+        "controller-checks.v1",
+        "self-verification receipt",
+        "candidate.v1"
+      ],
+      "ownership": "Only Controller trusted assertions and private keyed receipts create authority; agent stamp is a claim.",
+      "preconditions": "Current candidate/check/Contract/Verification Plan/runtime bindings and pristine integrity guards.",
+      "postconditions": "PASS only for actual assertions on same candidate; deliberate FAIL/timeout/infra/mutation remain distinct and invalidate evidence.",
+      "evidence_dependencies": "Executable/check definition, candidate/runtime identity, stdout/assertions and full receipt binding.",
+      "allowed_outcomes": [
+        "CHECK_PASS",
+        "CHECK_FAIL",
+        "CHECK_TIMEOUT",
+        "CHECK_INFRA_ERROR",
+        "CHECK_MUTATED_CANDIDATE"
+      ],
+      "recovery_contract": "Product failure routes to repair; trusted verification replays after relevant revision changes; no broad catch-all retry.",
+      "checkpoint_contract": "Private command outputs and receipt bind durable current evidence; unknown outcome does not issue PASS receipt.",
+      "families": {
+        "input": {
+          "expectation": "Agent receipt IDs/arbitrary check definitions have no authority.",
+          "unittest_ids": [
+            "test_implementer.ImplementerContractTests.test_agent_receipt_id_is_not_controller_self_verify_authority",
+            "test_implementer.ImplementerContractTests.test_trusted_check_id_must_resolve_to_controller_owned_spec"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Positive and deliberate negative native/Jest assertions agree across generated and Controller runners.",
+          "unittest_ids": [
+            "test_native_trusted_runners.NativeTrustedRunnerTests.test_real_assertions_generated_runner_controller_and_rebind",
+            "test_phase4_execution.ControllerCheckRunnerTests.test_classification_precedence",
+            "test_phase4_execution.ControllerCheckRunnerTests.test_runner_classifies_timeout_and_infra"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Any candidate/Contract/plan/registry/runtime dimension invalidates prior receipt.",
+          "unittest_ids": [
+            "test_control_plane.ControlPlaneTests.test_private_receipt_is_bound_to_every_revision_dimension",
+            "test_implementer.ImplementerContractTests.test_self_verify_stamp_is_bound_to_current_candidate",
+            "test_control_plane.ControlPlaneTests.test_tampered_receipt_is_rejected"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Repair produces fresh impact and failed receipt recheck cannot release COMPLETE.",
+          "unittest_ids": [
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_controller_repair_requires_new_candidate_impact_artifact",
+            "test_runner_report_recovery.ReportRecoveryTests.test_receipt_recheck_failure_cannot_follow_validation_with_complete",
+            "test_release_contracts.PersistenceTransitionTests.test_before_and_ambiguous_after_writes_recover_without_duplicate_stage_effects"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "task_runner.run_checks",
+        "task_runner.verify_self_verification_stamp"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B09",
+      "schemas": [
+        "semantic-replan-reset.v1",
+        "run-state.v1",
+        "candidate.v1"
+      ],
+      "ownership": "Controller alone authorizes product reset after validated technical-model divergence; owner intent remains unchanged.",
+      "preconditions": "Explicit current technical divergence and bounded replan budget; rejected candidate retained privately.",
+      "postconditions": "Reset to recorded baseline; fresh Planner/Implementer, fresh task-specific registry/runtime evidence; no rejected solution hints.",
+      "evidence_dependencies": "Rejected candidate/patch, baseline SHA, owner task contract, reset result, fresh capability evidence.",
+      "allowed_outcomes": [
+        "RESET_AND_FRESH_PLAN",
+        "REPLAN_LIMIT_OR_STALL_STOP",
+        "INTEGRITY_STOP"
+      ],
+      "recovery_contract": "Restore only candidate against recorded baseline; retire scoped threads before scratch cleanup; never reuse stale runtime evidence.",
+      "checkpoint_contract": "Rejected patch and reset artifacts exist before fresh Planner; active attempt/revisions reflect reset.",
+      "families": {
+        "input": {
+          "expectation": "Only compatible status/reason pairs and explicit technical findings authorize replan.",
+          "unittest_ids": [
+            "test_proof_model_replan.TerminalReasonTests.test_every_status_reason_pair",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_blind_contract_replan_still_requires_reason_and_material_finding"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Actual candidate reset and new threads implement fresh model without losing runtime authority.",
+          "unittest_ids": [
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_semantic_replan_resets_candidate_and_uses_fresh_implementer",
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_implementer_model_divergence_uses_fresh_semantic_replan",
+            "test_phase7_final_gate.PhaseSevenFinalGateTests.test_semantic_replan_reset_removes_rejected_candidate_but_keeps_runtime"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Reset refreshes tools before Planner and begins a new attempt.",
+          "unittest_ids": [
+            "test_planner_tool_evidence_refresh.PlannerToolEvidenceWorkflowTests.test_jest_evidence_refreshes_before_implementer_triggered_replan",
+            "test_planner_tool_evidence_refresh.PlannerToolEvidenceWorkflowTests.test_evaluator_replan_uses_the_same_preparation",
+            "test_run_state.RunStateTests.test_replan_creates_new_attempt_and_restarts_at_planner"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Evaluator model conflict follows the same semantic route; failed thread retirement cannot continue cleanup.",
+          "unittest_ids": [
+            "test_evaluator_impact_challenge.EvaluatorAutonomyWorkflowTests.test_independent_contract_gaps_use_fresh_semantic_replan",
+            "test_app_server.ScopedRoleAppServerTests.test_failed_retirement_keeps_context_and_rejects_cleanup_route",
+            "test_release_contracts.PersistenceTransitionTests.test_before_and_ambiguous_after_writes_recover_without_duplicate_stage_effects"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "task_runner.main.replan_implementation",
+        "slivin_harness.phase7.reset_workspace_for_semantic_replan"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B10",
+      "schemas": [
+        "blind-audit.v2",
+        "evaluator.v7"
+      ],
+      "ownership": "Evaluator A independently owns blind discovery; Controller owns immutable A persistence and B disclosure timing.",
+      "preconditions": "Fresh readonly evaluator sees raw task/current candidate, no Planner/Implementer/green-check claims.",
+      "postconditions": "Valid blind audit with exact candidate/changed-path coverage is persisted once before any B prompt.",
+      "evidence_dependencies": "Actual candidate paths/revision, independent impact IDs, private raw A attempts, immutable A artifact.",
+      "allowed_outcomes": [
+        "PERSISTED_BLIND_AUDIT",
+        "A_ONLY_CORRECTION",
+        "INVALID_OR_PERSISTENCE_STOP"
+      ],
+      "recovery_contract": "Local A evidence correction stays blind in same thread; persistence failure prevents B; repair starts fresh A.",
+      "checkpoint_contract": "write_once A artifact precedes B disclosure; raw role reports private.",
+      "families": {
+        "input": {
+          "expectation": "Blind audit requires concrete evidence, safe paths and exact changed-path inventory.",
+          "unittest_ids": [
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_blind_consumers_require_concrete_paths_symbols_relation_evidence",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_blind_missing_extra_duplicate_changed_paths_rejected",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_blind_all_evidence_paths_are_safe_existing_and_canonical"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Phase A is independent and B follows immutable persistence.",
+          "unittest_ids": [
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_a_is_blind_and_phase_b_follows_immutable_persistence"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Changed candidate invalidates blind report; either phase mutating candidate is rejected.",
+          "unittest_ids": [
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_candidate_change_invalidates_blind_and_final_challenge",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_evaluator_cannot_mutate_candidate_in_either_phase"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Batch A correction cannot reveal B; failed persistence suppresses B.",
+          "unittest_ids": [
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_a_batch_correction_never_discloses_phase_b_early",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_is_not_run_when_blind_persistence_fails"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "slivin_harness.evaluator.run_evaluator",
+        "slivin_harness.evaluator.validate_blind_audit"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B11",
+      "schemas": [
+        "evaluator.v7",
+        "implementation-impact-closure.v2",
+        "impact-sources.v1"
+      ],
+      "ownership": "Evaluator owns independent dispositions; Controller owns origins/reference freshness and allowable status routing.",
+      "preconditions": "Immutable A is persisted; current implementation/Contract/verification/source artifacts revalidated before B.",
+      "postconditions": "Every authoritative origin and changed path gets one valid disposition; negative findings retained; PROMOTED_IN_SCOPE requires admitted target and independent confirmation.",
+      "evidence_dependencies": "Current source IDs/revisions, persisted promotions, A IDs, candidate/definition binding and final finding IDs.",
+      "allowed_outcomes": [
+        "PASS",
+        "FINDINGS_REPAIR",
+        "TECHNICAL_REPLAN_REQUIRED",
+        "BLOCKED",
+        "INVALID_STOP"
+      ],
+      "recovery_contract": "B findings are admitted once, expand/repair candidate then require fresh A/B; B local correction cannot change classifications.",
+      "checkpoint_contract": "Persist A before B; validated B/current origin is stored before expansion; obsolete evaluations cannot mint current handoff.",
+      "families": {
+        "input": {
+          "expectation": "Unknown matches/findings and missing/duplicate dispositions cannot be accepted.",
+          "unittest_ids": [
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_every_phase_b_input_set_requires_exact_unique_dispositions",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_material_finding_reference_cannot_be_invented",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_positive_consumer_match_must_reference_actual_in_scope"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Good candidate passes independent challenge; negative dispositions require retained findings and forbid PASS.",
+          "unittest_ids": [
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_good_candidate_all_independent_dispositions_pass",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_all_negative_dispositions_require_findings_and_forbid_pass",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_all_related_follow_ups_including_blind_survive_phase_b"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Candidate or implementation revision drift prevents B admission.",
+          "unittest_ids": [
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_stale_implementation_artifact_never_enters_phase_b",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_candidate_change_invalidates_blind_and_final_challenge"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Consumer finding expands and repairs with fresh blind candidate; semantic finding replans.",
+          "unittest_ids": [
+            "test_evaluator_impact_challenge.EvaluatorAutonomyWorkflowTests.test_consumer_finding_expands_repairs_and_requires_fresh_blind_candidate",
+            "test_evaluator_impact_challenge.EvaluatorAutonomyWorkflowTests.test_independent_contract_gaps_use_fresh_semantic_replan",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_promoted_origins_require_current_target_and_independent_confirmation",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_batch_repair_no_progress_and_candidate_write_guards"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "slivin_harness.evaluator.validate_evaluation_artifact"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B12",
+      "schemas": [
+        "user-follow-up.v2",
+        "final-acceptance.v3"
+      ],
+      "ownership": "Controller owns current-only handoff; FULL requires independent classification, FAST explicitly remains declared-only.",
+      "preconditions": "Validated current implementation/source inventory, candidate/attempt/revisions and FULL current A/B PASS.",
+      "postconditions": "All current unrelated findings survive with provenance/evidence; no in-scope item is hidden; empty report only for truly empty inventory.",
+      "evidence_dependencies": "Source/plan/impact/A/B fingerprints, current candidate and private/public handoff digests.",
+      "allowed_outcomes": [
+        "FOLLOW_UPS_PRESENT",
+        "NO_FOLLOW_UPS",
+        "INVALID_OR_STALE_STOP"
+      ],
+      "recovery_contract": "Rebuild from current authoritative inputs; do not accumulate rejected-attempt findings; late final-gate failure retains public handoff.",
+      "checkpoint_contract": "Immutable private/public copies and digest before acceptance; count=0 artifact remains mandatory.",
+      "families": {
+        "input": {
+          "expectation": "Unsafe paths, absent dispositions, renamed in-scope items and fake next tasks rejected.",
+          "unittest_ids": [
+            "test_user_follow_up_handoff.UserFollowUpTests.test_full_missing_or_negative_disposition_rejected",
+            "test_user_follow_up_handoff.UserFollowUpTests.test_in_scope_name_or_exact_signature_cannot_be_follow_up",
+            "test_user_follow_up_handoff.UserFollowUpTests.test_concrete_suggested_next_task_required"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Merge exact semantic duplicates, retain distinct sources, FULL and FAST/zero reports stay distinct.",
+          "unittest_ids": [
+            "test_user_follow_up_handoff.UserFollowUpTests.test_full_exact_duplicate_merges_provenance_and_evidence",
+            "test_user_follow_up_handoff.UserFollowUpTests.test_distinct_findings_and_same_title_do_not_merge",
+            "test_user_follow_up_handoff.UserFollowUpTests.test_zero_full_and_fast_reports_are_mandatory_and_valid",
+            "test_user_follow_up_handoff.UserFollowUpTests.test_fast_declares_without_independent_confirmation"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Rehashed omission or old candidate/attempt/source mirror cannot pass acceptance.",
+          "unittest_ids": [
+            "test_user_follow_up_handoff.UserFollowUpTests.test_candidate_attempt_revision_and_sources_are_bound",
+            "test_user_follow_up_handoff.UserFollowUpTests.test_tampered_fingerprint_counts_ids_and_rehashed_omission_rejected",
+            "test_user_follow_up_handoff.UserFollowUpTests.test_final_acceptance_requires_report_current_context_mirrors_and_digest"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Current handoff survives later gate failure while rejected attempt findings stay excluded.",
+          "unittest_ids": [
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_follow_up_survives_later_final_gate_failures",
+            "test_user_follow_up_handoff.UserFollowUpTests.test_current_model_does_not_accumulate_rejected_attempt_findings",
+            "test_release_contracts.PersistenceTransitionTests.test_before_and_ambiguous_after_writes_recover_without_duplicate_stage_effects"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "slivin_harness.handoff.build_user_follow_up_report"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B13",
+      "schemas": [
+        "patch-proof.v1",
+        "reconstructed-verification.v1",
+        "heldout-evidence.v2"
+      ],
+      "ownership": "Controller independently reconstructs accepted bytes and reruns the same trusted checks; hidden oracle remains isolated.",
+      "preconditions": "Frozen candidate patch, recorded baseline, authoritative source-owned runtime and current compiled check definitions.",
+      "postconditions": "Reconstructed identity equals candidate and identical assertions pass; hidden semantics require oracle marker and cannot feed current roles.",
+      "evidence_dependencies": "Patch digest/baseline/candidate, re-bound check definitions, source/runtime fingerprints and assertion outputs.",
+      "allowed_outcomes": [
+        "RECONSTRUCTION_PASS",
+        "ASSERTION_FAIL",
+        "HELDOUT_PASS",
+        "HELDOUT_SEMANTIC_FAIL",
+        "INFRA_TIMEOUT_OR_MUTATION_STOP"
+      ],
+      "recovery_contract": "Rebuild proof workspace from baseline/source runtime, never copy candidate-only helpers; incomplete proof does not release acceptance.",
+      "checkpoint_contract": "Persist patch-proof and reconstructed checks before final acceptance; held-out failure remains terminal and private where required.",
+      "families": {
+        "input": {
+          "expectation": "Candidate-only helper/loose object cannot make reconstruction pass; source runtime authority preserved.",
+          "unittest_ids": [
+            "test_reconstructed_verification.ReconstructedVerificationTests.test_original_workspace_only_helper_cannot_satisfy_replay",
+            "test_reconstructed_verification.ReconstructedVerificationTests.test_loose_unreferenced_object_is_not_available_to_replay",
+            "test_reconstructed_verification.ReconstructedVerificationTests.test_proof_runtime_and_exposed_files_come_from_source_not_candidate"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Binary/add/delete/ignored files reconstruct exactly and checks run on rebound paths.",
+          "unittest_ids": [
+            "test_phase7_final_gate.PhaseSevenFinalGateTests.test_patch_reconstruction_proves_binary_add_delete_and_modify",
+            "test_reconstructed_verification.ReconstructedVerificationTests.test_ignored_candidate_file_is_reconstructed_and_replayed",
+            "test_native_trusted_runners.NativeTrustedRunnerTests.test_real_assertions_generated_runner_controller_and_rebind"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Mismatched candidate/revision and proof-check mutations forbid acceptance; oracle marker is required.",
+          "unittest_ids": [
+            "test_phase7_final_gate.PhaseSevenFinalGateTests.test_quality_reconciliation_requires_one_candidate_and_current_revisions",
+            "test_reconstructed_verification.ReconstructedVerificationTests.test_replayed_check_candidate_mutation_blocks_acceptance",
+            "test_phase7_final_gate.PhaseSevenFinalGateTests.test_heldout_classification_requires_oracle_and_separates_semantic_fail"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Reconstruction failure remains fail-closed and handoff preserved.",
+          "unittest_ids": [
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_follow_up_survives_later_final_gate_failures",
+            "test_release_contracts.PersistenceTransitionTests.test_before_and_ambiguous_after_writes_recover_without_duplicate_stage_effects"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "slivin_harness.reconstructed_verification.run_authoritative_reconstructed_verification",
+        "slivin_harness.phase7.classify_heldout_results"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B14",
+      "schemas": [
+        "final-acceptance.v3",
+        "delivery-record.v2",
+        "quality-gate-reconciliation.v1"
+      ],
+      "ownership": "Controller alone mints immutable acceptance and delivers exact accepted bytes; owner source wins on conflict.",
+      "preconditions": "Current reconciled stages, successful byte reconstruction and trusted replay, bound handoff and optional benchmark oracle.",
+      "postconditions": "Final acceptance corresponds to exact candidate/patch; keep_worktree or transactional non-force source delivery retains that identity.",
+      "evidence_dependencies": "All stage artifact/revision bindings, patch digest, public/private handoff, source HEAD/preimage and delivery postimage.",
+      "allowed_outcomes": [
+        "FINAL_ACCEPTANCE_PASS_AND_DELIVERY_PASS",
+        "DELIVERY_BLOCKED_RETAIN_ACCEPTANCE",
+        "DELIVERY_FAIL_SAFE_ROLLBACK",
+        "INVALID_STOP"
+      ],
+      "recovery_contract": "Conflict preserves source and accepted patch; rollback only Harness-owned postimage and never concurrent owner edits.",
+      "checkpoint_contract": "Immutable acceptance before delivery; delivery record binds outcome; missing/mismatched artifacts forbid terminal PASS.",
+      "families": {
+        "input": {
+          "expectation": "Acceptance requires patch proof, one current candidate/revision vector, and valid handoff.",
+          "unittest_ids": [
+            "test_phase7_final_gate.PhaseSevenFinalGateTests.test_final_acceptance_is_built_after_patch_proof",
+            "test_phase7_final_gate.PhaseSevenFinalGateTests.test_quality_reconciliation_requires_one_candidate_and_current_revisions",
+            "test_user_follow_up_handoff.UserFollowUpTests.test_final_acceptance_requires_report_current_context_mirrors_and_digest"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Exact candidate is delivered and production reaches terminal PASS.",
+          "unittest_ids": [
+            "test_phase7_final_gate.PhaseSevenFinalGateTests.test_delivery_transaction_applies_exact_candidate",
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_production_run_records_all_steps_and_terminal_pass",
+            "test_run_state.RunStateTests.test_terminal_pass_requires_completed_final_gate"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Changed source preimage/HEAD blocks delivery without touching source or changing accepted candidate.",
+          "unittest_ids": [
+            "test_phase7_final_gate.PhaseSevenFinalGateTests.test_delivery_conflict_keeps_accepted_candidate_and_does_not_touch_source",
+            "test_user_follow_up_handoff.UserFollowUpTests.test_candidate_attempt_revision_and_sources_are_bound"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Postimage mismatch rolls back only owned bytes, preserving concurrent user edit.",
+          "unittest_ids": [
+            "test_phase7_final_gate.PhaseSevenFinalGateTests.test_delivery_mismatch_rolls_back_only_harness_postimage",
+            "test_phase7_final_gate.PhaseSevenFinalGateTests.test_delivery_rollback_does_not_overwrite_concurrent_user_edit",
+            "test_release_contracts.PersistenceTransitionTests.test_before_and_ambiguous_after_writes_recover_without_duplicate_stage_effects"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "slivin_harness.phase7.build_final_acceptance",
+        "slivin_harness.phase7.deliver_candidate_transaction"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B15",
+      "schemas": [
+        "implementer.v6",
+        "implementation-contract.v4",
+        "verification-plan.v1"
+      ],
+      "ownership": "Controller owns continuation contract/prompt/current self-check command; Implementer continues its existing workspace/thread.",
+      "preconditions": "Known unfinished task or expanded/refreshed definition; bounded continuation budget; source inventory retained.",
+      "postconditions": "Same thread preserves candidate work and closes newly active items using current refs/checks.",
+      "evidence_dependencies": "Current source/Contract/verification bindings, last candidate checkpoint and current self-verify runner.",
+      "allowed_outcomes": [
+        "CONTINUED_VALID_REPORT",
+        "BOUNDED_TIMEOUT_STOP",
+        "REPORT_REPAIR_OR_REPLAN"
+      ],
+      "recovery_contract": "One timeout continuation and definition/runtime continuations must make progress without reinitializing product or duplicating discoveries.",
+      "checkpoint_contract": "Candidate/checkpoint retained across interruption; new report privately persisted and admitted under current definition.",
+      "families": {
+        "input": {
+          "expectation": "Continuation prompt carries current owner Contract and verification plan.",
+          "unittest_ids": [
+            "test_protocol.ProtocolContractTests.test_implementation_handoff_contains_task_contract_and_verification_plan"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Timeout continuation and discovery expansion reuse same Implementer thread.",
+          "unittest_ids": [
+            "test_implementer.ImplementerContractTests.test_implementer_timeout_continues_same_thread_once",
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_post_patch_promoted_consumer_expands_in_same_thread"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Expanded runtime requirement is gated before continuation; stale pre-repair impact rejected.",
+          "unittest_ids": [
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_new_runtime_requirement_rechecks_capability_gate_before_continuation",
+            "test_task_runner_workflow.TaskRunnerWorkflowIntegrationTests.test_controller_rejects_repair_with_reused_pre_repair_impact"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "No extra timeout continuation during report correction; failure without raw preserves candidate.",
+          "unittest_ids": [
+            "test_runner_report_recovery.ReportRecoveryTests.test_report_correction_timeout_has_no_extra_continuation",
+            "test_systemic_reliability.BatchProgressTests.test_unknown_transport_and_timeout_before_raw_preserve_actual_candidate",
+            "test_release_contracts.PersistenceTransitionTests.test_before_and_ambiguous_after_writes_recover_without_duplicate_stage_effects"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "task_runner.main.continue_implementer"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B16",
+      "schemas": [
+        "project-runtime.v1",
+        "implementation-impact-closure.v2",
+        "run-state.v1"
+      ],
+      "ownership": "Controller stabilizes report/check/runtime evidence; runtime projection authority remains source-owned.",
+      "preconditions": "Admitted Implementer report, current registry and runtime definition/integrity state.",
+      "postconditions": "Only stable current Contract/check/runtime/candidate can mint impact and proceed; unrelated source files unchanged.",
+      "evidence_dependencies": "Dependency/package/config fingerprints, runtime revision, current candidate/receipt/registered checks.",
+      "allowed_outcomes": [
+        "STABLE_COMPLETE",
+        "EXPANSION_CONTINUATION",
+        "RUNTIME_REBUILD_CONTINUATION",
+        "REPAIR_OR_TYPED_STOP"
+      ],
+      "recovery_contract": "Rebuild/rebind runtime and rerun necessary checks after drift; do not erase candidate for proof/environment correction.",
+      "checkpoint_contract": "Each runtime/definition revision has private/public evidence; later impact uses resulting current binding.",
+      "families": {
+        "input": {
+          "expectation": "Invalid runtime entrypoint or bootstrap environment cannot create usable runtime.",
+          "unittest_ids": [
+            "test_phase5_contract_runtime.ProjectRuntimeTests.test_runtime_entrypoint_outside_worktree_venv_is_rejected",
+            "test_phase5_contract_runtime.ProjectRuntimeTests.test_wrong_bootstrap_version_is_blocked",
+            "test_phase6_runtime_evaluator.RuntimePhaseTests.test_runtime_environment_gap_is_detected_before_execution",
+            "test_phase6_runtime_evaluator.RuntimePhaseTests.test_runtime_config_is_typed_and_prod_observe_requires_read_only"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Stable worktree runtime and combined report/expansion/evaluation reach final acceptance.",
+          "unittest_ids": [
+            "test_phase5_contract_runtime.ProjectRuntimeTests.test_build_creates_worktree_runtime_and_stable_state",
+            "test_native_trusted_runners.NativeTrustedRunnerTests.test_combined_expansion_report_correction_evaluator_final_gate",
+            "test_phase6_runtime_evaluator.RuntimePhaseTests.test_live_local_start_health_and_runtime_pass",
+            "test_phase6_runtime_evaluator.RuntimePhaseTests.test_contract_closure_is_controller_normalized_and_fingerprinted"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Dependency/hidden package drift rebuilds; source/runtime mutation cannot be accepted.",
+          "unittest_ids": [
+            "test_phase5_contract_runtime.ProjectRuntimeTests.test_dependency_change_rebuilds_runtime",
+            "test_phase5_contract_runtime.ProjectRuntimeTests.test_hidden_package_drift_rebuilds_runtime",
+            "test_runtime_projection_integrity.RuntimeProjectionIntegrityTests.test_source_change_is_not_promoted_to_new_baseline",
+            "test_phase6_runtime_evaluator.RuntimePhaseTests.test_runtime_mutation_overrides_green_scenario_result",
+            "test_phase6_runtime_evaluator.RuntimePhaseTests.test_runtime_projection_mutation_invalidates_green_runtime_result"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Required Python refresh follows real rebuild; repeated stable runtime does not rebuild gratuitously.",
+          "unittest_ids": [
+            "test_planner_tool_evidence_refresh.PlannerToolEvidenceWorkflowTests.test_real_runtime_rebuild_refreshes_only_required_project_python",
+            "test_phase5_contract_runtime.ProjectRuntimeTests.test_build_creates_worktree_runtime_and_stable_state",
+            "test_runner_report_recovery.RunnerResolutionTests.test_registry_binds_compiled_runner_idempotently",
+            "test_native_trusted_runners.NativeTrustedRunnerTests.test_repair_framework_config_rebind_reaches_current_reconstruction",
+            "test_phase6_runtime_evaluator.RuntimePhaseTests.test_test_external_requires_readback_and_cleanup_boundary",
+            "test_phase6_runtime_evaluator.RuntimePhaseTests.test_nonzero_command_cannot_smuggle_a_green_result"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "task_runner.main.stabilize_implementer_report",
+        "task_runner.main.reconcile_project_runtime",
+        "slivin_harness.phase6.RuntimeExecutor.execute",
+        "slivin_harness.phase6.build_contract_closure_record",
+        "slivin_harness.phase6.validate_contract_closure_record"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B17",
+      "schemas": [
+        "candidate-checkpoint.v1",
+        "candidate.v1",
+        "run-state.v1"
+      ],
+      "ownership": "Controller owns private candidate blobs/evidence and honest terminal observation; raw agent data never defines file paths.",
+      "preconditions": "Physical candidate inventory and Controller-known evidence locator; private storage outside agent-writable candidate.",
+      "postconditions": "Checkpoint reconstructs observed bytes and contains durable referenced evidence; unknown observation invalidates prior current identity.",
+      "evidence_dependencies": "Before/after physical candidate identity, blob digests, Contract/source/verification/registry bindings and durable evidence digests.",
+      "allowed_outcomes": [
+        "SAVED_UNVERIFIED",
+        "OBSERVED_TERMINAL",
+        "UNKNOWN_TERMINAL",
+        "PERSISTENCE_FAILURE_NO_ACCEPTANCE"
+      ],
+      "recovery_contract": "Bounded atomic persistence/reconciliation; unknown transport/timeout before raw still preserves available candidate/evidence; no cross-process resume claim.",
+      "checkpoint_contract": "Checkpoint precedes large report validation; terminal diagnostics do not relabel previous baseline as current.",
+      "families": {
+        "input": {
+          "expectation": "Unsafe paths, invalid locators or unsupported filesystem entries must fail closed.",
+          "unittest_ids": [
+            "test_control_plane.ControlPlaneTests.test_artifact_paths_reject_escape_absolute_drive_and_unc",
+            "test_release_contracts.AdmissionMatrixTests.test_checkpoint_rejects_outside_locator_and_concurrent_candidate_change"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Saved private blobs reconstruct current changed bytes; raw remains private.",
+          "unittest_ids": [
+            "test_systemic_reliability.BatchProgressTests.test_private_checkpoint_preserves_reproducible_candidate_bytes",
+            "test_runner_report_recovery.ReportRecoveryTests.test_no_progress_stops_early_and_preserves_raw_and_terminal_inventory"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Failed observation explicitly marks previous identity stale; correction mutation is visible.",
+          "unittest_ids": [
+            "test_runner_report_recovery.ReportRecoveryTests.test_failed_terminal_observation_explicitly_marks_previous_identity_stale",
+            "test_runner_report_recovery.ReportRecoveryTests.test_candidate_mutation_during_correction_stops_before_receipt"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Checkpoint failure keeps raw/no acceptance; timeout before raw and ambiguous durable replace preserve honest state.",
+          "unittest_ids": [
+            "test_systemic_reliability.BatchProgressTests.test_checkpoint_write_failure_keeps_raw_and_never_accepts",
+            "test_systemic_reliability.BatchProgressTests.test_unknown_transport_and_timeout_before_raw_preserve_actual_candidate",
+            "test_reliability_stateful.PersistenceFaultTests.test_ambiguous_committed_replace_is_reconciled_without_second_write",
+            "test_reliability_stateful.PersistenceFaultTests.test_write_failure_before_replace_preserves_previous_state",
+            "test_release_contracts.AdmissionMatrixTests.test_checkpoint_seals_evidence_before_scratch_cleanup_and_detects_tamper",
+            "test_release_contracts.PersistenceTransitionTests.test_before_and_ambiguous_after_writes_recover_without_duplicate_stage_effects"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "slivin_harness.checkpoint.save_report_checkpoint",
+        "task_runner.observe_terminal_report_candidate"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B18",
+      "schemas": [
+        "proof-route-review.v1",
+        "implementation-contract.v4",
+        "verification-plan.v1"
+      ],
+      "ownership": "Independent Planner role reviews proof route; Controller applies overrides; owner/product/source claims and candidate stay immutable.",
+      "preconditions": "Validated proof divergence with candidate checkpoint; current candidate/Contract/review binding, owner checks and available capabilities.",
+      "postconditions": "READY changes only effective proof routes; old claims retained; candidate unchanged; revisions/receipts downstream refreshed.",
+      "evidence_dependencies": "Independent review reason/evidence, candidate/Contract IDs, previous proof fingerprint, owner check definitions and effective routes.",
+      "allowed_outcomes": [
+        "READY_PROOF_RECOMPILE",
+        "TECHNICAL_REPLAN_REQUIRED",
+        "BLOCKED_OR_INVALID_STOP"
+      ],
+      "recovery_contract": "Proof-only correction preserves candidate; independently established technical divergence uses semantic route; bounded attempts/no identical rewrite.",
+      "checkpoint_contract": "Save candidate before independent review; persist review/route history and both new definitions before continuation.",
+      "families": {
+        "input": {
+          "expectation": "Require current candidate/Contract/item/proof references and meaningful diagnosis; owner gates cannot disappear.",
+          "unittest_ids": [
+            "test_proof_model_replan.TerminalReasonTests.test_proof_replan_still_requires_reason_and_evidence",
+            "test_proof_model_replan.ProofModelWorkflowTests.test_owner_baseline_red_gate_remains_hard_after_proof_replan",
+            "test_release_contracts.ProofReviewMatrixTests.test_non_ready_diagnosis_is_strict_before_reset_or_block",
+            "test_release_contracts.ProofReviewMatrixTests.test_current_override_preserves_claims_and_rejects_stale_or_tampered_input"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Positive proof revision preserves actual product bytes/claims and reaches full acceptance/follow-up.",
+          "unittest_ids": [
+            "test_proof_model_replan.ProofModelWorkflowTests.test_baseline_red_proof_preserves_candidate_and_delivers_follow_up"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Old evidence cannot satisfy changed proof route; original product claims remain unchanged.",
+          "unittest_ids": [
+            "test_proof_model_replan.ProofModelWorkflowTests.test_baseline_red_proof_preserves_candidate_and_delivers_follow_up",
+            "test_reliability_stateful.StatefulReliabilityTests.test_fixed_stateful_sequences",
+            "test_release_contracts.ProofReviewMatrixTests.test_current_override_preserves_claims_and_rejects_stale_or_tampered_input"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Owner or affected-reader assertion failure remains hard; technical divergence routes to fresh semantic replan.",
+          "unittest_ids": [
+            "test_proof_model_replan.ProofModelWorkflowTests.test_owner_baseline_red_gate_remains_hard_after_proof_replan",
+            "test_proof_model_replan.ProofModelWorkflowTests.test_affected_reader_failure_is_not_excused_by_independent_baseline_debt",
+            "test_proof_model_replan.ProofModelWorkflowTests.test_independent_technical_review_uses_semantic_reset_and_completes"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "task_runner.main.revise_proof_route",
+        "slivin_harness.proof_routes.apply_proof_review"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B19",
+      "schemas": [
+        "impact-sources.v1",
+        "implementer.v6",
+        "evaluator.v7"
+      ],
+      "ownership": "Controller owns stable source IDs/revisions and admission history; author claims remain immutable; role owns explicit assessments/observations.",
+      "preconditions": "Validated current inventory/source namespace and typed observations/current evaluator artifacts.",
+      "postconditions": "No source drop/unknown/stale reference or implicit confirmation; repeated ID is idempotent only for identical payload; promotion has explicit persisted target.",
+      "evidence_dependencies": "Source artifact/namespace/revision fingerprints, observation IDs, assessments, promotion transitions and evaluator finding origin.",
+      "allowed_outcomes": [
+        "ADMITTED_ORIGIN",
+        "IDEMPOTENT_REPLAY",
+        "VALID_ASSESSMENTS",
+        "SOURCE_CONFLICT_OR_CHALLENGE"
+      ],
+      "recovery_contract": "Retain admitted claims through continuation/expansion; explicit promotion replaces current classification without losing original evidence.",
+      "checkpoint_contract": "Inventory/transition is persisted with active Contract; raw prior report is not the authority for downstream roles.",
+      "families": {
+        "input": {
+          "expectation": "Reject missing/duplicate/unknown/stale refs and changed repeated observation payload.",
+          "unittest_ids": [
+            "test_systemic_reliability.SourceOwnershipTests.test_missing_duplicate_unknown_and_stale_origins_rejected",
+            "test_systemic_reliability.SourceOwnershipTests.test_discovery_idempotency_and_conflicting_payload"
+          ],
+          "required": true
+        },
+        "output": {
+          "expectation": "Independent current observations and variable inventories preserve exact source coverage without repeated prose.",
+          "unittest_ids": [
+            "test_systemic_reliability.SourceOwnershipTests.test_independent_observations_preserve_origins_without_copying_text",
+            "test_systemic_reliability.SourceOwnershipTests.test_variable_source_collections_and_order_preserve_exact_coverage",
+            "test_systemic_reliability.SourceOwnershipTests.test_challenge_is_not_confirmation"
+          ],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Source reference revision and active inventory determine validity regardless of report order.",
+          "unittest_ids": [
+            "test_systemic_reliability.SourceOwnershipTests.test_missing_duplicate_unknown_and_stale_origins_rejected",
+            "test_systemic_reliability.SourceOwnershipTests.test_variable_source_collections_and_order_preserve_exact_coverage"
+          ],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Repeated discovery is idempotent; retained inventory survives expansion and evaluator finding repair.",
+          "unittest_ids": [
+            "test_systemic_reliability.SourceOwnershipTests.test_discovery_idempotency_and_conflicting_payload",
+            "test_evaluator_impact_challenge.EvaluatorAutonomyWorkflowTests.test_consumer_finding_expands_repairs_and_requires_fresh_blind_candidate",
+            "test_release_contracts.AdmissionMatrixTests.test_evaluator_origin_duplicate_is_idempotent_new_revision_needs_assessment",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_promoted_origins_require_current_target_and_independent_confirmation"
+          ],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "slivin_harness.source_records.register_observations",
+        "slivin_harness.source_records.register_evaluator_findings",
+        "slivin_harness.source_records.resolve_assessments"
+      ],
+      "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    }
+  ]
+}

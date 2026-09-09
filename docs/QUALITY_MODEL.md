@@ -1,4 +1,11 @@
-# Модель качества Slivin Harness 0.8.0a30 — Phase 7
+# Модель качества Slivin Harness 0.8.0a31 — Phase 7
+
+Квалификация сборки требует safety и завершения корректных задач. Единый
+[release gate](SYSTEMIC_RELIABILITY.md) выполняет boundary families, stateful faults,
+defect mutations, настоящие runners/role sandbox и три FULL model runs.
+Controlled stop в positive case, mandatory skip или NOT_RUN запрещает RELEASE_QUALIFIED.
+Согласованные JSON и exit 0 без current evidence, assertions, reconstruction и
+safe delivery недостаточны.
 
 Для Planner/Evaluator различаются requested scratch-only policy, reported App Server
 policy и результаты реальных sandbox operations. Metadata PASS не означает запуск
@@ -89,7 +96,7 @@ agent-provided `receipt_id` Controller authority.
 
 ### Planner
 
-`planner.v5` характеризует current behavior, existing contract, root cause/extension point, consumers, state model, risks и evidence plan. Planner не доказывает корректность future candidate. Controller заранее сообщает только подтверждённые executors; READY proof не может стохастически потребовать отсутствующую capability. Первый overreach получает один corrective turn в том же thread, повторный блокируется до Contract compiler.
+`planner.v6` характеризует current behavior, existing contract, root cause/extension point, consumers, state model, risks и evidence plan. Planner не доказывает корректность future candidate. Controller заранее сообщает только подтверждённые executors; READY proof не может стохастически потребовать отсутствующую capability. Первый overreach получает один corrective turn в том же thread, повторный блокируется до Contract compiler.
 
 До `READY` обязательный typed `impact_closure` фиксирует changed contracts,
 concrete consumers, классификации IN_SCOPE / NOT_AFFECTED / RELATED_OUT_OF_SCOPE,
@@ -114,7 +121,7 @@ behavioral/state/runtime obligations и concrete summary сохраняются.
 
 ### Implementation Contract
 
-`implementation-contract.v3` хранит минимальный обязательный Definition of Done:
+`implementation-contract.v4` хранит минимальный обязательный Definition of Done:
 
 ```text
 ACCEPTANCE
@@ -137,7 +144,7 @@ Task Contract, `PRESERVE-1` semantics и все owner checks. Это не пра
 
 ### Implementer self verification
 
-`implementer.v5` использует trusted check registry и worktree-local project runtime, чтобы исправляться до сдачи. Controller-private receipt связан с candidate, revisions, runtime environment, attempt и registry digest.
+`implementer.v6` использует trusted check registry и worktree-local project runtime, чтобы исправляться до сдачи. Controller-private receipt связан с candidate, revisions, runtime environment, attempt и registry digest.
 
 COMPLETE дополнительно требует `post_patch_impact` по actual diff: reconciliation
 Planner changed contracts/IN_SCOPE, повторный disposition NOT_AFFECTED, сохранение
@@ -147,11 +154,11 @@ final COMPLETE. Изменившаяся technical model требует REPLAN_R
 FAST подчиняется тому же owner-backed prose-only исключению; отсутствие Planner
 не освобождает от engineering impact sweep. После repair sweep и self-verify повторяются.
 
-Controller-normalized `implementation-impact-closure.v1` привязан к candidate,
+Controller-normalized `implementation-impact-closure.v2` привязан к candidate,
 Planner/Contract fingerprints, changed paths и revision binding. Это доказательство
 структуры, согласованности и актуальности declarations; оно не доказывает истинность
 semantic evidence или исчерпывающий discovery. Evaluator независимо challenge-ит эти
-declarations. Controller доставляет current related findings пользователю через обязательный `user-follow-up.v1` до held-out, включая valid zero report. FULL требует независимого CONFIRMED_OUT_OF_SCOPE; FAST явно сообщает об отсутствии Evaluator review.
+declarations. Controller доставляет current related findings пользователю через обязательный `user-follow-up.v2` до held-out, включая valid zero report. FULL требует независимого CONFIRMED_OUT_OF_SCOPE; FAST явно сообщает об отсутствии Evaluator review.
 
 Self-verify остаётся assertion builder-а, а не финальным authority.
 
@@ -173,13 +180,13 @@ PROD_OBSERVE
 
 ### Blind Evaluator
 
-`evaluator.v6` сначала независимо восстанавливает `impact_analysis` по actual candidate,
+`evaluator.v7` сначала независимо восстанавливает `impact_analysis` по actual candidate,
 без обоих impact ledgers и Contract/check framing. `blind-audit.v2` содержит собственные
 IDs, changed contracts, affected/NOT_AFFECTED/related consumers, exact changed-path review,
 search evidence и summary. Controller использует shared safe-path/prose policy и
 write-once persistence до Phase B.
 
-Phase B получает normalized Planner impact и текущий `implementation-impact-closure.v1`
+Phase B получает normalized Planner impact и текущий `implementation-impact-closure.v2`
 после повторной проверки binding, а также Contract, `contract-closure.v1` и deterministic/
 runtime evidence. `impact_challenge` обязан покрыть exact sets blind contracts/consumers,
 Planner IN_SCOPE, Implementer DISCOVERED, NOT_AFFECTED и related rows всех источников,
@@ -320,7 +327,7 @@ projection должны остаться pristine; иначе `reconstructed-ver
 
 `final-acceptance.v3` создаётся один раз после patch proof и reconstructed verification PASS. Он содержит artifact bindings и patch SHA-256, но не дублирует reasoning/logs.
 
-Обязательный `user_follow_up` связывает current `user-follow-up.v1` через fingerprint
+Обязательный `user_follow_up` связывает current `user-follow-up.v2` через fingerprint
 и SHA-256 в artifact bindings. Даже count=0 требует valid private/public report.
 Missing, tampered, stale или потерявший current related finding handoff запрещает acceptance.
 
@@ -406,9 +413,9 @@ Planner Impact Closure проверяется synthetic Harness tests. Historica
 ```text
 manifest version = 2
 task-contract.v1
-planner.v5
-implementer.v5
-implementation-contract.v3
+planner.v6
+implementer.v6
+implementation-contract.v4
 verification-plan.v1
 project-runtime.v1
 contract-expansion.v1
@@ -418,8 +425,8 @@ runtime-result.v1
 runtime-evidence.v1
 contract-closure.v1
 blind-audit.v2
-evaluator.v6
-workflow.v6
+evaluator.v7
+workflow.v7
 run-state.v1
 candidate.v1
 controller-plane.v1
@@ -429,7 +436,7 @@ phase6-runtime-evaluator.v1
 phase7-final-gate.v1
 patch-proof.v1
 final-acceptance.v3
-user-follow-up.v1
+user-follow-up.v2
 delivery-record.v2
 heldout-evidence.v2
 benchmark-isolation.v1

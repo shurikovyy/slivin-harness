@@ -11,7 +11,9 @@ from slivin_harness.handoff import (
     USER_FOLLOW_UP_ARTIFACT, UserFollowUpError, build_user_follow_up_report,
     user_follow_up_console_lines, validate_user_follow_up_report,
 )
-from slivin_harness.implementer import build_implementation_contract
+from slivin_harness.implementer import build_implementation_contract, materialize_post_patch_impact
+from slivin_harness.source_records import SOURCE_GROUPS, register_observations
+from test_protocol import attach_post_patch_impact
 from slivin_harness.phase7 import Phase7Error, artifact_digest, build_final_acceptance
 from slivin_harness.protocol import stable_fingerprint
 from slivin_harness.workflow import WorkflowMode
@@ -53,13 +55,16 @@ def handoff_context(workspace, *, fast=False, related=False, blind_related=False
         plan = audit = evaluation = None
         impact["plan_fingerprint"] = None
         rehash(impact)
-    return dict(
+    context = dict(
         task_id="FOLLOW_UP_TEST", mode="PRODUCTION", pipeline_profile="FAST" if fast else "FULL",
         candidate_id="candidate-1", attempt_id=1, revision_snapshot={},
         workspace=workspace, changed_paths=["target.txt"], plan=plan,
         implementation_contract=contract, implementation_impact_closure=impact,
         revision_binding={}, blind_audit=audit, evaluation=evaluation,
     )
+    if fast:
+        refresh_evaluation(context)
+    return context
 
 
 def rehash(value):
@@ -67,11 +72,35 @@ def rehash(value):
 
 
 def refresh_evaluation(context):
-    rehash(context["implementation_impact_closure"])
-    if context["plan"] is not None:
-        from slivin_harness.protocol import plan_fingerprint
-        context["implementation_impact_closure"]["plan_fingerprint"] = plan_fingerprint(context["plan"])
-        rehash(context["implementation_impact_closure"])
+    """Author a fresh current fixture; never rehash a malformed origin ledger."""
+    canonical = copy.deepcopy(context["implementation_impact_closure"]["post_patch_impact"])
+    contract = build_implementation_contract(context["plan"], task_contract=valid_task_contract())
+    if context["plan"] is None:
+        observations = {}
+        for group in SOURCE_GROUPS:
+            observations[group] = []
+            for index, row in enumerate(canonical[group]):
+                claim = {key: value for key, value in row.items() if key not in {"source_ref", "source"}}
+                observations[group].append(dict(claim, observation_id=f"fixture-{group}-{index}"))
+        contract["source_inventory"] = register_observations(contract["source_inventory"], observations)[0]
+        extra = [row for row in context["implementation_contract"]["items"] if row.get("source") == "DISCOVERED"]
+        contract["items"].extend(extra)
+    contract["fingerprint"] = stable_fingerprint({key: value for key, value in contract.items() if key != "fingerprint"})
+    context["implementation_contract"] = contract
+    impact = implementation_impact_fixture(plan=context["plan"], contract=contract)
+    # Evidence observations are current-role content, separate from origin text.
+    report = attach_post_patch_impact({"status": "COMPLETE"}, plan=context["plan"], changed_paths=context["changed_paths"], contract=contract)
+    for group in SOURCE_GROUPS:
+        current = [row for row in contract["source_inventory"]["records"] if row["group"] == group]
+        for origin, desired in zip(current, canonical[group]):
+            assessment = next(row for row in report["post_patch_impact"]["source_assessments"] if row["source_ref"]["source_id"] == origin["source_id"])
+            for key in ("paths", "symbols", "evidence"):
+                assessment[key] = list(desired.get(key, []))
+    impact["source_assessments"] = report["post_patch_impact"]["source_assessments"]
+    impact["post_patch_impact"] = materialize_post_patch_impact(report, contract=contract, plan=context["plan"])
+    rehash(impact)
+    context["implementation_impact_closure"] = impact
+    if context["plan"] is not None and context["pipeline_profile"] == "FULL":
         context["evaluation"] = valid_pass(
             blind_audit=context["blind_audit"], planner_impact=context["plan"]["impact_closure"],
             implementation_impact=context["implementation_impact_closure"],
@@ -86,7 +115,7 @@ def acceptance_context(context, run_root):
         (root / USER_FOLLOW_UP_ARTIFACT).write_text(json.dumps(report), encoding="utf-8")
     candidate_id = context["candidate_id"]
     return dict(
-        task_id=context["task_id"], harness_version="0.8.0a26", workflow_version="workflow.v6",
+        task_id=context["task_id"], harness_version="0.8.0a26", workflow_version="workflow.v7",
         mode=WorkflowMode.PRODUCTION, pipeline_profile=context["pipeline_profile"],
         result_mode="keep_worktree", source_baseline_sha="baseline",
         final_candidate=SimpleNamespace(candidate_id=candidate_id, baseline_sha="baseline", workspace_head="baseline", changed_paths=tuple(context["changed_paths"])),
@@ -123,7 +152,7 @@ class UserFollowUpTests(unittest.TestCase):
     def test_blind_only_finding_survives(self):
         context = handoff_context(self.workspace, blind_related=True)
         row = build_user_follow_up_report(**context)["follow_ups"][0]
-        self.assertEqual(row["provenance"], [dict(source="BLIND_EVALUATOR", reference="RELATED-1", disposition="CONFIRMED_OUT_OF_SCOPE")])
+        self.assertEqual(row["provenance"], [dict(source="BLIND_EVALUATOR", reference="RELATED-1", disposition="CONFIRMED_OUT_OF_SCOPE", source_revision="")])
 
     def test_distinct_findings_and_same_title_do_not_merge(self):
         context = handoff_context(self.workspace, related=True, blind_related=True)
@@ -138,11 +167,12 @@ class UserFollowUpTests(unittest.TestCase):
         row = self.context["implementation_impact_closure"]["post_patch_impact"]["related_out_of_scope"][0]
         row.update(name="Metric label follow-up", evidence=["Additional repository observation."])
         row["relation"] = "  " + row["relation"].replace(" ", "  ") + "\n"
+        self.context["plan"]["impact_closure"]["related_out_of_scope"][0].update(name=row["name"], relation=row["relation"])
         refresh_evaluation(self.context)
         after = build_user_follow_up_report(**self.context)
         self.assertEqual(before["follow_ups"][0]["follow_up_id"], after["follow_ups"][0]["follow_up_id"])
         self.assertEqual(after["count"], 1)
-        self.assertEqual(after["follow_ups"][0]["title"], related_finding()["name"])
+        self.assertEqual(after["follow_ups"][0]["title"], "Metric label follow-up")
 
     def test_full_missing_or_negative_disposition_rejected(self):
         for status in (None, "ACTUALLY_IN_SCOPE", "UNSUPPORTED"):
@@ -171,7 +201,7 @@ class UserFollowUpTests(unittest.TestCase):
         report = build_user_follow_up_report(**context)
         self.assertIsNotNone(report["source_bindings"]["plan_fingerprint"])
         self.assertEqual(report["follow_ups"][0]["review_status"], "DECLARED_OUT_OF_SCOPE_FAST")
-        self.assertEqual([row["source"] for row in report["follow_ups"][0]["provenance"]], ["IMPLEMENTER"])
+        self.assertEqual([row["source"] for row in report["follow_ups"][0]["provenance"]], ["PLANNER", "IMPLEMENTER"])
 
     def test_zero_full_and_fast_reports_are_mandatory_and_valid(self):
         for fast in (False, True):

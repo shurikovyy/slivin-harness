@@ -87,7 +87,8 @@ cached tool evidence before a later gate may reuse it.
 
 ## Open-world Contract transaction
 
-Implementer protocol is now `implementer.v5`. A discovered obligation contains:
+Implementer `implementer.v6` submits a new observation once with `observation_id`.
+Controller retains the immutable origin and derives this internal compiler DTO:
 
 ```text
 kind                 consumer | risk
@@ -109,15 +110,16 @@ Existing items are immutable. Exact duplicate discoveries are idempotent and do 
 create obligation explosion. The 14-item size is a soft review threshold; a material
 obligation is never dropped to satisfy the threshold.
 
-Before expansion, `implementer.v5` must map every post-patch DISCOVERED consumer and
-new risk one-to-one to discovered obligations, including behavior/proof/evidence.
-Planner NOT_AFFECTED consumers promoted by the actual patch use this same route.
+There is no `discovered_obligations` wire array. Every source has an explicit current
+assessment by source ID and revision. New observations are independently authored;
+Controller derives obligations without requiring another copy of their prose.
+NOT_AFFECTED/RELATED_OUT_OF_SCOPE promotions retain source and target references.
 The existing stabilizer recompiles the Contract and Verification Plan, invalidates
 self-verification and continues the same thread. Final COMPLETE must close the new
 items and retain the discoveries; repeat declarations are idempotent. A changed
 Planner semantic contract requires REPLAN_REQUIRED instead of Contract expansion.
 
-After stabilization, Controller emits `implementation-impact-closure.v1`, bound to
+After stabilization, Controller emits `implementation-impact-closure.v2`, bound to
 the current candidate, Planner/Contract fingerprints, changed paths and revisions.
 Repairs require a new impact report and current trusted self-verification.
 
@@ -134,9 +136,11 @@ broad suites, unrelated baseline-red tests and RELATED_OUT_OF_SCOPE diagnostics 
 become authoritative registered checks. Changed/new regressions still require trusted
 verification. If a Planner-derived proof route cannot prove preservation because of
 proven independent baseline debt, return REPLAN_REQUIRED with
-terminal_reason_kind=PROOF_MODEL_DIVERGENCE and concrete reason/evidence. The existing
-semantic reset clears attempt-specific checks and recompiles fresh definitions while
-retaining owner-configured gates and user semantic requirements.
+terminal_reason_kind=PROOF_MODEL_DIVERGENCE and concrete reason/evidence. A separate
+read-only Planner proof review preserves the candidate, source claims and check registry.
+Controller versions proof routes, recompiles verification, reruns capability gates and
+continues the same Implementer thread. All owner gates remain mandatory; semantic model
+divergence uses the separate technical reset route.
 
 ## `.worktreeinclude`
 

@@ -14,6 +14,7 @@ from slivin_harness.phase7 import reset_workspace_for_semantic_replan
 
 class PlannerToolEvidenceWorkflowTests(unittest.TestCase):
     def assert_refresh(self, root, output):
+        self.assertTrue((root / "planner_tool_evidence_02.json").is_file(), "FRESH_PLANNER_EVIDENCE_MISSING")
         initial = json.loads((root / "planner_tool_evidence_01.json").read_text(encoding="utf-8"))
         refreshed = json.loads((root / "planner_tool_evidence_02.json").read_text(encoding="utf-8"))
         self.assertEqual(initial["status"], "PASS")

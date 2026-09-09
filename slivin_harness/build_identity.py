@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -9,6 +11,16 @@ from typing import Any
 
 HARNESS_BUILD_IDENTITY_VERSION = "harness-build-identity.v1"
 _FULL_SHA = re.compile(r"[0-9a-fA-F]{40}\Z")
+
+
+def source_manifest(harness_root: Path) -> dict:
+    """Hash explicit source/test/doc files, never local profiles or run artifacts."""
+    paths = [harness_root / "task_runner.py", harness_root / "README.md"]
+    for folder in ("slivin_harness", "tools", "tests", "docs"):
+        paths.extend(p for p in (harness_root / folder).rglob("*") if p.is_file() and p.suffix in {".py", ".md", ".json"})
+    files = {p.relative_to(harness_root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(set(paths))}
+    digest = hashlib.sha256(json.dumps(files, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return dict(schema_version="harness-source-manifest.v1", sha256=digest, files=files)
 
 
 @dataclass(frozen=True)

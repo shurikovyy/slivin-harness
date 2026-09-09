@@ -93,7 +93,7 @@ class Phase6ExecutableIntegrationTests(unittest.TestCase):
         self.assertTrue(slivin_harness.__version__.startswith("0.8.0a"))
         self.assertTrue(WORKFLOW_VERSION.startswith("workflow.v"))
         self.assertTrue(WORKFLOW_PHASE.startswith("phase"))
-        self.assertEqual(EVALUATOR_PROTOCOL_VERSION, "evaluator.v6")
+        self.assertEqual(EVALUATOR_PROTOCOL_VERSION, "evaluator.v7")
         self.assertEqual(PHASE6_VERSION, "phase6-runtime-evaluator.v1")
         self.assertEqual(RUNTIME_EVIDENCE_VERSION, "runtime-evidence.v1")
         self.assertEqual(CONTRACT_CLOSURE_VERSION, "contract-closure.v1")
@@ -225,7 +225,7 @@ timeout_seconds = 30
                 "registered_checks": [],
                 "discovered_obligations": [],
                 "blockers": [],
-            }, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace))
+            }, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace), contract=contract)
 
         evaluator_seen_runtime: list[str] = []
 
@@ -480,7 +480,7 @@ timeout_seconds = 30
                 "registered_checks": [],
                 "discovered_obligations": [],
                 "blockers": [],
-            }, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace))
+            }, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace), contract=contract)
 
         def fake_evaluator(*_args, **kwargs):
             self.assertEqual(

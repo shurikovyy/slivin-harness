@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from slivin_harness.boundaries import boundary
+
 from enum import Enum
 from typing import Any, Iterable, Mapping
 
@@ -255,6 +257,7 @@ def proof_required_capabilities(
     return _required_capabilities(level, values)
 
 
+@boundary("B04")
 def compile_verification_plan(
     implementation_contract: Mapping[str, Any],
     *,
@@ -264,9 +267,11 @@ def compile_verification_plan(
     requirements: list[dict[str, Any]] = []
     required_capabilities: set[str] = set()
     runtime_profiles: set[str] = set()
+    from .proof_routes import effective_proofs
+    effective = effective_proofs(implementation_contract)
     for item in implementation_contract.get("items", []):
         proof = validate_merged_required_proof(
-            item["required_proof"], field=f"implementation_contract.items[{item['id']}].required_proof"
+            effective[item["id"]], field=f"implementation_contract.items[{item['id']}].required_proof"
         )
         profiles: list[dict[str, Any]] = []
         for profile in proof["profiles"]:

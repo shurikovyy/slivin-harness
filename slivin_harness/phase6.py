@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from slivin_harness.boundaries import boundary
+
 import dataclasses
 import json
 import os
@@ -1108,6 +1110,7 @@ class RuntimeExecutor:
             reason_code,
         )
 
+    @boundary("B16")
     def execute(
         self,
         verification_plan: Mapping[str, Any],
@@ -1200,6 +1203,7 @@ class RuntimeExecutor:
         )
 
 
+@boundary("B16")
 def build_contract_closure_record(
     *,
     implementation_contract: Mapping[str, Any],
@@ -1238,6 +1242,7 @@ def build_contract_closure_record(
     return value
 
 
+@boundary("B16")
 def validate_contract_closure_record(
     value: Mapping[str, Any],
     *,

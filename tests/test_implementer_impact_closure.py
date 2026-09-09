@@ -10,7 +10,7 @@ from pathlib import Path
 from slivin_harness.implementer import (
     IMPLEMENTER_PROTOCOL_VERSION, build_implementation_contract,
     build_implementation_impact_closure, validate_implementation_impact_closure,
-    validate_implementation_report,
+    validate_implementation_report, report_discoveries,
 )
 from slivin_harness.phase5 import expand_contract_and_verification_plan
 from slivin_harness.impact import validate_owner_prose_boundary
@@ -60,7 +60,14 @@ class ImplementerImpactClosureTests(unittest.TestCase):
             "contract_evidence": [{"item_id": item["id"], "status": "VERIFIED", "evidence": ["Final fresh/expired behavior checked."]} for item in self.contract["items"]],
             "self_verification": {"status": "PASS", "command": "self", "evidence": ["SELF_VERIFY_PASS"], "receipt_id": ""},
         }
-        return attach_post_patch_impact(report, plan=self.plan, changed_paths=collect_changed_paths(self.workspace))
+        return attach_post_patch_impact(report, plan=self.plan, changed_paths=collect_changed_paths(self.workspace), contract=self.contract)
+
+    def assessment(self, group, author="PLANNER"):
+        identifier = next(row["source_id"] for row in self.contract["source_inventory"]["records"] if row["group"] == group and row["author"] == author)
+        return next(row for row in self.report["post_patch_impact"]["source_assessments"] if row["source_ref"]["source_id"] == identifier)
+
+    def drop_assessment(self, group, author="PLANNER"):
+        self.report["post_patch_impact"]["source_assessments"].remove(self.assessment(group, author))
 
     def validate(self, *, self_verify: bool = True, owner_paths=(), expanded: bool = False) -> None:
         validate_implementation_report(
@@ -77,28 +84,26 @@ class ImplementerImpactClosureTests(unittest.TestCase):
 
     def add_discovery(self, *, kind="consumer", name="Entry writer") -> None:
         row = {
-            "name": name, "paths": ["writer.py"], "symbols": ["store"],
+            "observation_id": "new-" + kind, "name": name, "paths": ["writer.py"], "symbols": ["store"],
             "evidence": ["writer.py store supplies entries to the corrected validity predicate."],
             "required_proof": proof("Fresh entries are stored and expired entries cannot become readable."),
         }
         reason = "The writer supplies the entry validity fields read by the predicate."
         behavior = "Expired entries cannot become readable through the writer."
         if kind == "consumer":
-            row.update(source="DISCOVERED", why_affected=reason, required_behavior=behavior)
+            row.update(why_affected=reason, required_behavior=behavior)
             self.report["post_patch_impact"]["in_scope_consumers"].append(row)
         else:
             row.update(reason=reason, failure_mode=behavior)
             self.report["post_patch_impact"]["new_risks"].append(row)
-        self.report["discovered_obligations"].append({
-            "kind": kind, "name": name, "reason": reason, "required_behavior": behavior,
-            "required_proof": copy.deepcopy(row["required_proof"]), "evidence": list(row["evidence"]),
-        })
+
 
     def expand(self):
         return expand_contract_and_verification_plan(
             implementation_contract=self.contract,
             previous_verification_plan=compile_verification_plan(self.contract, project_checks=[]),
-            discoveries=self.report["discovered_obligations"], project_checks=[], task_checks=[],
+            discoveries=report_discoveries(self.report, contract=self.contract, plan=self.plan),
+            observations=self.report["post_patch_impact"], project_checks=[], task_checks=[],
         )
 
     def artifact(self):
@@ -116,48 +121,45 @@ class ImplementerImpactClosureTests(unittest.TestCase):
         validate_implementation_impact_closure(artifact, **context)
 
     def test_missing_planner_consumer_is_rejected(self):
-        self.report["post_patch_impact"]["in_scope_consumers"].pop()
-        self.reject("POST_PATCH_PLANNER_CONSUMERS")
+        self.drop_assessment("in_scope_consumers")
+        self.reject("SOURCE_ASSESSMENT_MISSING")
 
     def test_changed_before_or_after_requires_replan(self):
-        original = copy.deepcopy(self.report)
-        for key in ("before", "after"):
-            self.report = copy.deepcopy(original)
-            self.report["post_patch_impact"]["changed_contracts"][0][key] = "Different semantic contract."
-            self.reject("POST_PATCH_MODEL_DIVERGENCE")
-            self.report.update(status="REPLAN_REQUIRED", terminal_reason_kind="TECHNICAL_MODEL_DIVERGENCE", reason="The validity contract differs from the Planner model.", evidence=["state.py actual entry fields contradict the assumed lifecycle."])
-            self.validate(self_verify=False)
+        row = self.assessment("changed_contracts")
+        row["disposition"] = "CHALLENGE"
+        row["observation"] = "The actual entry ownership contradicts the assumed lifecycle."
+        self.reject("SOURCE_MODEL_CHALLENGE")
+        self.report.update(status="REPLAN_REQUIRED", terminal_reason_kind="TECHNICAL_MODEL_DIVERGENCE", reason="The validity contract differs from the Planner model.", evidence=["state.py actual entry fields contradict the assumed lifecycle."])
+        self.validate(self_verify=False)
 
     def test_unplanned_contract_cannot_be_added_under_complete(self):
-        row = copy.deepcopy(self.report["post_patch_impact"]["changed_contracts"][0])
-        row["name"] = "Payload ownership"
-        self.report["post_patch_impact"]["changed_contracts"].append(row)
+        self.report["post_patch_impact"]["changed_contracts"].append({"observation_id": "other-contract", "name": "Payload ownership", "before": "One owner", "after": "Another owner", "paths": ["state.py"], "symbols": ["is_current"], "evidence": ["The owner changed in state.py."]})
         self.reject("POST_PATCH_MODEL_DIVERGENCE")
 
     def test_planned_contract_cannot_disappear(self):
-        self.report["post_patch_impact"]["changed_contracts"] = []
-        self.reject("POST_PATCH_MODEL_DIVERGENCE")
+        self.drop_assessment("changed_contracts")
+        self.reject("SOURCE_ASSESSMENT_MISSING")
 
     def test_planner_consumer_behavior_and_proof_cannot_change(self):
         original = copy.deepcopy(self.report)
         for key in ("why_affected", "required_behavior", "required_proof"):
             self.report = copy.deepcopy(original)
-            self.report["post_patch_impact"]["in_scope_consumers"][0][key] = proof("Different proof") if key == "required_proof" else "Different requirement."
-            self.reject("POST_PATCH_MODEL_DIVERGENCE")
+            self.assessment("in_scope_consumers")[key] = proof("Different proof") if key == "required_proof" else "Different requirement."
+            self.reject("UNKNOWN_FIELDS")
 
     def test_not_affected_must_be_reconsidered(self):
-        self.report["post_patch_impact"]["not_affected_consumers"] = []
-        self.reject("POST_PATCH_NOT_AFFECTED_MISSING")
+        self.drop_assessment("not_affected_consumers")
+        self.reject("SOURCE_ASSESSMENT_MISSING")
 
     def test_not_affected_can_be_promoted_and_requires_expansion(self):
-        name = self.report["post_patch_impact"]["not_affected_consumers"].pop()["name"]
-        self.add_discovery(name=name)
+        self.add_discovery(name="Static sibling")
+        self.assessment("not_affected_consumers").update(disposition="PROMOTE", promotion_id="new-consumer")
         self.validate()
         self.reject("POST_PATCH_DISCOVERY_CONTRACT", expanded=True)
         self.contract = self.expand().implementation_contract
         with self.assertRaisesRegex(RuntimeError, "every Implementation Contract item"):
             self.validate()
-        self.report["contract_evidence"] = [{"item_id": row["id"], "status": "VERIFIED", "evidence": ["Expanded proof passed."]} for row in self.contract["items"]]
+        self.report = self.make_report()
         with self.assertRaisesRegex(RuntimeError, "trusted self-verification"):
             self.validate(self_verify=False)
         self.validate(expanded=True)
@@ -165,21 +167,26 @@ class ImplementerImpactClosureTests(unittest.TestCase):
 
     def test_discovered_consumer_without_obligation_is_rejected(self):
         self.add_discovery()
-        self.report["discovered_obligations"] = []
-        self.reject("POST_PATCH_DISCOVERY_MISMATCH")
+        self.validate()
+        self.reject("POST_PATCH_DISCOVERY_CONTRACT", expanded=True)
 
     def test_consumer_obligation_without_impact_row_is_rejected(self):
         self.add_discovery()
-        self.report["post_patch_impact"]["in_scope_consumers"].pop()
-        self.reject("POST_PATCH_DISCOVERY_MISMATCH")
+        self.contract = self.expand().implementation_contract
+        self.report = self.make_report()
+        self.drop_assessment("in_scope_consumers", author="IMPLEMENTER")
+        self.reject("SOURCE_ASSESSMENT_MISSING")
 
     def test_discovered_behavior_proof_and_evidence_must_match(self):
         self.add_discovery()
-        original = copy.deepcopy(self.report)
-        for key in ("reason", "required_behavior", "required_proof", "evidence"):
-            self.report = copy.deepcopy(original)
-            self.report["discovered_obligations"][0][key] = {"required_proof": proof("Different proof."), "evidence": ["Different evidence."]}.get(key, "Different assertion.")
-            self.reject("POST_PATCH_DISCOVERY_MISMATCH")
+        expanded = self.expand().implementation_contract
+        for key in ("why_affected", "required_behavior", "required_proof", "evidence"):
+            report = copy.deepcopy(self.report)
+            report["post_patch_impact"]["in_scope_consumers"][0][key] = {"required_proof": proof("Different proof."), "evidence": ["Different evidence."]}.get(key, "Different assertion.")
+            from slivin_harness.source_records import register_observations
+            with self.assertRaises(ArtifactContractError) as failure:
+                register_observations(expanded["source_inventory"], report["post_patch_impact"])
+            self.assertEqual(failure.exception.code, "OBSERVATION_ID_CONFLICT")
 
     def test_new_risk_mapping_expands_and_is_idempotent(self):
         self.add_discovery(kind="risk", name="Stale write")
@@ -187,20 +194,19 @@ class ImplementerImpactClosureTests(unittest.TestCase):
         expansion = self.expand()
         self.assertEqual(expansion.added_item_ids, ("RISK-DISCOVERED-1",))
         self.contract = expansion.implementation_contract
-        self.report["contract_evidence"].append({"item_id": "RISK-DISCOVERED-1", "status": "VERIFIED", "evidence": ["Writer risk checked."]})
+        self.report = self.make_report()
         self.validate(expanded=True)
         self.assertFalse(self.expand().added_item_ids)
-        self.report["discovered_obligations"][0]["required_behavior"] = "Different failure mode."
-        self.reject("POST_PATCH_DISCOVERY_MISMATCH")
+        self.assessment("new_risks", author="IMPLEMENTER")["failure_mode"] = "Different failure mode."
+        self.reject("UNKNOWN_FIELDS")
 
     def test_risk_mapping_is_bidirectional(self):
         self.add_discovery(kind="risk")
-        original = copy.deepcopy(self.report)
-        self.report["post_patch_impact"]["new_risks"] = []
-        self.reject("POST_PATCH_DISCOVERY_MISMATCH")
-        self.report = original
-        self.report["discovered_obligations"] = []
-        self.reject("POST_PATCH_DISCOVERY_MISMATCH")
+        self.reject("POST_PATCH_DISCOVERY_CONTRACT", expanded=True)
+        self.contract = self.expand().implementation_contract
+        self.report = self.make_report()
+        self.drop_assessment("new_risks", author="IMPLEMENTER")
+        self.reject("SOURCE_ASSESSMENT_MISSING")
 
     def test_missing_extra_and_duplicate_changed_paths_are_rejected(self):
         original = copy.deepcopy(self.report)
@@ -233,7 +239,7 @@ class ImplementerImpactClosureTests(unittest.TestCase):
         original = copy.deepcopy(self.report)
         for key, value in (("paths", ["../outside.py"]), ("symbols", ["shared consumers"]), ("evidence", [])):
             self.report = copy.deepcopy(original)
-            self.report["post_patch_impact"]["in_scope_consumers"][0][key] = value
+            self.assessment("in_scope_consumers")[key] = value
             self.reject()
 
     def test_search_and_summary_are_required(self):
@@ -251,20 +257,22 @@ class ImplementerImpactClosureTests(unittest.TestCase):
 
     def test_planner_follow_up_cannot_be_dropped_or_rewritten(self):
         original = copy.deepcopy(self.report)
-        self.report["post_patch_impact"]["related_out_of_scope"] = []
-        self.reject("POST_PATCH_FOLLOW_UP_MISSING")
+        self.drop_assessment("related_out_of_scope")
+        self.reject("SOURCE_ASSESSMENT_MISSING")
         self.report = original
-        self.report["post_patch_impact"]["related_out_of_scope"][0]["suggested_follow_up"] = "Ignore it."
-        self.reject("POST_PATCH_FOLLOW_UP_MISSING")
+        self.assessment("related_out_of_scope")["suggested_follow_up"] = "Ignore it."
+        self.reject("UNKNOWN_FIELDS")
 
     def test_extra_follow_up_is_preserved_without_expansion(self):
-        row = copy.deepcopy(self.report["post_patch_impact"]["related_out_of_scope"][0])
-        row["name"] = "Independent writer capacity limit"
+        row = {"observation_id": "writer-capacity", "name": "Independent writer capacity limit", "paths": ["writer.py"], "symbols": ["store"], "relation": "Entry storage", "reason": "Storage limits do not change predicate validity.", "evidence": ["writer.py has no capacity limit."], "suggested_follow_up": "Investigate bounded storage capacity for entries."}
         self.report["post_patch_impact"]["related_out_of_scope"].append(row)
         self.validate()
-        self.assertFalse(self.expand().added_item_ids)
+        expansion = self.expand()
+        self.assertFalse(expansion.added_item_ids)
+        self.contract = expansion.implementation_contract
+        self.report = self.make_report()
         artifact, _ = self.artifact()
-        self.assertIn(row, artifact["post_patch_impact"]["related_out_of_scope"])
+        self.assertIn("Independent writer capacity limit", [item["name"] for item in artifact["post_patch_impact"]["related_out_of_scope"]])
 
     def test_artifact_binds_candidate_plan_contract_paths_and_revisions(self):
         artifact, context = self.artifact()
@@ -297,16 +305,26 @@ class ImplementerImpactClosureTests(unittest.TestCase):
         self.assertNotEqual(fresh["fingerprint"], old["fingerprint"])
 
     def test_fast_code_task_requires_applicable_closure_and_expansion(self):
+        model = copy.deepcopy(self.plan["impact_closure"])
         self.plan = None
         self.contract = build_implementation_contract(None, task_contract=self.task)
-        self.report["contract_evidence"] = [{"item_id": row["id"], "status": "VERIFIED", "evidence": ["Checked."]} for row in self.contract["items"]]
-        for row in self.report["post_patch_impact"]["in_scope_consumers"]:
-            row["source"] = "DISCOVERED"
-            self.report["discovered_obligations"].append({"kind": "consumer", "name": row["name"], "reason": row["why_affected"], "required_behavior": row["required_behavior"], "required_proof": copy.deepcopy(row["required_proof"]), "evidence": list(row["evidence"])})
+        self.report = self.make_report()
+        closure = self.report["post_patch_impact"]
+        closure["source_assessments"] = []
+        for group in ("changed_contracts", "in_scope_consumers", "not_affected_consumers", "related_out_of_scope"):
+            closure[group] = []
+            for index, original in enumerate(model[group]):
+                row = dict(copy.deepcopy(original), observation_id=f"{group}-{index}")
+                if group == "changed_contracts":
+                    row["paths"] = row.pop("evidence_paths")
+                    row["symbols"] = row.pop("evidence_symbols")
+                    row["evidence"] = ["Actual validity predicate inspected."]
+                closure[group].append(row)
+        closure["search_evidence"][0]["evidence_paths"] = ["state.py", "reader_a.py", "reader_b.py"]
         self.validate()
         self.reject("POST_PATCH_DISCOVERY_CONTRACT", expanded=True)
         self.assertEqual(len(self.expand().added_item_ids), 2)
-        self.report["post_patch_impact"]["applicable"] = False
+        closure["applicable"] = False
         self.reject()
 
     def test_fast_sanitized_prose_claim_without_owner_boundary_is_rejected(self):
@@ -317,6 +335,7 @@ class ImplementerImpactClosureTests(unittest.TestCase):
         for key in ("changed_contracts", "in_scope_consumers", "not_affected_consumers", "related_out_of_scope", "new_risks"):
             closure[key] = []
         closure["applicable"] = False
+        closure["source_assessments"] = []
         closure["search_evidence"][0]["evidence_paths"] = ["README.md"]
         closure["closure_summary"] = "README.md contains only explanatory prose; this task has no executable behavior and affects no state or shared runtime consumers."
         self.reject("IMPACT_NOT_APPLICABLE_OWNER_BOUNDARY")

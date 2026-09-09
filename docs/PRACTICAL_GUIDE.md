@@ -1,4 +1,4 @@
-# Практическая работа с Slivin Harness 0.8.0a30
+# Практическая работа с Slivin Harness 0.8.0a31
 
 ## Установка и self-check
 
@@ -11,8 +11,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемый финал:
 
 ```text
-0.8.0a30
-DOCS_SYNC_PASS harness=0.8.0a30 ...
+0.8.0a31
+DOCS_SYNC_PASS harness=0.8.0a31 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -337,19 +337,19 @@ The replacement agents do not see the rejected diff. Ordinary repair still reuse
 ./py tools/check_docs_sync.py
 ```
 
-Do not edit `WORKFLOW.md` or `workflow.v6.json` manually.
+Do not edit `WORKFLOW.md` or `workflow.v7.json` manually.
 
 ## Final Gate и result handoff
 
 После `EVALUATION_PASS` Controller:
 
 ```text
-persists current user-follow-up.v1 and prints report/count before held-out
+persists current user-follow-up.v2 and prints report/count before held-out
 → reconciles one candidate/revision vector
 → builds candidate.patch through a private isolated index
 → reconstructs candidate from clean baseline
 → materializes authoritative proof runtime and replays static/repair/held-out checks
-→ validates current user-follow-up.v1 and binds its digest
+→ validates current user-follow-up.v2 and binds its digest
 → creates immutable final-acceptance.v3
 → delivers via keep_worktree or transactional apply_to_source
 ```

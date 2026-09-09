@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a30
+# Документация Slivin Harness 0.8.0a31
 
-Актуальная версия: **0.8.0a30 — Runner-aware Verification and Report Recovery**.
+Актуальная версия: **0.8.0a31 — Runner-aware Verification and Report Recovery**.
 
 Основные документы:
 
@@ -8,7 +8,7 @@
 - **[`DECISIONS.md`](DECISIONS.md) — журнал причин, отвергнутых вариантов и evidence; прочитайте применимые D-записи вторым;**
 - **[`ARCHITECTURE.md`](ARCHITECTURE.md) — актуальные ownership, artifacts и связи модулей; следующий шаг после миссии и решений;**
 - [`WORKFLOW.md`](WORKFLOW.md) — понятная Step 0–7 схема, генерируемая из кода;
-- [`workflow.v6.json`](workflow.v6.json) — та же state machine в machine-readable виде;
+- [`workflow.v7.json`](workflow.v7.json) — та же state machine в machine-readable виде;
 - [`QUALITY_MODEL.md`](QUALITY_MODEL.md) — что именно доказывает каждый слой;
 - [`PRACTICAL_GUIDE.md`](PRACTICAL_GUIDE.md) — запуск и чтение artifacts;
 - [`WINDOWS_SETUP.md`](WINDOWS_SETUP.md) — Windows/Git Bash setup;
@@ -34,9 +34,9 @@
 
 ```text
 task-contract.v1
-planner.v5
-implementer.v5
-implementation-contract.v3
+planner.v6
+implementer.v6
+implementation-contract.v4
 verification-plan.v1
 project-runtime.v1
 contract-expansion.v1
@@ -46,8 +46,8 @@ runtime-result.v1
 runtime-evidence.v1
 contract-closure.v1
 blind-audit.v2
-evaluator.v6
-workflow.v6
+evaluator.v7
+workflow.v7
 run-state.v1
 candidate.v1
 controller-plane.v1
@@ -55,7 +55,7 @@ execution-broker.v1
 phase7-final-gate.v1
 patch-proof.v1
 final-acceptance.v3
-user-follow-up.v1
+user-follow-up.v2
 delivery-record.v2
 heldout-evidence.v2
 benchmark-isolation.v1

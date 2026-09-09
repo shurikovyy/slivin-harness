@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Iterable, TypeVar
 
-WORKFLOW_VERSION = "workflow.v6"
+WORKFLOW_VERSION = "workflow.v7"
 WORKFLOW_PHASE = "phase7-final-gate-delivery-benchmark"
 
 
@@ -165,6 +165,7 @@ class InvalidationTrigger(_TextEnum):
     TASK_CONTRACT_CHANGED = "TASK_CONTRACT_CHANGED"
     REPLAN_REQUIRED = "REPLAN_REQUIRED"
     CONTRACT_EXPANDED = "CONTRACT_EXPANDED"
+    PROOF_ROUTE_CHANGED = "PROOF_ROUTE_CHANGED"
     CHECK_REGISTERED = "CHECK_REGISTERED"
     CANDIDATE_CHANGED = "CANDIDATE_CHANGED"
     DEPENDENCY_MANIFEST_CHANGED = "DEPENDENCY_MANIFEST_CHANGED"
@@ -313,6 +314,14 @@ ALLOWED_STAGE_TRANSITIONS: dict[StageId | None, frozenset[StageId]] = {
 }
 
 INVALIDATION_RULES: dict[InvalidationTrigger, InvalidationRule] = {
+    InvalidationTrigger.PROOF_ROUTE_CHANGED: InvalidationRule(
+        InvalidationTrigger.PROOF_ROUTE_CHANGED,
+        StageId.IMPLEMENTATION_CONTRACT,
+        StageId.IMPLEMENTATION_CONTRACT,
+        False,
+        False,
+        "Пересмотр proof route сохраняет candidate и product claims, инвалидируя downstream evidence.",
+    ),
     InvalidationTrigger.TASK_CONTRACT_CHANGED: InvalidationRule(
         InvalidationTrigger.TASK_CONTRACT_CHANGED,
         StageId.PLANNER,
@@ -493,8 +502,10 @@ def workflow_snapshot(*, harness_version: str) -> dict[str, object]:
     from slivin_harness.task_contract import TASK_CONTRACT_VERSION
     from slivin_harness.verification import VERIFICATION_PLAN_VERSION
 
+    from .boundaries import boundary_inventory
     return {
         "schema_version": WORKFLOW_VERSION,
+        "boundary_contracts": boundary_inventory(),
         "harness_version": harness_version,
         "phase": WORKFLOW_PHASE,
         "controller_foundation": {
@@ -702,11 +713,11 @@ attempt_id
 machine-readable workflow и versioned Run State
 + private Controller plane / Execution Broker foundation
 + USER TASK CONTRACT task-contract.v1
-+ PLANNER planner.v5
-+ IMPLEMENTATION CONTRACT implementation-contract.v3
++ PLANNER planner.v6
++ IMPLEMENTATION CONTRACT implementation-contract.v4
 + typed VERIFICATION PLAN verification-plan.v1
-+ IMPLEMENTER implementer.v5
-+ candidate-bound implementation-impact-closure.v1 before Implementer completion
++ IMPLEMENTER implementer.v6
++ candidate-bound implementation-impact-closure.v2 before Implementer completion
 + transactional Contract / Verification Plan expansion
 + canonical .worktreeinclude exposure policy
 + strict static toolchain preflight before semantic baseline and agent stages
@@ -721,18 +732,18 @@ machine-readable workflow и versioned Run State
 + LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE runtime scenario executor
 + fresh readback / cleanup / read-only result contracts
 + candidate, source and runtime-only-file immutability guards
-+ two-phase BLIND EVALUATOR evaluator.v6
++ two-phase BLIND EVALUATOR evaluator.v7
 + immutable blind-audit.v2 before Contract/check framing
 + Controller evidence audit without Planner/Implementer prose
 + Final Gate quality reconciliation bound to one candidate/revision vector
 + patch reconstruction from the recorded baseline
-+ mandatory user-follow-up.v1 before held-out with public immutable delivery
++ mandatory user-follow-up.v2 before held-out with public immutable delivery
 + immutable final-acceptance.v3 binding user handoff and delivery-record.v2
 + transactional apply_to_source with source guards and safe rollback
 + standalone sanitized historical benchmark repository
 + classified hidden held-out exam without repair feedback
 + clean semantic replan reset with fresh Planner and Implementer threads
-+ generated WORKFLOW.md / workflow.v6.json
++ generated WORKFLOW.md / workflow.v7.json
 ```
 
 Phase 7 завершает quality-core. Universal OS-enforced Controller subprocess sandbox, встроенная browser automation и универсальные typed wrappers для 1С/БД/Airflow остаются отдельными platform/project capabilities; Harness не выдаёт advisory isolation за OS-enforced sandbox. После Windows self-check этой версии следующий обязательный checkpoint — реальный historical `_90` trial, а не новая архитектурная фаза.

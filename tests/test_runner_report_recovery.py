@@ -115,7 +115,7 @@ class ReportRecoveryTests(unittest.TestCase):
         f = self.fixture
         valid = copy.deepcopy(f.report)
         valid["post_patch_impact"]["related_out_of_scope"].append({
-            "name": "Documentation navigation", "paths": ["README.md"],
+            "observation_id": "navigation", "name": "Documentation navigation", "paths": ["README.md"],
             "symbols": ["README.md#notes"], "relation": "Reader documentation navigation",
             "reason": "The prose navigation issue does not affect entry validity.",
             "evidence": ["README.md contains the Notes heading."],
@@ -148,18 +148,26 @@ class ReportRecoveryTests(unittest.TestCase):
             finally:
                 self.turns = turn.call_count
 
+    def related_index(self, report=None):
+        identifier = next(row["source_id"] for row in self.fixture.contract["source_inventory"]["records"] if row["group"] == "related_out_of_scope")
+        return next(index for index, row in enumerate((report or self.fixture.report)["post_patch_impact"]["source_assessments"]) if row["source_ref"]["source_id"] == identifier)
+
+    def drop_source_group(self, report, group):
+        ids = {row["source_id"] for row in self.fixture.contract["source_inventory"]["records"] if row["group"] == group}
+        report["post_patch_impact"]["source_assessments"] = [row for row in report["post_patch_impact"]["source_assessments"] if row["source_ref"]["source_id"] not in ids]
+
     def invalid(self):
         report = copy.deepcopy(self.fixture.report)
-        report["post_patch_impact"]["related_out_of_scope"][0]["symbols"] = []
+        report["post_patch_impact"]["source_assessments"][self.related_index()]["symbols"] = []
         return report
 
-    def test_two_turn_limit_preserves_raw_and_terminal_inventory(self):
+    def test_no_progress_stops_early_and_preserves_raw_and_terminal_inventory(self):
         invalid = self.invalid()
-        with self.assertRaisesRegex(task_runner.HarnessControlledStop, "CORRECTION_EXHAUSTED"):
-            self.call_reports([invalid, invalid, invalid])
-        self.assertEqual(self.turns, 3)
+        with self.assertRaisesRegex(task_runner.HarnessControlledStop, "CORRECTION_NO_PROGRESS"):
+            self.call_reports([invalid, invalid])
+        self.assertEqual(self.turns, 2)
         raw = list(self.plane.private_root.glob("*.raw.json"))
-        self.assertEqual(len(raw), 3)
+        self.assertEqual(len(raw), 2)
         self.assertFalse(list(self.plane.run_root.glob("*.raw.json")))
         public = json.loads((self.plane.run_root / "terminal_candidate_observation.json").read_text(encoding="utf-8"))
         self.assertEqual(public["status"], "OBSERVED")
@@ -171,7 +179,7 @@ class ReportRecoveryTests(unittest.TestCase):
         for group in ("related_out_of_scope", "in_scope_consumers", "changed_contracts"):
             with self.subTest(group=group):
                 altered = copy.deepcopy(self.fixture.report)
-                altered["post_patch_impact"][group] = []
+                self.drop_source_group(altered, group)
                 with self.assertRaisesRegex(task_runner.HarnessControlledStop, "CHANGED_CLAIMS"):
                     self.call_reports([invalid, altered])
         altered = copy.deepcopy(self.fixture.report)
@@ -194,14 +202,14 @@ class ReportRecoveryTests(unittest.TestCase):
     def test_semantic_conflict_and_missing_consumer_are_not_cosmetic_retries(self):
         for group in ("changed_contracts", "in_scope_consumers"):
             invalid = copy.deepcopy(self.fixture.report)
-            invalid["post_patch_impact"][group] = []
+            self.drop_source_group(invalid, group)
             with self.assertRaisesRegex(task_runner.HarnessControlledStop, "REPORT_INVALID"):
                 self.call_reports([invalid])
             self.assertEqual(self.turns, 1)
 
     def test_full_validator_still_rejects_untrusted_verification(self):
         f = self.fixture
-        with mock.patch.object(task_runner, "run_agent_turn", return_value=json.dumps(self.invalid())), mock.patch.object(task_runner, "verify_self_verification_stamp", return_value=False):
+        with mock.patch.object(task_runner, "run_agent_turn", return_value=json.dumps(f.report)), mock.patch.object(task_runner, "verify_self_verification_stamp", return_value=False):
             with self.assertRaisesRegex(RuntimeError, "trusted self-verification"):
                 task_runner.run_implementer_report(mock.Mock(), thread_id="thread", prompt="Implement", timeout=30, label="TEST", implementation_contract=f.contract, self_verify_command=[], workspace=f.workspace, stamp_path=f.workspace / "stamp", plan=f.plan, control_plane=self.plane)
 
@@ -214,15 +222,15 @@ class ReportRecoveryTests(unittest.TestCase):
 
     def test_missing_evidence_key_can_be_corrected_without_changing_row(self):
         invalid = self.invalid()
-        del invalid["post_patch_impact"]["related_out_of_scope"][0]["symbols"]
+        del invalid["post_patch_impact"]["source_assessments"][self.related_index()]["symbols"]
         self.assertEqual(self.call_reports([invalid, self.fixture.report]), self.fixture.report)
         self.assertEqual(self.turns, 2)
 
     def test_corrected_leaf_does_not_skip_remaining_consumer_validation(self):
         invalid = self.invalid()
-        invalid["post_patch_impact"]["in_scope_consumers"] = []
+        self.drop_source_group(invalid, "in_scope_consumers")
         corrected = copy.deepcopy(invalid)
-        corrected["post_patch_impact"]["related_out_of_scope"][0]["symbols"] = ["ratio"]
+        corrected["post_patch_impact"]["source_assessments"][self.related_index(corrected)]["symbols"] = ["ratio"]
         with self.assertRaisesRegex(task_runner.HarnessControlledStop, "REPORT_INVALID"):
             self.call_reports([invalid, corrected])
         self.assertEqual(self.turns, 2)

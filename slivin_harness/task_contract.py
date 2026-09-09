@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from slivin_harness.boundaries import boundary
+
 import hashlib
 import json
 from pathlib import Path
@@ -270,6 +272,7 @@ def _build_task_contract_from_raw_output(*, raw_request: str, raw_output: str) -
     return contract
 
 
+@boundary("B02")
 def run_task_contract_normalizer(
     codex: CodexAppServer,
     *,

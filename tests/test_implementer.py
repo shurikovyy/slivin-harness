@@ -213,8 +213,8 @@ class ImplementerContractTests(unittest.TestCase):
 
     def test_contract_soft_threshold_does_not_drop_material_items(self) -> None:
         plan = valid_plan()
-        plan["affected_consumers"] = [
-            {"name": f"Consumer {i}", "why_affected": "shared", "must_verify": "preserved", "required_proof": proof(f"consumer {i} proof")}
+        plan["impact_closure"]["in_scope_consumers"] = [
+            {"name": f"Consumer {i}", "why_affected": "shared", "required_behavior": "preserved", "required_proof": proof(f"consumer {i} proof"), "paths": ["target.txt"], "symbols": ["target"], "evidence": ["Fixture consumer reads target."]}
             for i in range(15)
         ]
         contract = self.contract(plan)

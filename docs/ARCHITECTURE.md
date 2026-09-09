@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a30 — Phase 7
+# Архитектура Slivin Harness 0.8.0a31 — Phase 7
 
 ## Назначение
 
-`0.8.0a30` требует typed impact closure в `planner.v5` до `READY`, сохраняет
+`0.8.0a31` требует typed impact closure в `planner.v6` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -34,22 +34,22 @@ Step 6 — fresh two-phase Blind Evaluator
 Step 7 — Final Gate / result handoff / hidden benchmark exam
 ```
 
-Полная генерируемая схема находится в [WORKFLOW.md](WORKFLOW.md), machine-readable snapshot — в [workflow.v6.json](workflow.v6.json).
+Полная генерируемая схема находится в [WORKFLOW.md](WORKFLOW.md), machine-readable snapshot — в [workflow.v7.json](workflow.v7.json).
 
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a30
+Harness                     0.8.0a31
 Manifest                    version = 2
-Workflow                    workflow.v6
+Workflow                    workflow.v7
 Run State                   run-state.v1
 Candidate                   candidate.v1
 Controller plane            controller-plane.v1
 Execution Broker            execution-broker.v1
 Task Contract               task-contract.v1
-Planner                     planner.v5
-Implementer                 implementer.v5
-Implementation Contract     implementation-contract.v3
+Planner                     planner.v6
+Implementer                 implementer.v6
+Implementation Contract     implementation-contract.v4
 Verification Plan           verification-plan.v1
 Project runtime             project-runtime.v1
 Contract expansion          contract-expansion.v1
@@ -61,11 +61,11 @@ Runtime result              runtime-result.v1
 Runtime evidence            runtime-evidence.v1
 Contract closure            contract-closure.v1
 Blind audit                 blind-audit.v2
-Evaluator                   evaluator.v6
+Evaluator                   evaluator.v7
 Phase 7 controller          phase7-final-gate.v1
 Patch proof                 patch-proof.v1
 Final acceptance            final-acceptance.v3
-User follow-up              user-follow-up.v1
+User follow-up              user-follow-up.v2
 Delivery record             delivery-record.v2
 Held-out evidence           heldout-evidence.v2
 Benchmark isolation         benchmark-isolation.v1
@@ -157,7 +157,7 @@ Directory snapshots ограничены по depth, entry count, total и singl
 `git-control-integrity.v1` содержит только batch/event codes; private paths,
 bytes и fingerprints остаются в Controller plane.
 
-Изменение candidate, Contract, Verification Plan или runtime environment инвалидирует downstream evidence согласно `workflow.v6`.
+Изменение candidate, Contract, Verification Plan или runtime environment инвалидирует downstream evidence согласно `workflow.v7`.
 
 ## 3. Step 0 — Intake / Preflight
 
@@ -225,7 +225,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a30`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a31`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -256,13 +256,13 @@ agent turn; console показывает `PLANNER_TOOL_EVIDENCE_PASS` либо
 `PLANNER_TOOL_EVIDENCE_FAIL`. Corrective turn использует тот же проверенный snapshot
 внутри read-only Planner operation. Post-plan/dynamic gates сохраняют свои checks.
 
-`planner.v5` исследует current behavior, intended contract, root cause или extension point, consumers, state model, risks и typed evidence plan.
+`planner.v6` исследует current behavior, intended contract, root cause или extension point, consumers, state model, risks и typed evidence plan.
 
 `slivin_harness/planner.py` определяет strict `IMPACT_CLOSURE_SCHEMA` и Controller
 semantic validation: changed contracts с before/after и paths/symbols, три
 consumer classifications, search evidence и summary. До initial/replan Contract
 compiler проверяются safe existing evidence files, concrete entries и точная
-IN_SCOPE ↔ affected_consumers mapping, включая required behavior и typed proof.
+единственного `in_scope_consumers`, включая required behavior и typed proof.
 Сначала исследуется technical impact radius, затем выбирается patch size в рамках
 user product scope. Эти три понятия не равны.
 
@@ -288,7 +288,7 @@ public-safe manifest repair evidence без held-out command. Explicit capabilit
 Controller детерминированно строит:
 
 ```text
-implementation-contract.v3
+implementation-contract.v4
 verification-plan.v1
 ```
 
@@ -301,8 +301,8 @@ TEST_EXTERNAL
 PROD_OBSERVE
 ```
 
-Compiler сохраняет по obligation на каждый `affected_consumers` entry, чьё
-соответствие IN_SCOPE доказано Planner validator. `not_affected_consumers` и
+Compiler сохраняет по obligation на каждый `impact_closure.in_scope_consumers` entry.
+Исходный claim сохраняется Controller с ID/revision. `not_affected_consumers` и
 `related_out_of_scope` не конвертируются в obligations. Последние остаются с
 `suggested_follow_up` в полном `plan_*.json` / `replan_*.json` artifact.
 Open-world expansion и Evaluator PASS semantics сохраняются. Implementer COMPLETE
@@ -318,7 +318,7 @@ contract expansion, registered checks и действительно новые r
 
 ## 6. Step 3 — Implementer
 
-`implementer.v5` получает Task Contract, compact Planner context, active Contract и trusted capabilities.
+`implementer.v6` получает Task Contract, compact Planner context, active Contract и trusted capabilities.
 
 Planner context включает полный `impact_closure`, diagnosis, assumptions и non-blocking
 unknowns. Actual patch проверяется через `post_patch_impact`: contracts и Planner IN_SCOPE
@@ -330,7 +330,7 @@ policy распространяется на FULL и FAST; engineering FAST са
 `stabilize_implementer_report()` валидирует impact до expansion, закрывает новые
 consumer/risk obligations через тот же thread, затем требует current private receipt
 и создаёт authoritative `implementation_impact_closure_NN.json`. Artifact
-`implementation-impact-closure.v1` содержит candidate_id, plan_fingerprint (null для
+`implementation-impact-closure.v2` содержит candidate_id, plan_fingerprint (null для
 FAST), implementation_contract_fingerprint, exact changed_paths, post_patch_impact,
 revision_binding и stable fingerprint. Его binding проверяется перед downstream gates;
 новый candidate/Contract/Plan требует свежий report. Artifact входит в stage evidence.
@@ -338,20 +338,25 @@ revision_binding и stable fingerprint. Его binding проверяется п
 Implementer technical-model divergence возвращает REPLAN_REQUIRED с evidence и
 использует тот же semantic reset/fresh Planner/fresh Implementer path, что Evaluator.
 `terminal_reason_kind` различает TECHNICAL_MODEL_DIVERGENCE и PROOF_MODEL_DIVERGENCE;
-обе причины допустимы только с REPLAN_REQUIRED. Непригодный Planner-derived proof
-при доказанном unrelated baseline-red suite меняет proof model через этот же reset.
-Fresh Planner получает projection terminal_reason_kind/reason/evidence и неизменный
-Task Contract; rejected diff остаётся audit artifact вне Planner context. Owner project
+обе причины допустимы только с REPLAN_REQUIRED. Для PROOF_MODEL_DIVERGENCE отдельный
+read-only Planner оценивает сохранённый candidate через `proof-route-review.v1`.
+Controller добавляет только proof route revisions по item IDs, сохраняет исходные
+requirements/source records/checks, инвалидирует downstream evidence и продолжает
+тот же Implementer thread. Technical reset остаётся отдельным маршрутом. Owner project
 gates сохраняются в repair specs; exploratory unrelated tests не регистрируются.
 COMPLETE требует NONE, BLOCKED — INFRASTRUCTURE_BLOCKED, NEEDS_USER_DECISION —
 USER_DECISION_REQUIRED. Все несовместимые пары Controller отклоняет.
-Evaluator `evaluator.v6` независимо проверяет эти impact artifacts после blind Phase A.
+Evaluator `evaluator.v7` независимо проверяет эти impact artifacts после blind Phase A.
+`impact-sources.v1` хранит immutable origins отдельно от own-role observations.
+Wire source assessments содержат точные IDs/revisions и explicit dispositions;
+модель не переписывает исходные claims. COMPLETE требует полного покрытия источников.
+Внутренний compiler DTO discoveries выводится Controller, второго wire ledger нет.
 
 Перед любым App Server `turn/start` Controller рекурсивно проверяет production
 `outputSchema`: каждый object с `properties` обязан иметь
 `additionalProperties=false` и `required`, в точности равный набору properties.
 Проверка охватывает nested objects, array items и composition branches. Для
-`implementer.v5` все поля обязательны на wire-level, но semantic completeness
+`implementer.v6` все поля обязательны на wire-level, но semantic completeness
 остаётся status-dependent: non-COMPLETE status передаёт пустые ledgers, а не
 фиктивное закрытие Contract. Agent всегда возвращает пустой `receipt_id`;
 Controller-private self-verification receipt остаётся единственной authority.
@@ -410,7 +415,7 @@ PROD_OBSERVE
 
 ## 9. Step 6 — Blind Evaluator
 
-`evaluator.v6` работает в две фазы одного fresh thread.
+`evaluator.v7` работает в две фазы одного fresh thread.
 
 ### Phase A
 
@@ -499,7 +504,7 @@ held-out. Candidate/Git/runtime guards должны остаться pristine; �
 
 ### Immutable acceptance
 
-Перед held-out Controller строит current-only `user-follow-up.v1` через `handoff.py`,
+Перед held-out Controller строит current-only `user-follow-up.v2` через `handoff.py`,
 сохраняет private/public immutable copies и печатает bounded summary каждой finding.
 FULL требует независимого Evaluator CONFIRMED_OUT_OF_SCOPE; FAST использует
 DECLARED_OUT_OF_SCOPE_FAST. Exact semantic duplicates объединяются с evidence/provenance;
@@ -618,7 +623,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a30` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a31` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 Planner/Evaluator используют один `RoleExecutionContext` (`role-execution-context.v1`)
 из `ExecutionBroker.prepare_readonly_role()`. Project root остаётся контекстом repository,

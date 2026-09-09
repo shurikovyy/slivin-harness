@@ -12,6 +12,7 @@ from typing import Any, Iterable
 
 from slivin_harness.git_integrity import candidate_baseline_for
 from slivin_harness.protocol import stable_fingerprint
+from slivin_harness.control_plane import _atomic_write
 from slivin_harness.workflow import (
     INVALIDATION_RULES,
     STAGES,
@@ -323,6 +324,11 @@ class RunState:
     def _revision_snapshot(self) -> dict[str, int | None]:
         return dict(self.data["revisions"])
 
+    def record_boundary(self, observation: dict) -> None:
+        # Persist with the existing lifecycle event batch; this observation does
+        # not authorize a transition or create a separate workflow state.
+        self._append_event("BOUNDARY_OBSERVED", boundary=dict(observation))
+
     def _append_event(self, event_type: str, **details: Any) -> None:
         events: list[dict[str, Any]] = self.data["events"]
         events.append(
@@ -344,19 +350,11 @@ class RunState:
 
     def persist(self) -> None:
         payload = json.dumps(self.data, ensure_ascii=False, indent=2) + "\n"
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temp = self.path.with_suffix(self.path.suffix + ".tmp")
-        temp.write_text(payload, encoding="utf-8", newline="\n")
-        os.replace(temp, self.path)
+        _atomic_write(self.path, payload.encode("utf-8"))
         # The public file is a diagnostic mirror. The private path above is the
         # only authoritative state used by the Controller.
         if self.public_mirror_path is not None:
-            self.public_mirror_path.parent.mkdir(parents=True, exist_ok=True)
-            mirror_temp = self.public_mirror_path.with_suffix(
-                self.public_mirror_path.suffix + ".tmp"
-            )
-            mirror_temp.write_text(payload, encoding="utf-8", newline="\n")
-            os.replace(mirror_temp, self.public_mirror_path)
+            _atomic_write(self.public_mirror_path, payload.encode("utf-8"))
 
     def verification_binding(
         self,

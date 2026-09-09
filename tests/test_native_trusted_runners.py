@@ -83,6 +83,10 @@ class NativeTrustedRunnerTests(unittest.TestCase):
             self.assertNotIn(str(root.resolve()), " ".join(argv))
         result = task_runner.run_checks(passed_specs, workspace=reconstructed, toolchain=self.tools, runtime_root=self.root / "replay", label="RECONSTRUCTED SYNTHETIC")
         self.assertTrue(all(row.passed for row in result))
+        failed_specs = [spec for spec in specs if "_fail." in spec["check_path"]]
+        negative = task_runner.run_checks(failed_specs, workspace=reconstructed, toolchain=self.tools, runtime_root=self.root / "replay-negative", label="RECONSTRUCTED NEGATIVE")
+        self.assertEqual(len(negative), 2)
+        self.assertTrue(all(not row.passed for row in negative))
         _, stamp, command = task_runner.prepare_self_verify_runner(workspace=root, specs=passed_specs, toolchain=self.tools)
         subprocess.run(command, cwd=root, check=True, capture_output=True)
         (root / "native_pass.test.cjs").write_text("require('node:test');\n", encoding="utf-8")
@@ -97,6 +101,18 @@ class NativeTrustedRunnerTests(unittest.TestCase):
         self.assertTrue(result.passed, result.public_dict())
         self.assertIn("NODE", registry.verified_capabilities)
         self.assertNotIn("JEST", registry.verified_capabilities)
+
+    def test_repair_framework_config_rebind_reaches_current_reconstruction(self):
+        result, run_root, output = workflow_fixtures.TaskRunnerWorkflowIntegrationTests().run_case(
+            benchmark=False, risk='medium', trusted_js_toolchain=self.tools,
+            malformed_report=True, check_repair=True, framework_rebind=True)
+        self.output.write(output)
+        self.assertEqual(result, 0, output)
+        registry = json.loads((run_root / 'controller_private/check_registry.json').read_text(encoding='utf-8'))
+        self.assertEqual({row['runner'] for row in registry['compiled_specs']}, {'JEST'})
+        acceptance = json.loads((run_root / 'final_acceptance.json').read_text(encoding='utf-8'))
+        self.assertEqual(acceptance['reconstructed_verification']['status'], 'PASS')
+        self.assertIn('IMPLEMENTER_REPORT_CORRECTED', output)
 
     def test_combined_expansion_report_correction_evaluator_final_gate(self):
         fixture = workflow_fixtures.TaskRunnerWorkflowIntegrationTests(methodName="runTest")

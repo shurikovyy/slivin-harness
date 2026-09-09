@@ -1,4 +1,4 @@
-# Slivin Harness 0.8.0a30 — Phase 7
+# Slivin Harness 0.8.0a31 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
@@ -7,7 +7,7 @@ Slivin Harness управляет автономной работой Codex в �
 technical impact radius. Пользователь задаёт observable intent и ограничения;
 перечислять consumers, файлы и regression cases он не обязан.
 
-**Затем прочитайте [журнал решений D-001–D-024](docs/DECISIONS.md)** — причины выбора,
+**Затем прочитайте [журнал решений D-001–D-027](docs/DECISIONS.md)** — причины выбора,
 отвергнутые варианты и границы доказанного; после него — актуальную архитектуру.
 
 Planner/Evaluator используют общий scratch-only permission profile: project, tests,
@@ -17,17 +17,30 @@ dependencies и Git controls остаются read-only, а каждый fresh t
 [native cached-Jest smoke](docs/WINDOWS_SETUP.md#native-scoped-scratch-acceptance),
 отдельно от Controller probes и product correctness.
 
-`0.8.0a30` quality-core требует typed Planner Impact Closure до `READY` в `planner.v5`
-и post-patch Implementer Impact Closure до `COMPLETE` в `implementer.v5`.
+`0.8.0a31` quality-core требует typed Planner Impact Closure до `READY` в `planner.v6`
+и post-patch Implementer Impact Closure до `COMPLETE` в `implementer.v6`.
 Implementer проверяет Planner model по реальному diff, пересматривает consumers,
 добавляет discoveries через Controller expansion и рассматривает каждый changed path.
-Controller сохраняет candidate-bound `implementation-impact-closure.v1`; semantic
+Controller сохраняет candidate-bound `implementation-impact-closure.v2`; semantic
 divergence требует fresh Planner через `REPLAN_REQUIRED`.
 Непригодный Planner-derived proof route при доказанном unrelated baseline failure
 также требует `REPLAN_REQUIRED` с `terminal_reason_kind=PROOF_MODEL_DIVERGENCE`.
+Этот маршрут сохраняет candidate и исходные claims: независимый Planner возвращает
+`proof-route-review.v1`, Controller меняет только proof routes и инвалидирует старые receipts.
 User preservation и owner-configured checks остаются обязательными; exploratory
 unrelated suites не становятся authoritative registered checks.
-`evaluator.v6` независимо восстанавливает impact model по actual candidate до раскрытия
+Controller владеет immutable source records; Implementer и Evaluator оценивают их
+по ID/revision собственными observations. Пропущенный source не считается подтверждённым.
+Strict recovery собирает независимые evidence errors в один batch; candidate и claims
+остаются неизменными во время report correction. До validation сохраняется private checkpoint.
+
+Квалификация сборки запускается одной командой на чистом commit:
+`py.exe -3 tools/release_check.py --profile windows-local`.
+Она требует всех обязательных уровней, включая настоящие Node/Jest, native role sandbox
+и три фиксированных real-model FULL прогона до безопасной выдачи результата.
+Состав, миграция протоколов и пределы доказанного описаны в
+[SYSTEMIC_RELIABILITY.md](docs/SYSTEMIC_RELIABILITY.md).
+`evaluator.v7` независимо восстанавливает impact model по actual candidate до раскрытия
 обоих ledgers. Controller immutable-сохраняет `blind-audit.v2`, затем требует evidence-backed
 `impact_challenge` всех contracts/consumers/classifications и changed paths. Согласованные
 ledgers и зелёные tests сами по себе не разрешают Evaluator PASS.
@@ -47,15 +60,15 @@ STATIC TOOLCHAIN PREFLIGHT static-toolchain-preflight.v1
         ↓
 USER TASK CONTRACT task-contract.v1
         ↓
-PLANNER planner.v5
+PLANNER planner.v6
         ↓
-IMPLEMENTATION CONTRACT implementation-contract.v3
+IMPLEMENTATION CONTRACT implementation-contract.v4
         ↓
 VERIFICATION PLAN verification-plan.v1
         ↓
 owner-boundary + post-plan capability gate
         ↓
-IMPLEMENTER implementer.v5
+IMPLEMENTER implementer.v6
         ↓
 transactional Contract / Verification Plan expansion
         ↓
@@ -67,14 +80,14 @@ CONTROLLER DETERMINISTIC CHECKS
         ↓
 RUNTIME / EXTERNAL VERIFICATION (условно)
         ↓
-TWO-PHASE BLIND EVALUATOR evaluator.v6
+TWO-PHASE BLIND EVALUATOR evaluator.v7
         ↓
 FINAL GATE phase7-final-gate.v1
         ↓
 patch reconstruction + transactional result delivery
 ```
 
-Machine-readable workflow: **workflow.v6**. Реализуемая фаза: **phase7-final-gate-delivery-benchmark**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller plane: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Runtime evidence: **runtime-evidence.v1**. Blind audit: **blind-audit.v2**. Final Gate: **phase7-final-gate.v1**.
+Machine-readable workflow: **workflow.v7**. Реализуемая фаза: **phase7-final-gate-delivery-benchmark**. Run state: **run-state.v1**. Candidate identity: **candidate.v1**. Private Controller plane: **controller-plane.v1**. Execution policy foundation: **execution-broker.v1**. Runtime evidence: **runtime-evidence.v1**. Blind audit: **blind-audit.v2**. Final Gate: **phase7-final-gate.v1**.
 
 Каждый production `outputSchema` для Task Contract, Planner, Implementer и
 Evaluator рекурсивно проверяется Controller до App Server `turn/start` по strict
@@ -120,7 +133,7 @@ post-plan и dynamic gates остаются обязательными. Tool pro
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a30`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a31`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
@@ -300,7 +313,7 @@ Typed Verification Plan теперь исполняется для `LIVE_LOCAL`,
 
 ### Двухфазный Blind Evaluator v6
 
-Один fresh read-only evaluator сначала выполняет independent impact discovery без Planner/Implementer impact, Implementation Contract, зелёных checks и runtime evidence. `blind-audit.v2` с candidate ID, собственными impact IDs и exact changed-path review записывается Controller через immutable write-once persistence. Только затем Phase B получает normalized Planner impact, актуальный `implementation-impact-closure.v1`, Contract, Closure Record, deterministic/runtime evidence. Каждый blind finding сохраняется или снимается с evidence; отрицательная impact disposition требует material finding и запрещает PASS. FAST по-прежнему пропускает Evaluator. Controller обязательно доставляет подтверждённые related follow-ups через публичный `user_follow_up_report.json` до held-out; FAST помечает их как Implementer-only declarations.
+Один fresh read-only evaluator сначала выполняет independent impact discovery без Planner/Implementer impact, Implementation Contract, зелёных checks и runtime evidence. `blind-audit.v2` с candidate ID, собственными impact IDs и exact changed-path review записывается Controller через immutable write-once persistence. Только затем Phase B получает normalized Planner impact, актуальный `implementation-impact-closure.v2`, Contract, Closure Record, deterministic/runtime evidence. Каждый blind finding сохраняется или снимается с evidence; отрицательная impact disposition требует material finding и запрещает PASS. FAST по-прежнему пропускает Evaluator. Controller обязательно доставляет подтверждённые related follow-ups через публичный `user_follow_up_report.json` до held-out; FAST помечает их как Implementer-only declarations.
 
 Подробности: [Phase 6 runtime/evaluator](docs/PHASE6_RUNTIME_EVALUATOR.md).
 
@@ -313,7 +326,7 @@ Controller принимает результат только если Step 3–
 ### User Follow-up Handoff
 
 После final discovery и до held-out Controller всегда создаёт public immutable
-`user_follow_up_report.json` (`user-follow-up.v1`) и печатает `USER_FOLLOW_UP_REPORT`
+`user_follow_up_report.json` (`user-follow-up.v2`) и печатает `USER_FOLLOW_UP_REPORT`
 и `USER_FOLLOW_UP_COUNT`, включая 0. Для каждой related finding выводится краткая
 строка с рекомендуемой следующей задачей. Пользователь не обязан искать её во
 внутренних ledgers. FULL требует независимого CONFIRMED_OUT_OF_SCOPE; FAST сообщает
@@ -359,7 +372,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Полный Step 0–7 workflow генерируется из `slivin_harness/workflow.py`:
 
 - [Понятная схема workflow](docs/WORKFLOW.md)
-- [Machine-readable workflow.v6](docs/workflow.v6.json)
+- [Machine-readable workflow.v7](docs/workflow.v7.json)
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Модель качества](docs/QUALITY_MODEL.md)
 - [Практическое руководство](docs/PRACTICAL_GUIDE.md)
@@ -374,7 +387,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a30 ...
+DOCS_SYNC_PASS harness=0.8.0a31 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -388,7 +401,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a30` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a31` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

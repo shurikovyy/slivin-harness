@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from slivin_harness.boundaries import boundary
+
 import dataclasses
 import hashlib
 import json
@@ -13,6 +15,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from slivin_harness.control_plane import canonical_path, is_within
 from slivin_harness.implementer import validate_implementation_contract
 from slivin_harness.protocol import ArtifactContractError, safe_repo_relative, stable_fingerprint
+from slivin_harness.source_records import register_observations, register_evaluator_findings
 from slivin_harness.verification import (
     compile_verification_plan,
     merged_required_proof,
@@ -124,6 +127,7 @@ def _contract_warnings(items: Sequence[Mapping[str, Any]]) -> list[str]:
     ]
 
 
+@boundary("B07")
 def expand_contract_and_verification_plan(
     *,
     implementation_contract: Mapping[str, Any],
@@ -131,6 +135,10 @@ def expand_contract_and_verification_plan(
     discoveries: Iterable[Mapping[str, Any]],
     project_checks: Iterable[Mapping[str, Any]],
     task_checks: Iterable[str],
+    observations: Mapping[str, list[dict]] | None = None,
+    evaluation: Mapping[str, Any] | None = None,
+    proof_review: dict | None = None,
+    candidate_id: str | None = None,
 ) -> ContractExpansionResult:
     """Atomically expand the active Definition of Done and recompile its proof plan.
 
@@ -182,8 +190,17 @@ def expand_contract_and_verification_plan(
         "task_contract_fingerprint": implementation_contract["task_contract_fingerprint"],
         "items": items,
         "warnings": _contract_warnings(items),
+        "proof_routes": list(implementation_contract["proof_routes"]),
+        "source_inventory": register_observations(
+            implementation_contract["source_inventory"], observations or {}
+        )[0],
     }
+    if evaluation is not None:
+        contract["source_inventory"] = register_evaluator_findings(contract["source_inventory"], evaluation)
     contract["fingerprint"] = stable_fingerprint(contract)
+    if proof_review is not None:
+        from .proof_routes import apply_proof_review
+        contract = apply_proof_review(contract, proof_review, candidate_id=candidate_id)
     validate_implementation_contract(contract)
 
     plan = compile_verification_plan(

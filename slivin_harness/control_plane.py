@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import secrets
+import time
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path, PureWindowsPath
@@ -91,7 +92,24 @@ def _atomic_write(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp-" + secrets.token_hex(4))
     temp.write_bytes(payload)
-    os.replace(temp, path)
+    for attempt in range(3):
+        try:
+            os.replace(temp, path)
+            return
+        except PermissionError as error:
+            # Native Windows can temporarily hold the destination open. Retry
+            # only this idempotent replacement, never a model/check/delivery.
+            # Reconcile an ambiguous completed replacement before retrying.
+            try:
+                if path.is_file() and path.read_bytes() == payload:
+                    if temp.exists():
+                        temp.unlink()
+                    return
+            except OSError:
+                pass
+            if os.name != "nt" or getattr(error, "winerror", None) not in {5, 32, 33} or attempt == 2:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 @dataclass(frozen=True)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from slivin_harness.boundaries import boundary
+
 import hashlib
 import json
 import os
@@ -722,6 +724,7 @@ def run_reconstructed_verification(
             pass
 
 
+@boundary("B13")
 def classify_heldout_results(
     *,
     results: Sequence[Any],
@@ -925,6 +928,7 @@ def _rollback_delivery(
     )
 
 
+@boundary("B14")
 def deliver_candidate_transaction(
     *,
     session: WorkspaceSession,
@@ -1174,6 +1178,7 @@ def deliver_candidate_transaction(
         )
 
 
+@boundary("B09")
 def reset_workspace_for_semantic_replan(
     *,
     workspace: Path,
@@ -1295,6 +1300,7 @@ def reset_workspace_for_semantic_replan(
     }
 
 
+@boundary("B14")
 def build_final_acceptance(
     *,
     task_id: str,

@@ -63,6 +63,7 @@ from task_runner import (
 )
 
 EXPECTED_MAIN_DOCS = {
+    "SYSTEMIC_RELIABILITY.md",
     "ARCHITECTURE.md",
     "AUTONOMOUS_ENGINEERING_CONTRACT.md",
     "DECISIONS.md",
@@ -119,13 +120,13 @@ def _check_one_h1(path: Path) -> None:
 
 
 def main() -> int:
-    _assert(__version__ == "0.8.0a30", f"Unexpected Harness version: {__version__}")
+    _assert(__version__ == "0.8.0a31", f"Unexpected Harness version: {__version__}")
     _assert(MANIFEST_VERSION == 2, f"Unexpected manifest version: {MANIFEST_VERSION}")
-    _assert(PLANNER_PROTOCOL_VERSION == "planner.v5", PLANNER_PROTOCOL_VERSION)
-    _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v3", IMPLEMENTATION_CONTRACT_VERSION)
-    _assert(EVALUATOR_PROTOCOL_VERSION == "evaluator.v6", EVALUATOR_PROTOCOL_VERSION)
-    _assert(IMPLEMENTER_PROTOCOL_VERSION == "implementer.v5", IMPLEMENTER_PROTOCOL_VERSION)
-    _assert(WORKFLOW_VERSION == "workflow.v6", WORKFLOW_VERSION)
+    _assert(PLANNER_PROTOCOL_VERSION == "planner.v6", PLANNER_PROTOCOL_VERSION)
+    _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v4", IMPLEMENTATION_CONTRACT_VERSION)
+    _assert(EVALUATOR_PROTOCOL_VERSION == "evaluator.v7", EVALUATOR_PROTOCOL_VERSION)
+    _assert(IMPLEMENTER_PROTOCOL_VERSION == "implementer.v6", IMPLEMENTER_PROTOCOL_VERSION)
+    _assert(WORKFLOW_VERSION == "workflow.v7", WORKFLOW_VERSION)
     _assert(RUN_STATE_VERSION == "run-state.v1", RUN_STATE_VERSION)
     _assert(CANDIDATE_IDENTITY_VERSION == "candidate.v1", CANDIDATE_IDENTITY_VERSION)
     _assert(CONTROL_PLANE_VERSION == "controller-plane.v1", CONTROL_PLANE_VERSION)
@@ -145,7 +146,7 @@ def main() -> int:
     _assert(PHASE7_VERSION == "phase7-final-gate.v1", PHASE7_VERSION)
     _assert(PATCH_PROOF_VERSION == "patch-proof.v1", PATCH_PROOF_VERSION)
     _assert(FINAL_ACCEPTANCE_VERSION == "final-acceptance.v3", FINAL_ACCEPTANCE_VERSION)
-    _assert(USER_FOLLOW_UP_VERSION == "user-follow-up.v1", USER_FOLLOW_UP_VERSION)
+    _assert(USER_FOLLOW_UP_VERSION == "user-follow-up.v2", USER_FOLLOW_UP_VERSION)
     _assert(DELIVERY_RECORD_VERSION == "delivery-record.v2", DELIVERY_RECORD_VERSION)
     _assert(HELDOUT_EVIDENCE_VERSION == "heldout-evidence.v2", HELDOUT_EVIDENCE_VERSION)
     _assert(BENCHMARK_ISOLATION_VERSION == "benchmark-isolation.v1", BENCHMARK_ISOLATION_VERSION)
@@ -181,8 +182,8 @@ def main() -> int:
         indent=2,
     ) + "\n"
     _assert(
-        (docs_dir / "workflow.v6.json").read_text(encoding="utf-8") == generated_json,
-        "docs/workflow.v6.json is stale; run ./py tools/render_workflow_docs.py",
+        (docs_dir / "workflow.v7.json").read_text(encoding="utf-8") == generated_json,
+        "docs/workflow.v7.json is stale; run ./py tools/render_workflow_docs.py",
     )
 
     actual_docs = {path.name for path in docs_dir.glob("*.md")}
@@ -213,14 +214,14 @@ def main() -> int:
         for path in [ROOT / "README.md", docs_dir / "ARCHITECTURE.md", docs_dir / "QUALITY_MODEL.md"]
     )
     for marker in (
-        "0.8.0a30",
+        "0.8.0a31",
         "version = 2",
         "task-contract.v1",
-        "planner.v5",
-        "implementer.v5",
-        "implementation-contract.v3",
+        "planner.v6",
+        "implementer.v6",
+        "implementation-contract.v4",
         "verification-plan.v1",
-        "evaluator.v6",
+        "evaluator.v7",
         WORKFLOW_VERSION,
         RUN_STATE_VERSION,
         CANDIDATE_IDENTITY_VERSION,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from slivin_harness.boundaries import boundary
+
 import dataclasses
 import enum
 import hashlib
@@ -217,6 +219,7 @@ class CheckRegistry:
         data = self.load()
         return tuple(CheckReference(**item) for item in data["checks"])
 
+    @boundary("B06")
     def bind_compiled_specs(self, specs: Sequence[Mapping[str, Any]]) -> None:
         """Bind executable templates as well as path names; runner drift is a revision."""
         data = self.load()
@@ -517,31 +520,6 @@ def validate_implementer_report(
         legacy_evidence = self_verification.get("evidence")
         if not isinstance(legacy_evidence, list) or not any(str(item).strip() for item in legacy_evidence):
             raise Phase4ContractError("COMPLETE requires self-verification evidence before receipt issuance")
-
-    discoveries = report.get("discovered_obligations", [])
-    if not isinstance(discoveries, list):
-        raise Phase4ContractError("discovered_obligations must be a list")
-    for discovery in discoveries:
-        if not isinstance(discovery, Mapping):
-            raise Phase4ContractError("discovered obligation must be an object")
-        if discovery.get("kind") not in {"consumer", "risk"}:
-            raise Phase4ContractError("discovered obligation kind must be consumer or risk")
-        for field in ("name", "reason", "required_behavior", "evidence"):
-            value = discovery.get(field)
-            if field == "evidence":
-                if not isinstance(value, list) or not any(str(item).strip() for item in value):
-                    raise Phase4ContractError("discovered obligation evidence is required")
-            elif not isinstance(value, str) or not value.strip():
-                raise Phase4ContractError(f"discovered obligation {field} is required")
-        try:
-            validate_proof_target(
-                discovery.get("required_proof"),
-                field="discovered_obligation.required_proof",
-            )
-        except Exception as exc:
-            raise Phase4ContractError(
-                "discovered obligation requires a valid typed required_proof"
-            ) from exc
 
     registered = report.get("registered_checks", [])
     if not isinstance(registered, list):

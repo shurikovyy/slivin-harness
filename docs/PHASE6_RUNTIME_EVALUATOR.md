@@ -218,7 +218,7 @@ Planner reasoning
 Planner impact_closure
 Implementation Contract
 Implementer Report
-implementation-impact-closure.v1
+implementation-impact-closure.v2
 Controller checks
 runtime evidence
 previous findings
@@ -267,7 +267,7 @@ Implementation Contract
 Verification Plan
 Contract Closure Record
 Planner normalized impact_closure
-Controller-normalized implementation-impact-closure.v1
+Controller-normalized implementation-impact-closure.v2
 deterministic Controller evidence
 runtime PASS/SKIPPED evidence
 ```
@@ -276,23 +276,26 @@ runtime PASS/SKIPPED evidence
 Plan/Contract fingerprints, exact changed paths и revision binding. Stale artifact не
 попадает в Phase B. Full Planner reasoning и raw Implementer report не раскрываются.
 
-`evaluator.v6` содержит mandatory `candidate_id` и `impact_challenge`:
+`evaluator.v7` содержит mandatory `candidate_id` и `impact_challenge`:
 
 | Dispositions | Authoritative exact set | Positive result for PASS |
 | --- | --- | --- |
 | blind_contract_dispositions | Каждый blind changed contract impact_id | COVERED |
 | blind_consumer_dispositions | Каждый blind affected consumer impact_id | COVERED_IN_SCOPE |
-| planner_consumer_dispositions | Каждый Planner IN_SCOPE normalized name | CONFIRMED |
-| implementer_consumer_dispositions | Каждый Implementer DISCOVERED normalized name | CONFIRMED |
-| not_affected_dispositions | BLIND IDs + PLANNER/IMPLEMENTER names, source отдельно | CONFIRMED_NOT_AFFECTED |
-| related_follow_up_dispositions | BLIND IDs + PLANNER/IMPLEMENTER names, source отдельно | CONFIRMED_OUT_OF_SCOPE |
+| planner_consumer_dispositions | Каждый Planner IN_SCOPE source ID/revision | CONFIRMED |
+| implementer_consumer_dispositions | Каждый current IN_SCOPE source ID/revision | CONFIRMED |
+| not_affected_dispositions | BLIND IDs + PLANNER/IMPLEMENTER source ID/revision | CONFIRMED_NOT_AFFECTED |
+| related_follow_up_dispositions | BLIND IDs + PLANNER/IMPLEMENTER source ID/revision | CONFIRMED_OUT_OF_SCOPE либо PROMOTED_IN_SCOPE |
 | changed_path_dispositions | Каждый actual changed path | UNDERSTOOD |
 
 Все rows требуют reason, existing evidence_paths, evidence и finding_ids. Blind dispositions
-дополнительно содержат `matches` с source/classification/name существующих prior rows;
+дополнительно содержат `matches` с source/classification/reference/source_revision существующих prior rows;
 COVERED_IN_SCOPE требует actual IN_SCOPE match. COVERED contract допускает независимое
 repository evidence без совпадения имени. Exact sets запрещают missing/extra/duplicate rows.
 `coverage_summary` обязателен и не заменяет structured challenge.
+`PROMOTED_IN_SCOPE` требует сохранённого Controller перехода, текущего target в IN_SCOPE
+и независимого `CONFIRMED` этого target. Исходные P/I claims сохраняются и оцениваются;
+удаление transition, target или current confirmation не допускает PASS.
 
 MATERIAL_GAP/MODEL_CONFLICT, MISSING/misclassified consumer, UNSUPPORTED/implementation
 gap, ACTUALLY_AFFECTED/INSUFFICIENT_EVIDENCE, ACTUALLY_IN_SCOPE и SUSPICIOUS/UNJUSTIFIED
@@ -331,13 +334,13 @@ technical model возвращает `REPLAN_REQUIRED`.
 Blind changed-contract MATERIAL_GAP и MODEL_CONFLICT разрешены только с REPLAN_REQUIRED.
 PASS, FINDINGS, BLOCKED и NEEDS_USER_DECISION с ними отклоняются. Concrete reason и
 finding_ids, ссылающиеся на существующий final material finding, остаются обязательными.
-Существующий semantic reset удаляет rejected candidate и запускает fresh Planner v5,
-новый Implementation Contract и fresh Implementer v5. Consumer-level routing сохраняется.
+Существующий semantic reset удаляет rejected candidate и запускает fresh Planner v6,
+новый Implementation Contract и fresh Implementer v6. Consumer-level routing сохраняется.
 Оба Evaluator reports связаны с current candidate.
 После repair прежние audit/challenge stale: новый Implementer impact, checks/runtime и
 fresh Evaluator Phase A/Phase B обязательны. FAST по-прежнему пропускает Evaluator.
 Все related follow-ups сохраняются в immutable audit/prior artifacts и exact dispositions;
-Phase 7 создаёт обязательный user-facing `user-follow-up.v1`. FULL доставляет только
+Phase 7 создаёт обязательный user-facing `user-follow-up.v2`. FULL доставляет только
 `CONFIRMED_OUT_OF_SCOPE`; FAST маркирует findings как `DECLARED_OUT_OF_SCOPE_FAST`,
 поскольку independent Evaluator в этом profile не запускается.
 Подробности — в [PHASE7_FINAL_GATE.md](PHASE7_FINAL_GATE.md).

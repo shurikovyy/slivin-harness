@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from slivin_harness.boundaries import boundary
+
 import os
 import re
 import shutil
@@ -1469,6 +1471,7 @@ def _candidate_guard_details(
     }
 
 
+@boundary("B01")
 def run_static_toolchain_preflight(
     checks: Sequence[Mapping[str, Any]],
     *,

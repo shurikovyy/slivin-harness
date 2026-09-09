@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class Phase4ExecutableIntegrationTests(unittest.TestCase):
     def test_phase4_protocol_remains_available(self) -> None:
         implementer = (ROOT / "slivin_harness" / "implementer.py").read_text(encoding="utf-8")
-        self.assertIn("implementer.v5", implementer)
+        self.assertIn("implementer.v6", implementer)
         self.assertIn("REPLAN_REQUIRED", implementer)
         self.assertIn("NEEDS_USER_DECISION", implementer)
 

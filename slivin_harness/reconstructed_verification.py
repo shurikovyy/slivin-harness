@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from slivin_harness.boundaries import boundary
+
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -29,6 +31,7 @@ from slivin_harness.workspace import (
 )
 
 
+@boundary("B13")
 def run_authoritative_reconstructed_verification(
     *,
     source_session: WorkspaceSession,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from slivin_harness.boundaries import boundary, attach_boundary_observer, detach_boundary_observer
+
 import argparse
 import copy
 import hashlib
@@ -50,6 +52,8 @@ from slivin_harness.implementer import (
     validate_implementation_contract,
     validate_implementation_report,
     validate_implementation_impact_closure,
+    validate_post_patch_impact,
+    report_discoveries,
 )
 from slivin_harness.planner import (
     PlannerCapabilityInfeasible,
@@ -110,8 +114,11 @@ from slivin_harness.preflight import (
     run_static_toolchain_preflight,
 )
 from slivin_harness.report_recovery import (
-    MAX_REPORT_CORRECTIONS, correctable_report_field, correction_prompt, preserves_report_claims,
+    MAX_REPORT_CORRECTIONS, correction_fields, correction_prompt, preserves_report_claims,
+    ReportCorrectionState, ReportRecoveryStop,
 )
+from slivin_harness.checkpoint import save_report_checkpoint
+from slivin_harness.proof_routes import run_proof_route_review, validate_proof_review
 from slivin_harness.test_runners import resolve_javascript_runner, TestRunnerResolutionError
 from slivin_harness.impact import impact_paths
 from slivin_harness.protocol import (
@@ -214,33 +221,37 @@ IMPLEMENTER_INSTRUCTIONS = """
   Product intent, PRESERVE-1 и owner-configured checks остаются обязательными; replan меняет
   негодный Planner-derived proof, а не отменяет semantic obligations или owner gates.
   RELATED_OUT_OF_SCOPE baseline defect сохрани как follow-up в последующей final model;
-- если найден material consumer/risk вне active Contract, верни его в `discovered_obligations`; не ослабляй и не редактируй Contract самостоятельно;
+- новые material consumers/risks возвращай один раз в соответствующей коллекции post_patch_impact с устойчивым observation_id; Controller сам компилирует obligations. Contract самостоятельно не редактируй;
 - Planner impact_closure — исходная техническая гипотеза, а не граница исследования.
   После реализации исследуй фактический candidate/diff: реально изменённые contracts,
   shared symbols/state/API, writers/readers/decision points и sibling consumers.
   Выполни новый post-patch sweep, сопоставь его с Planner model, найди новые consumers/risks,
   и только затем запускай final SELF_VERIFY_COMMAND. Конкретный search tool не предписан.
-- COMPLETE требует post_patch_impact: changed contracts, concrete post-patch paths/symbols/
-  evidence, consumer dispositions, new_risks, changed_path_review, search_evidence и summary.
-  Changed contracts обязаны совпадать с Planner по normalized name и before/after semantics.
-  Все Planner IN_SCOPE повтори как source=PLANNER с прежними why_affected/required_behavior/proof.
-  Другой/additional semantic contract, неверный root cause или consumer behavior требуют
-  REPLAN_REQUIRED с reason/evidence; нельзя молча менять technical model через COMPLETE.
-- Каждый Planner NOT_AFFECTED пересмотри: сохрани с post-patch evidence либо переведи в
-  DISCOVERED IN_SCOPE. Каждый DISCOVERED consumer и new risk одновременно повтори один-к-одному
-  в discovered_obligations: name, reason=why_affected (для risk reason), required_behavior=
-  required_behavior (для risk failure_mode), proof и evidence. Controller расширит Contract,
-  продолжит тот же thread и потребует новое evidence/self-verify для новых items.
-  В следующих reports сохраняй уже зарегистрированные discoveries; это idempotent.
-- Сохраняй все Planner RELATED_OUT_OF_SCOPE relation/reason/evidence/follow-up и добавляй
-  новые отдельные findings туда же. Они не являются Contract obligations.
+- COMPLETE требует post_patch_impact и явный source_assessments для КАЖДОЙ записи
+  source_inventory из текущего Implementation Contract. source_ref содержит точные
+  source_id/source_revision. Верни собственные observation, paths, symbols, evidence.
+  Исходные name/reason/behavior/proof/follow-up повторять не нужно: Controller сохраняет
+  их сам как claims предыдущего источника. Отсутствующий assessment не означает CONFIRM.
+- CONFIRM — собственное подтверждение исходного claim; CHALLENGE или INSUFFICIENT_EVIDENCE
+  запрещают COMPLETE. Technical model divergence требует REPLAN_REQUIRED с reason/evidence.
+  NOT_AFFECTED/RELATED_OUT_OF_SCOPE можно явно PROMOTE в IN_SCOPE: promotion_id указывает
+  observation_id новой in_scope_consumer записи. Она требует Controller expansion и proof.
+  Для всех остальных dispositions promotion_id оставляй пустым.
+- changed_contracts/in_scope_consumers/not_affected_consumers/related_out_of_scope/new_risks
+  содержат только НОВЫЕ observations с observation_id, без source=PLANNER/DISCOVERED.
+  FULL не добавляет новый changed contract через COMPLETE: нужен semantic replan.
+  FAST самостоятельно исследует changed contracts и consumers. Новые observations
+  Controller сохраняет в source_inventory; следующий report оценивает их по refs.
+  Не копируй discoveries повторно и не создавай другой observation_id для того же события.
+  Один ID с изменённым содержимым — conflict. Findings не исчезают при continuation.
+- Contract evidence остаётся обязательным по item_id; in-scope нельзя спрятать в follow-up.
 - changed_path_review содержит ровно одну осмысленную строку на каждый реально changed path,
   включая удаления; OTHER_JUSTIFIED требует конкретного reason и evidence с указанием path.
   Остальные evidence paths должны существовать в final workspace. Search evidence должен
   описывать новый sweep реального patch, а не копировать Planner prose.
 - Planner applicable=true нельзя переключить в false. При Planner applicable=false обнаруженный
   behavioral impact требует REPLAN_REQUIRED. FAST без Planner самостоятельно строит closure,
-  а material consumers/risks проводит через DISCOVERED и Controller expansion.
+  а material consumers/risks проводит через новые observations и Controller expansion.
   applicable=false требует непустой owner allowed_paths только из существующих regular prose
   files .md/.rst/.txt/.adoc, safe и canonical внутри workspace. Search и changed paths — subset
   этой owner boundary; directory/glob/code/config/mixed/escaping boundary запрещает исключение.
@@ -264,7 +275,7 @@ IMPLEMENTER_INSTRUCTIONS = """
   не выдумывай code functions. Если Controller запрашивает REPORT-ONLY CORRECTION,
   уточни только указанные evidence поля того же report, не меняя candidate, tests,
   findings, obligations, Plan/Contract или permissions. Full validation остаётся обязательной.
-  Пустые contract_evidence/discovered_obligations/registered_checks допустимы и не должны
+  При non-COMPLETE пустые contract_evidence/source_assessments/registered_checks допустимы и не должны
   превращаться в искусственный ledger по каждому item.
   post_patch_impact wire fields остаются обязательными, но при non-COMPLETE его arrays
   могут быть пустыми/частичными; не фабрикуй findings ради формы.
@@ -1209,6 +1220,7 @@ raise SystemExit(1)
     return script_path, stamp_path, command
 
 
+@boundary("B08")
 def verify_self_verification_stamp(
     *,
     workspace: Path,
@@ -1249,6 +1261,7 @@ def verify_self_verification_stamp(
     return True
 
 
+@boundary("B06")
 def build_dynamic_check_specs(
     paths: list[str],
     *,
@@ -1466,6 +1479,7 @@ def run_check(
 
 
 
+@boundary("B08")
 def run_checks(
     specs: list[dict],
     *,
@@ -1619,7 +1633,7 @@ def validate_plan_artifact(
     plan: dict, *, workspace: Path, task_contract: dict,
     owner_allowed_paths: list[str] | None = None,
 ) -> None:
-    """Compatibility entry point backed by the planner.v5 validator."""
+    """Compatibility entry point backed by the planner.v6 validator."""
     validate_planner_artifact(
         plan,
         workspace=workspace,
@@ -1703,7 +1717,7 @@ runtime/external proof локальным тестом. Затем запуст�
 Дополнительные test paths для materially affected consumers можно передать только через
 typed registered_checks/additional_check_paths; Controller сам выберет trusted runner.
 Exploratory unrelated diagnostics не регистрируй как обязательные checks.
-Новые material consumers/risks передавай через discovered_obligations. Для
+Новые material consumers/risks передавай один раз в post_patch_impact с observation_id. Все current origins оценивай по source_ref; не повторяй исходные claims. Для
 REPLAN_REQUIRED/BLOCKED/NEEDS_USER_DECISION дай reason и evidence; полный Contract ledger
 нужен только для COMPLETE. До final self-verify выполни новый post-patch impact sweep;
 COMPLETE требует post_patch_impact и review каждого changed path. Planner closure — гипотеза.
@@ -1744,7 +1758,7 @@ def build_implementation_continuation_prompt(
 
 1. Сначала посмотри текущий `git diff`/status и продолжи только незавершённые пункты.
 2. Особое внимание удели ещё не доказанным risks/consumers из Implementation Contract.
-3. Пересмотри post_patch_impact, сохрани Planner dispositions и все уже expanded discoveries.
+3. Пересмотри post_patch_impact: source_assessments по ВСЕМ текущим source_inventory refs, включая expanded observations; новые findings отдельными observation_id.
 4. Запусти актуальный SELF_VERIFY_COMMAND после impact sweep.
 5. Верни COMPLETE только после evidence по каждому item и полного post-patch closure;
    technical/proof-model divergence требует REPLAN_REQUIRED с соответствующим
@@ -2035,6 +2049,7 @@ def run_agent_turn(
     )
 
 
+@boundary("B17")
 def observe_terminal_report_candidate(workspace: Path, plane: ControllerPlane, run_state: RunState | None, reason: str) -> None:
     """Record observed physical files; failed observation is explicitly non-authoritative."""
     try:
@@ -2053,10 +2068,13 @@ def observe_terminal_report_candidate(workspace: Path, plane: ControllerPlane, r
             run_state.data["current_candidate"] = None
             run_state.data["terminal_candidate_observation"] = observation
             run_state.persist()
+        plane.write_private_json("candidate_identity_current.json", observation)
+        plane.write_public_json("candidate_identity_current.json", observation)
     plane.write_private_json("terminal_candidate_observation.json", observation)
     plane.write_public_json("terminal_candidate_observation.json", observation)
 
 
+@boundary("B05")
 def run_implementer_report(codex: CodexAppServer, **kwargs) -> dict:
     """Bounded evidence correction; no changes to the active product definition."""
     workspace = kwargs["workspace"]
@@ -2067,14 +2085,23 @@ def run_implementer_report(codex: CodexAppServer, **kwargs) -> dict:
     run_state = kwargs.get("run_state")
     prefix = "implementation_report_recovery_" + hashlib.sha256(os.urandom(16)).hexdigest()[:16]
     artifacts: list[str] = []
-    original: dict | None = None
-    allowed_fields: list[str] = []
+    correction = ReportCorrectionState()
     frozen_candidate: str | None = None
     current = dict(kwargs)
 
     def observe_terminal(reason: str) -> None:
         observe_terminal_report_candidate(workspace, plane, run_state, reason)
         artifacts.append("terminal_candidate_observation.json")
+        if frozen_candidate is None:
+            try:
+                save_report_checkpoint(plane=plane, workspace=workspace, name=prefix + "_terminal",
+                                       contract=kwargs["implementation_contract"], run_state=run_state,
+                                       stamp_path=kwargs.get("stamp_path"), check_registry_digest=kwargs.get("check_registry_digest"))
+            except (RuntimeError, OSError) as error:
+                plane.write_private_json(prefix + "_checkpoint_failure.json", {
+                    "status": "UNKNOWN", "reason": reason, "error_type": type(error).__name__,
+                    "error": str(error),
+                })
 
     def stop(reason: str) -> None:
         observe_terminal(reason)
@@ -2089,20 +2116,26 @@ def run_implementer_report(codex: CodexAppServer, **kwargs) -> dict:
         name = f"{prefix}_{attempt:02d}"
 
         def save_raw(raw: str) -> None:
-            nonlocal raw_value, frozen_candidate, original
+            nonlocal raw_value, frozen_candidate
             raw_value = raw
             plane.write_text(name + ".raw.json", raw, visibility=ArtifactVisibility.PRIVATE)
             # Freeze after development, before accepting/repairing report evidence.
             identity = candidate_content_fingerprint(workspace)
             if frozen_candidate is None:
                 frozen_candidate = identity
+                save_report_checkpoint(
+                    plane=plane, workspace=workspace, name=prefix,
+                    contract=kwargs["implementation_contract"], run_state=run_state,
+                    stamp_path=kwargs.get("stamp_path"),
+                    check_registry_digest=kwargs.get("check_registry_digest"),
+                )
             elif identity != frozen_candidate:
                 stop("IMPLEMENTER_REPORT_CORRECTION_MUTATED_CANDIDATE")
             parsed = parse_implementation_report(raw)
-            if original is None:
-                original = parsed
-            elif not preserves_report_claims(original, parsed, fields=allowed_fields):
-                stop("IMPLEMENTER_REPORT_CORRECTION_CHANGED_CLAIMS")
+            try:
+                correction.observe(parsed)
+            except ReportRecoveryStop as exc:
+                stop("IMPLEMENTER_" + str(exc))
 
         try:
             if attempt and candidate_content_fingerprint(workspace) != frozen_candidate:
@@ -2116,23 +2149,21 @@ def run_implementer_report(codex: CodexAppServer, **kwargs) -> dict:
                 print(f"IMPLEMENTER_REPORT_CORRECTED: {attempt}")
             return result
         except ArtifactContractError as exc:
-            field = correctable_report_field(exc)
+            fields = correction_fields(exc)
             private = {"schema_version": "implementation-report-recovery.v1", "status": "INVALID",
                        "correction_attempt": attempt, "candidate_id": frozen_candidate,
                        "raw_artifact": name + ".raw.json", "diagnostic": exc.feedback(),
-                       "correctable": field is not None}
+                       "correctable": fields is not None}
             plane.write_private_json(name + ".json", private)
             # Raw prose/values are private. Public outcome exposes only typed routing.
             public = {key: value for key, value in private.items() if key != "diagnostic"}
             public["diagnostic"] = {"code": exc.code, "field": exc.field}
             plane.write_public_json(name + ".json", public)
             artifacts.append(name + ".json")
-            if field is None:
-                stop("IMPLEMENTER_REPORT_INVALID")
-            if attempt >= MAX_REPORT_CORRECTIONS:
-                stop("IMPLEMENTER_REPORT_CORRECTION_EXHAUSTED")
-            if field not in allowed_fields:
-                allowed_fields.append(field)
+            try:
+                allowed_fields = correction.next_fields(exc, attempt=attempt)
+            except ReportRecoveryStop as terminal:
+                stop("IMPLEMENTER_" + str(terminal))
             print(f"IMPLEMENTER_REPORT_CORRECTION: {attempt + 1}/{MAX_REPORT_CORRECTIONS} {exc.code} {exc.field}")
             current["prompt"] = correction_prompt(exc, fields=allowed_fields)
             current["label"] = f"{kwargs['label']} REPORT CORRECTION {attempt + 1}"
@@ -2144,6 +2175,7 @@ def run_implementer_report(codex: CodexAppServer, **kwargs) -> dict:
         except TurnTimeoutError:
             if attempt:
                 stop("IMPLEMENTER_REPORT_CORRECTION_TIMEOUT")
+            observe_terminal("IMPLEMENTER_TURN_TIMEOUT")
             raise
         except (RuntimeError, OSError) as exc:
             # Persistence only, never a catch-all retry. Semantic/test failures
@@ -2156,7 +2188,7 @@ def run_implementer_report(codex: CodexAppServer, **kwargs) -> dict:
                 plane.write_public_json(name + ".json", {
                     "status": "INVALID", "reason_code": "IMPLEMENTER_REPORT_VALIDATION_FAILED",
                 })
-                observe_terminal("IMPLEMENTER_REPORT_VALIDATION_FAILED")
+            observe_terminal("IMPLEMENTER_REPORT_VALIDATION_FAILED" if raw_value else "IMPLEMENTER_TRANSPORT_FAILED")
             raise
 
 
@@ -2255,6 +2287,11 @@ def _run_implementer_report_once(
         raw_report_sink(raw)
     report = parse_implementation_report(raw)
     changed_paths = collect_changed_paths(workspace)
+    # Cheap structure/source validation precedes expensive trusted confirmation.
+    validate_post_patch_impact(
+        report, workspace=workspace, changed_paths=changed_paths, plan=plan,
+        contract=implementation_contract, owner_allowed_paths=owner_allowed_paths or (),
+    )
     stamp_matches_candidate = verify_self_verification_stamp(
         workspace=workspace,
         stamp_path=stamp_path,
@@ -2439,6 +2476,7 @@ def main(argv: list[str] | None = None) -> int:
     session: WorkspaceSession | None = None
     recorder: RunRecorder | None = None
     run_state: RunState | None = None
+    boundary_token = None
     try:
         manifest_path = args.manifest.expanduser().resolve()
         manifest = load_manifest(manifest_path)
@@ -2487,6 +2525,7 @@ def main(argv: list[str] | None = None) -> int:
             mode=workflow_mode,
             pipeline_profile=pipeline_profile,
         )
+        boundary_token = attach_boundary_observer(run_state.record_boundary)
         run_state.begin_stage(StageId.INTAKE_PREFLIGHT)
 
         local_config, local_config_path = load_local_config()
@@ -2788,6 +2827,7 @@ def main(argv: list[str] | None = None) -> int:
 
         planner_preparation_index = 0
 
+        @boundary("B01")
         def prepare_planner_capabilities(reason: str) -> tuple[set[str], list[dict], str]:
             """One pre-turn boundary for initial and all semantic-replan Planners."""
             nonlocal planner_preparation_index
@@ -3329,11 +3369,15 @@ def main(argv: list[str] | None = None) -> int:
             )
 
 
+            @boundary("B07")
             def recompile_active_definition(
                 *,
                 discoveries: list[dict],
                 registry_changed: bool,
                 detail: str,
+                observations: dict | None = None,
+                evaluation_origin: dict | None = None,
+                proof_review: dict | None = None,
             ) -> bool:
                 """Atomically expand Contract + Verification Plan and re-run Step 2 gates."""
 
@@ -3352,6 +3396,10 @@ def main(argv: list[str] | None = None) -> int:
                     discoveries=discoveries,
                     project_checks=repair_specs,
                     task_checks=active_task_check_keys(),
+                    observations=observations,
+                    evaluation=evaluation_origin,
+                    proof_review=proof_review,
+                    candidate_id=build_candidate_identity(workspace).candidate_id if proof_review is not None else None,
                 )
                 contract_changed = (
                     expansion.implementation_contract["fingerprint"]
@@ -3365,7 +3413,7 @@ def main(argv: list[str] | None = None) -> int:
                     return False
 
                 trigger = (
-                    InvalidationTrigger.CONTRACT_EXPANDED
+                    InvalidationTrigger.PROOF_ROUTE_CHANGED if proof_review is not None else InvalidationTrigger.CONTRACT_EXPANDED
                     if contract_changed
                     else InvalidationTrigger.CHECK_REGISTERED
                 )
@@ -3519,6 +3567,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return True
 
+            @boundary("B15")
             def continue_implementer(
                 *,
                 reason: str,
@@ -3563,6 +3612,7 @@ def main(argv: list[str] | None = None) -> int:
                 observe_candidate(label.replace(" ", "_"))
                 return next_report, next_artifact
 
+            @boundary("B16")
             def reconcile_project_runtime() -> tuple[bool, str]:
                 nonlocal runtime_state
                 nonlocal project_runtime_index
@@ -3607,7 +3657,46 @@ def main(argv: list[str] | None = None) -> int:
                     + ". Previous self-verification is stale."
                 )
 
-            def replan_implementation(reason: str) -> tuple[dict, str]:
+            @boundary("B18")
+            def revise_proof_route(reason: str) -> tuple[dict, str]:
+                """Preserve product bytes/origins/checks; independently review only proof routes."""
+                nonlocal replan_cycles
+                candidate = observe_candidate("PROOF_ROUTE_REVIEW")
+                if replan_cycles >= manifest["max_replan_cycles"]:
+                    raise HarnessControlledStop("PROOF_ROUTE_REPLAN_LIMIT")
+                replan_cycles += 1
+                save_report_checkpoint(plane=recorder.control_plane, workspace=workspace,
+                    name=f"proof_route_{replan_cycles:02d}", contract=implementation_contract,
+                    run_state=run_state, stamp_path=stamp_path, check_registry_digest=check_registry.digest())
+                available, _, preparation = prepare_planner_capabilities(f"PROOF_ROUTE_{replan_cycles:02d}")
+                review = integrity_coordinator.run_read_only(f"PROOF_ROUTE_REVIEW:{replan_cycles}",
+                    lambda: run_proof_route_review(codex, workspace=workspace, contract=implementation_contract,
+                        candidate_id=candidate.candidate_id, task_contract=task_contract,
+                        owner_checks=repair_specs, available_capabilities=sorted(available), reason=reason,
+                        timeout=timeout, on_heartbeat=make_heartbeat("PROOF ROUTE REVIEW"),
+                        on_thread_started=_thread_recorder(recorder, f"planner_proof_{replan_cycles}")))
+                review_artifact = f"proof_route_review_{replan_cycles:02d}.json"
+                recorder.write_authoritative_json(review_artifact, review)
+                if build_candidate_identity(workspace) != candidate:
+                    raise HarnessControlledStop("PROOF_ROUTE_REVIEW_MUTATED_CANDIDATE")
+                validate_proof_review(implementation_contract, review, candidate_id=candidate.candidate_id)
+                if review["status"] == "TECHNICAL_REPLAN_REQUIRED":
+                    return replan_implementation(
+                        "Independent proof review established TECHNICAL_MODEL_DIVERGENCE: "
+                        + review["reason"] + "\nEvidence: " + json.dumps(review["evidence"], ensure_ascii=False),
+                        budget_consumed=True,
+                    )
+                if review["status"] == "BLOCKED":
+                    raise HarnessControlledStop("PROOF_ROUTE_REVIEW_BLOCKED")
+                recompile_active_definition(discoveries=[], registry_changed=False,
+                    proof_review=review, detail=f"Independent proof review {review_artifact}; capability preparation {preparation}")
+                if build_candidate_identity(workspace) != candidate:
+                    raise HarnessControlledStop("PROOF_ROUTE_RECOMPILE_MUTATED_CANDIDATE")
+                return continue_implementer(reason="Proof routes revised independently. Product claims, source references and candidate preserved; rerun current self-verification and report current evidence.",
+                                             label=f"IMPLEMENT PROOF ROUTE #{replan_cycles}")
+
+            @boundary("B09")
+            def replan_implementation(reason: str, *, budget_consumed: bool = False) -> tuple[dict, str]:
                 """Shared semantic reset/replan path for Implementer and Evaluator."""
                 nonlocal replan_cycles, plan, dynamic_specs, dynamic_notes, runtime_state, project_runtime_index
                 nonlocal active_contract_closure, active_contract_closure_artifact, active_runtime_evidence, active_runtime_artifact
@@ -3625,7 +3714,10 @@ def main(argv: list[str] | None = None) -> int:
                     raise RuntimeError(
                         "REPLAN_STALLED: the same plan was rejected for the same reason"
                     )
-                replan_cycles += 1
+                if not budget_consumed:
+                    if replan_cycles >= manifest["max_replan_cycles"]:
+                        raise HarnessControlledStop("TECHNICAL_REPLAN_LIMIT")
+                    replan_cycles += 1
                 run_state.invalidate(
                     InvalidationTrigger.REPLAN_REQUIRED,
                     detail=reason,
@@ -3643,6 +3735,9 @@ def main(argv: list[str] | None = None) -> int:
                 rejected_patch_artifact = (
                     f"replan_{replan_cycles:02d}_rejected_candidate.patch"
                 )
+                save_report_checkpoint(plane=recorder.control_plane, workspace=workspace,
+                    name=f"technical_replan_{replan_cycles:02d}", contract=implementation_contract,
+                    run_state=run_state, stamp_path=stamp_path, check_registry_digest=check_registry.digest())
                 recorder.write_bytes(
                     rejected_patch_artifact,
                     build_candidate_patch(
@@ -4014,6 +4109,7 @@ def main(argv: list[str] | None = None) -> int:
                 observe_candidate("IMPLEMENTER_REPLAN")
                 return report, report_artifact
 
+            @boundary("B16")
             def stabilize_implementer_report(report: dict, *, label: str) -> tuple[dict, str]:
                 """Close discoveries, checks and runtime drift before accepting COMPLETE."""
 
@@ -4022,6 +4118,7 @@ def main(argv: list[str] | None = None) -> int:
                 active_implementation_impact = None
                 active_implementation_impact_artifact = None
                 artifact = f"implementation_report_{implementation_report_index:02d}.json"
+                check_rebind_recoveries = 0
                 while True:
                     if report.get("status") == ImplementerStatus.REPLAN_REQUIRED.value:
                         _phase4_route_implementer_terminal(
@@ -4034,9 +4131,25 @@ def main(argv: list[str] | None = None) -> int:
                             "reason": str(report.get("reason") or report["summary"]),
                             "evidence": report.get("evidence", []),
                         }, ensure_ascii=False, indent=2)
-                        report, artifact = replan_implementation(reason)
+                        if report["terminal_reason_kind"] == "PROOF_MODEL_DIVERGENCE":
+                            report, artifact = revise_proof_route(reason)
+                        else:
+                            report, artifact = replan_implementation(reason)
                         continue
                     if report.get("status") != ImplementerStatus.COMPLETE.value:
+                        # A changed typed check/config cannot be proved by its
+                        # stale compiled runner. Only an actual registry delta
+                        # permits bounded rebind; BLOCKED alone is not progress.
+                        if report.get('status') == ImplementerStatus.BLOCKED.value and check_rebind_recoveries < 2:
+                            registry_changed = register_report_checks(report)
+                            if registry_changed:
+                                check_rebind_recoveries += 1
+                                recompile_active_definition(discoveries=[], registry_changed=True,
+                                    detail='Controller observed changed typed check/framework/config on blocked report; current proof must be rerun')
+                                report, artifact = continue_implementer(
+                                    reason='Controller recompiled the changed typed checks/config and retained every owner gate. Run the current self-verification before COMPLETE.',
+                                    label=f'{label} CHECK REBIND {check_rebind_recoveries}')
+                                continue
                         return report, artifact
                     # Validate before discovery expansion as well as afterwards:
                     # declarations cannot create obligations without post-patch evidence.
@@ -4048,10 +4161,11 @@ def main(argv: list[str] | None = None) -> int:
                         ),
                     )
                     registry_changed = register_report_checks(report)
-                    discoveries = list(report.get("discovered_obligations", []))
+                    discoveries = report_discoveries(report, contract=implementation_contract, plan=plan)
                     definition_changed = recompile_active_definition(
                         discoveries=discoveries,
                         registry_changed=registry_changed,
+                        observations=report["post_patch_impact"],
                         detail=(
                             "Implementer discovered material obligations and/or "
                             "registered typed Controller checks"
@@ -4589,6 +4703,10 @@ def main(argv: list[str] | None = None) -> int:
                         on_thread_started=_thread_recorder(recorder, f"evaluator_{evaluation_index}"),
                         on_blind_audit=evaluator_blind_audit_recorder,
                         on_phase_complete=evaluator_phase_guard,
+                        on_raw_report=lambda phase, attempt, raw: recorder.control_plane.write_text(
+                            f"evaluator_{evaluation_index:02d}_{phase}_{attempt:02d}.raw.json", raw,
+                            visibility=ArtifactVisibility.PRIVATE,
+                        ),
                         timeout=timeout,
                     ),
                 )
@@ -4670,6 +4788,7 @@ def main(argv: list[str] | None = None) -> int:
                         recompile_active_definition(
                             discoveries=evaluator_discoveries,
                             registry_changed=False,
+                            evaluation_origin=evaluation,
                             detail=(
                                 "Blind Evaluator discovered material consumers/risks"
                             ),
@@ -5229,6 +5348,9 @@ def main(argv: list[str] | None = None) -> int:
             print("RUN_DIR:", recorder.root, file=sys.stderr)
         print(f"TOTAL_ELAPSED: {time.monotonic() - started:.2f}s", file=sys.stderr)
         return 1
+    finally:
+        if boundary_token is not None:
+            detach_boundary_observer(boundary_token)
 
 
 if __name__ == "__main__":

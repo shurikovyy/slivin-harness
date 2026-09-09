@@ -11,6 +11,7 @@ from slivin_harness.implementer import (
     IMPLEMENTER_PROTOCOL_VERSION,
     IMPLEMENTER_REPORT_SCHEMA,
     build_implementation_contract,
+    materialize_post_patch_impact,
 )
 from slivin_harness.planner import PLANNER_SCHEMA
 from slivin_harness.protocol import (
@@ -40,64 +41,81 @@ def empty_post_patch_impact() -> dict:
     return {
         "applicable": False, "changed_contracts": [], "in_scope_consumers": [],
         "not_affected_consumers": [], "related_out_of_scope": [], "new_risks": [],
-        "changed_path_review": [], "search_evidence": [], "closure_summary": "",
+        "changed_path_review": [], "search_evidence": [], "closure_summary": "", "source_assessments": [],
     }
 
 
-def attach_post_patch_impact(report: dict, *, plan: dict | None, changed_paths: list[str]) -> dict:
-    """Synthetic report fixture; never used by production artifact construction."""
+def attach_post_patch_impact(report: dict, *, plan: dict | None, changed_paths: list[str], contract=None) -> dict:
+    """Test client: observations are independent prose; inherited text is not output."""
+    from slivin_harness.source_records import source_ref
+    from slivin_harness.protocol import stable_fingerprint
+    contract = contract or build_implementation_contract(plan, task_contract=valid_task_contract())
     report.setdefault("terminal_reason_kind", {
         "COMPLETE": "NONE", "REPLAN_REQUIRED": "TECHNICAL_MODEL_DIVERGENCE",
         "BLOCKED": "INFRASTRUCTURE_BLOCKED", "NEEDS_USER_DECISION": "USER_DECISION_REQUIRED",
     }[report["status"]])
+    report.setdefault("reason", "")
+    report.setdefault("evidence", [])
+    report.setdefault("registered_checks", [])
+    if "self_verification" in report:
+        report["self_verification"].setdefault("receipt_id", "")
+    discoveries = report.pop("discovered_obligations", [])
     closure = empty_post_patch_impact()
     report["post_patch_impact"] = closure
     if report["status"] != "COMPLETE":
         return report
-    expected = (plan or valid_plan())["impact_closure"]
-    closure["applicable"] = expected["applicable"]
-    closure["changed_contracts"] = [{
-        "name": row["name"], "before": row["before"], "after": row["after"],
-        "paths": list(row["evidence_paths"]), "symbols": list(row["evidence_symbols"]),
-        "evidence": [f"Post-patch inspection confirms {row['after']}"],
-    } for row in expected["changed_contracts"]]
-    closure["in_scope_consumers"] = [dict(copy.deepcopy(row), source="PLANNER") for row in expected["in_scope_consumers"]]
-    closure["not_affected_consumers"] = copy.deepcopy(expected["not_affected_consumers"])
-    closure["related_out_of_scope"] = copy.deepcopy(expected["related_out_of_scope"])
-    discoveries = report.setdefault("discovered_obligations", [])
-    if plan is None:
-        for row in closure["in_scope_consumers"]:
-            row["source"] = "DISCOVERED"
-            if not any(item["kind"] == "consumer" and item["name"] == row["name"] for item in discoveries):
-                discoveries.append({
-                    "kind": "consumer", "name": row["name"], "reason": row["why_affected"],
-                    "required_behavior": row["required_behavior"], "required_proof": copy.deepcopy(row["required_proof"]),
-                    "evidence": list(row["evidence"]),
-                })
+    model = (plan or valid_plan())["impact_closure"]
+    closure["applicable"] = model["applicable"]
+    for record in contract["source_inventory"]["records"]:
+        claim = record["claim"]
+        closure["source_assessments"].append({
+            "source_ref": source_ref(record), "disposition": "CONFIRM", "promotion_id": "",
+            "observation": "Current repository inspection supports the recorded classification and behavior.",
+            "paths": list(claim.get("paths", claim.get("evidence_paths", []))),
+            "symbols": list(claim.get("symbols", claim.get("evidence_symbols", []))),
+            "evidence": ["Final repository definitions and their callers were inspected in this attempt."],
+        })
+    for assessment in closure["source_assessments"]:
+        event = next((event for event in contract["source_inventory"]["transitions"] if event["source_ref"] == assessment["source_ref"]), None)
+        if event is not None:
+            assessment.update(disposition="PROMOTE", promotion_id=event["target_ref"]["source_id"].removeprefix("I-" + contract["source_inventory"]["namespace"] + "-"))
+    known = {record["source_id"] for record in contract["source_inventory"]["records"]}
+    def add(group, row):
+        row = copy.deepcopy(row)
+        row.pop("source", None)
+        row.setdefault("observation_id", "OBS-" + stable_fingerprint([group, row]))
+        identifier = "I-" + contract["source_inventory"]["namespace"] + "-" + row["observation_id"]
+        if identifier not in known:
+            closure[group].append(row)
+    if plan is None and not contract["source_inventory"]["records"]:
+        for group in ("changed_contracts", "in_scope_consumers", "not_affected_consumers", "related_out_of_scope"):
+            for item in model[group]:
+                row = copy.deepcopy(item)
+                if group == "changed_contracts":
+                    row["paths"] = row.pop("evidence_paths")
+                    row["symbols"] = row.pop("evidence_symbols")
+                    row["evidence"] = ["The requested behavior is implemented in the current definitions."]
+                add(group, row)
     for item in discoveries:
-        if item["kind"] == "consumer" and any(row["name"] == item["name"] for row in closure["in_scope_consumers"]):
-            continue
-        row = {
-            "name": item["name"], "paths": ["reader.py"], "symbols": ["read_target"],
-            "evidence": list(item["evidence"]), "required_proof": copy.deepcopy(item["required_proof"]),
-        }
+        row = dict(name=item["name"], paths=["reader.py"], symbols=["read_target"],
+                   evidence=item["evidence"], required_proof=item["required_proof"])
         if item["kind"] == "consumer":
-            row.update(source="DISCOVERED", why_affected=item["reason"], required_behavior=item["required_behavior"])
-            closure["in_scope_consumers"].append(row)
+            row.update(why_affected=item["reason"], required_behavior=item["required_behavior"])
+            add("in_scope_consumers", row)
         else:
             row.update(reason=item["reason"], failure_mode=item["required_behavior"])
-            closure["new_risks"].append(row)
+            add("new_risks", row)
     closure["changed_path_review"] = [{
         "path": path, "role": "DOCUMENTATION" if not closure["applicable"] else "IMPLEMENTATION",
-        "reason": "The candidate updates this file to satisfy the requested behavior.",
-        "evidence": [f"Post-patch diff review of {path} accounts for the complete file change."],
+        "reason": "This file implements or verifies the requested behavior.",
+        "evidence": [f"The complete current diff of {path} has been inspected."],
     } for path in changed_paths]
     closure["search_evidence"] = [{
-        "target": row["target"], "method": "Inspect final symbols, trace callers and compare the actual diff with the initial model.",
+        "target": row["target"], "method": "Trace definitions, writers and all reachable consumers in the actual repository.",
         "evidence_paths": list(row["evidence_paths"]),
-        "conclusion": "Post-patch review confirms the classified consumers and checks for additional dependencies.",
-    } for row in expected["search_evidence"]]
-    closure["closure_summary"] = "The actual patch, readers and sibling consumers were revisited; all changed files and discovered obligations are accounted for."
+        "conclusion": "Each reachable consumer was inspected against the current candidate.",
+    } for row in model["search_evidence"]]
+    closure["closure_summary"] = "The actual patch and reachable consumers were examined; observations and changed paths are accounted for."
     if not closure["applicable"]:
         closure["closure_summary"] = "README.md remains explanatory prose with no executable state, runtime contract or behavioral obligations after the editorial correction."
     return report
@@ -165,14 +183,6 @@ def valid_plan() -> dict:
             "technical_acceptance": ["target.txt contains exactly after."],
             "derived_preservation": ["No sibling file is changed."],
         },
-        "affected_consumers": [
-            {
-                "name": "Target fixture consumer",
-                "why_affected": "It reads target.txt.",
-                "must_verify": "It observes after.",
-                "required_proof": proof("The configured target-content check passes."),
-            }
-        ],
         "impact_closure": {
             "applicable": True,
             "changed_contracts": [{
@@ -287,17 +297,23 @@ def valid_blind_audit(*, findings=None, candidate_id="candidate-1", changed_path
     }
 
 
-def implementation_impact_fixture(*, candidate_id="candidate-1", plan=None, contract=None, changed_paths=None, revision_binding=None) -> dict:
+_DEFAULT_PLAN = object()
+
+
+def implementation_impact_fixture(*, candidate_id="candidate-1", plan=_DEFAULT_PLAN, contract=None, changed_paths=None, revision_binding=None) -> dict:
     from slivin_harness.protocol import stable_fingerprint
-    plan = valid_plan() if plan is None else plan
+    plan = valid_plan() if plan is _DEFAULT_PLAN else plan
     contract = contract or build_implementation_contract(plan, task_contract=valid_task_contract())
     paths = ["target.txt"] if changed_paths is None else changed_paths
-    report = attach_post_patch_impact({"status": "COMPLETE"}, plan=plan, changed_paths=paths)
+    report = attach_post_patch_impact({"status": "COMPLETE"}, plan=plan, changed_paths=paths, contract=contract)
     artifact = {
-        "schema_version": "implementation-impact-closure.v1", "status": "PASS",
-        "candidate_id": candidate_id, "plan_fingerprint": plan_fingerprint(plan),
+        "schema_version": "implementation-impact-closure.v2", "status": "PASS",
+        "candidate_id": candidate_id, "plan_fingerprint": plan_fingerprint(plan) if plan is not None else None,
         "implementation_contract_fingerprint": contract["fingerprint"], "changed_paths": sorted(paths),
-        "post_patch_impact": report["post_patch_impact"], "revision_binding": revision_binding or {},
+        "post_patch_impact": materialize_post_patch_impact(report, contract=contract, plan=plan),
+        "source_inventory": copy.deepcopy(contract["source_inventory"]),
+        "source_assessments": copy.deepcopy(report["post_patch_impact"]["source_assessments"]),
+        "revision_binding": revision_binding or {},
     }
     artifact["fingerprint"] = stable_fingerprint(artifact, length=64)
     return artifact
@@ -307,7 +323,18 @@ def valid_pass(*, blind_audit=None, planner_impact=None, implementation_impact=N
     audit = blind_audit or valid_blind_audit()
     planner_impact = valid_plan()["impact_closure"] if planner_impact is None else planner_impact
     implementation_impact = implementation_impact or implementation_impact_fixture(candidate_id=audit["candidate_id"])
+    planner_impact = copy.deepcopy(planner_impact)
+    from slivin_harness.source_records import source_ref
+    for group in ("changed_contracts", "in_scope_consumers", "not_affected_consumers", "related_out_of_scope"):
+        planner_impact[group] = [dict(copy.deepcopy(record["claim"]), source_ref=source_ref(record))
+            for record in implementation_impact["source_inventory"]["records"]
+            if record["author"] == "PLANNER" and record["group"] == group]
     sources = {"BLIND": audit["impact_analysis"], "PLANNER": planner_impact, "IMPLEMENTER": implementation_impact["post_patch_impact"]}
+    sources["IMPLEMENTER"] = copy.deepcopy(sources["IMPLEMENTER"])
+    promoted_ids = {row["source_ref"]["source_id"] for row in implementation_impact["source_inventory"]["transitions"]}
+    for origin in implementation_impact["source_inventory"]["records"]:
+        if origin["author"] != "PLANNER" and origin["source_id"] in promoted_ids:
+            sources["IMPLEMENTER"][origin["group"]].append(dict(copy.deepcopy(origin["claim"]), source_ref=source_ref(origin)))
 
     def disposition(status, paths, **reference):
         return dict(reference, disposition=status, reason="Independent repository inspection confirms this classification.", evidence_paths=list(paths), evidence=["The actual consumer and candidate behavior were inspected."], finding_ids=[])
@@ -324,16 +351,21 @@ def valid_pass(*, blind_audit=None, planner_impact=None, implementation_impact=N
             source = "IMPLEMENTER"
         challenge[group] = [dict(
             disposition(status, row["paths"], impact_id=row["impact_id"]),
-            matches=[{"source": source, "classification": "CHANGED_CONTRACT" if input_group == "changed_contracts" else "IN_SCOPE", "name": targets[0]["name"]}] if targets else [],
+            matches=[{"source": source, "classification": "CHANGED_CONTRACT" if input_group == "changed_contracts" else "IN_SCOPE", "reference": targets[0]["source_ref"]["source_id"], "source_revision": targets[0]["source_ref"]["source_revision"]}] if targets else [],
         ) for row in sources["BLIND"][input_group]]
-    challenge["planner_consumer_dispositions"] = [disposition("CONFIRMED", row["paths"], name=row["name"]) for row in planner_impact.get("in_scope_consumers", [])]
-    challenge["implementer_consumer_dispositions"] = [disposition("CONFIRMED", row["paths"], name=row["name"]) for row in sources["IMPLEMENTER"]["in_scope_consumers"] if row["source"] == "DISCOVERED"]
+    challenge["planner_consumer_dispositions"] = [disposition("CONFIRMED", row["paths"], reference=row["source_ref"]["source_id"], source_revision=row["source_ref"]["source_revision"]) for row in planner_impact.get("in_scope_consumers", [])]
+    challenge["implementer_consumer_dispositions"] = [disposition("CONFIRMED", row["paths"], reference=row["source_ref"]["source_id"], source_revision=row["source_ref"]["source_revision"]) for row in sources["IMPLEMENTER"]["in_scope_consumers"] if row["source"] == "DISCOVERED"]
     for group, input_group, status in (
         ("not_affected_dispositions", "not_affected_consumers", "CONFIRMED_NOT_AFFECTED"),
         ("related_follow_up_dispositions", "related_out_of_scope", "CONFIRMED_OUT_OF_SCOPE"),
     ):
-        challenge[group] = [disposition(status, row["paths"], source=source, reference=row["impact_id"] if source == "BLIND" else row["name"]) for source, ledger in sources.items() for row in ledger.get(input_group, [])]
+        challenge[group] = [disposition(status, row["paths"], source=source, reference=row["impact_id"] if source == "BLIND" else row["source_ref"]["source_id"], source_revision="" if source == "BLIND" else row["source_ref"]["source_revision"]) for source, ledger in sources.items() for row in ledger.get(input_group, [])]
     evidence_paths = sources["BLIND"]["search_evidence"][0]["evidence_paths"]
+    promotions = {row["source_ref"]["source_id"] for row in implementation_impact["source_inventory"]["transitions"]}
+    for group in ("not_affected_dispositions", "related_follow_up_dispositions"):
+        for row in challenge[group]:
+            if row["source"] != "BLIND" and row["reference"] in promotions:
+                row["disposition"] = "PROMOTED_IN_SCOPE"
     challenge["changed_path_dispositions"] = [disposition("UNDERSTOOD", evidence_paths, path=row["path"]) for row in sources["BLIND"]["changed_path_review"]]
     challenge["coverage_summary"] = "Independent contracts, readers, sibling classifications and all changed paths were compared with repository evidence."
     return {

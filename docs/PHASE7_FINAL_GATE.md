@@ -8,7 +8,7 @@ Phase 7 завершает согласованный Step 0–7 quality-core. �
 phase7-final-gate.v1
 patch-proof.v1
 final-acceptance.v3
-user-follow-up.v1
+user-follow-up.v2
 delivery-record.v2
 heldout-evidence.v2
 benchmark-isolation.v1
@@ -164,7 +164,7 @@ command diagnostics остаются private.
 
 Сразу после final Implementer/Evaluator loop Controller наблюдает current candidate,
 повторно валидирует implementation impact и, в FULL, blind audit/Evaluator PASS.
-До quality reconciliation, held-out и packaging он строит `user-follow-up.v1`:
+До quality reconciliation, held-out и packaging он строит `user-follow-up.v2`:
 
 ```text
 schema_version, status, task_id, mode, pipeline_profile

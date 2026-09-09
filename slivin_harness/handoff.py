@@ -1,6 +1,8 @@
 """Controller-owned delivery of current, repository-backed related findings."""
 from __future__ import annotations
 
+from slivin_harness.boundaries import boundary
+
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -10,7 +12,7 @@ from slivin_harness.implementer import validate_implementation_impact_closure
 from slivin_harness.protocol import plan_fingerprint, require_string_list, stable_fingerprint
 
 
-USER_FOLLOW_UP_VERSION = "user-follow-up.v1"
+USER_FOLLOW_UP_VERSION = "user-follow-up.v2"
 USER_FOLLOW_UP_ARTIFACT = "user_follow_up_report.json"
 
 
@@ -34,6 +36,7 @@ def _strings(value: object, field: str, *, preserve_spacing: bool = False) -> li
     return sorted(set(rows if preserve_spacing else normalized))
 
 
+@boundary("B12")
 def build_user_follow_up_report(
     *, task_id: str, mode: str, pipeline_profile: str,
     candidate_id: str, attempt_id: int, revision_snapshot: Mapping[str, Any],
@@ -68,10 +71,10 @@ def build_user_follow_up_report(
             implementation_impact_closure=implementation_impact_closure,
             owner_allowed_paths=owner_allowed_paths,
         )
-        ledgers = [("PLANNER", planner), *ledgers, ("BLIND_EVALUATOR", blind_audit["impact_analysis"])]
+        ledgers = [*ledgers, ("BLIND_EVALUATOR", blind_audit["impact_analysis"])]
         for row in evaluation["impact_challenge"]["related_follow_up_dispositions"]:
             source = "BLIND_EVALUATOR" if row["source"] == "BLIND" else row["source"]
-            reference = row["reference"] if source == "BLIND_EVALUATOR" else _name(row["reference"])
+            reference = row["reference"]
             dispositions[source, reference] = row["disposition"]
     elif blind_audit is not None or evaluation is not None:
         raise UserFollowUpError("FAST follow-up cannot claim independent Evaluator review")
@@ -103,6 +106,7 @@ def build_user_follow_up_report(
 
     merged: dict[str, dict[str, Any]] = {}
     review_status = "CONFIRMED_OUT_OF_SCOPE" if pipeline_profile == "FULL" else "DECLARED_OUT_OF_SCOPE_FAST"
+    origins = {row["source_id"]: row for row in implementation_impact_closure["source_inventory"]["records"]}
     for source, ledger in ledgers:
         for row in sorted(ledger["related_out_of_scope"], key=lambda item: (_name(item["name"]), stable_fingerprint(item, length=64))):
             title = _text(row["name"])
@@ -120,20 +124,30 @@ def build_user_follow_up_report(
             )))
             symbols = _strings(row["symbols"], "symbols")
             evidence = _strings(row["evidence"], "evidence")
-            reference = row["impact_id"] if source == "BLIND_EVALUATOR" else _name(title)
+            reference = row["impact_id"] if source == "BLIND_EVALUATOR" else row["source_ref"]["source_id"]
+            origin = origins.get(reference) if source != "BLIND_EVALUATOR" else None
             if pipeline_profile == "FULL" and dispositions.get((source, reference)) != "CONFIRMED_OUT_OF_SCOPE":
                 raise UserFollowUpError("Every FULL related finding requires independent CONFIRMED_OUT_OF_SCOPE")
+            if origin is not None and origin["author"] == "PLANNER" and pipeline_profile == "FULL" and dispositions.get(("PLANNER", reference)) != "CONFIRMED_OUT_OF_SCOPE":
+                raise UserFollowUpError("The prior source classification also requires independent confirmation")
             identity = dict(relation=relation, reason=reason, suggested_follow_up=next_task, paths=paths, symbols=symbols)
             identity_fingerprint = stable_fingerprint(identity, length=64)
-            provenance = dict(source=source, reference=reference, disposition=review_status)
+            provenance = dict(source=source, reference=reference, disposition=review_status,
+                              source_revision=origin["source_revision"] if origin else "")
             if identity_fingerprint not in merged:
                 merged[identity_fingerprint] = dict(
                     follow_up_id=f"FOLLOWUP-{identity_fingerprint[:16]}", title=title,
                     relation=relation, reason_out_of_scope=reason, suggested_next_task=next_task,
-                    paths=paths, symbols=symbols, evidence=[], review_status=review_status, provenance=[],
+                    paths=paths, symbols=symbols, evidence=[], source_evidence=[], review_status=review_status, provenance=[],
                 )
             entry = merged[identity_fingerprint]
             entry["evidence"] = sorted(set(entry["evidence"]) | set(evidence))
+            if origin is not None:
+                entry["source_evidence"] = sorted(set(entry["source_evidence"]) | set(origin["claim"].get("evidence", [])))
+                original_provenance = dict(source=origin["author"], reference=reference,
+                                           disposition="SOURCE_CLAIM", source_revision=origin["source_revision"])
+                if original_provenance not in entry["provenance"]:
+                    entry["provenance"].append(original_provenance)
             if provenance not in entry["provenance"]:
                 entry["provenance"].append(provenance)
     follow_ups = [merged[key] for key in sorted(merged)]

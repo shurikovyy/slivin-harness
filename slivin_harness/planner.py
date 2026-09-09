@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from slivin_harness.boundaries import boundary
+
 import json
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -169,20 +171,6 @@ PLANNER_SCHEMA: dict[str, Any] = {
             },
             "required": ["technical_acceptance", "derived_preservation"],
         },
-        "affected_consumers": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "name": {"type": "string"},
-                    "why_affected": {"type": "string"},
-                    "must_verify": {"type": "string"},
-                    "required_proof": PROOF_TARGET_SCHEMA,
-                },
-                "required": ["name", "why_affected", "must_verify", "required_proof"],
-            },
-        },
         "impact_closure": IMPACT_CLOSURE_SCHEMA,
         "state_model": {
             "type": "object",
@@ -259,7 +247,7 @@ PLANNER_SCHEMA: dict[str, Any] = {
     "required": [
         "protocol_version", "status", "summary", "task_contract_alignment",
         "characterization", "diagnosis", "assumptions", "technical_contract",
-        "affected_consumers", "impact_closure", "state_model", "risks", "evidence_plan",
+        "impact_closure", "state_model", "risks", "evidence_plan",
         "documentation", "owner_boundary_assessment", "unknowns",
     ],
 }
@@ -292,8 +280,7 @@ Impact discovery раскрывает технические следствия 
 Каждый changed_contract и consumer получает существующие repo-relative file paths и
 concrete symbol/state/API/field names (отдельные identifiers, не общие описания).
 Для IN_SCOPE добавь why_affected, required_behavior, evidence и typed required_proof.
-В affected_consumers повтори каждый IN_SCOPE ровно один раз с тем же name, why_affected,
-must_verify=required_behavior и тем же proof claim/level/capabilities. Других consumers там нет.
+Controller компилирует каждый IN_SCOPE прямо из этой записи; второй consumer ledger отсутствует.
 Behaviorally distinct consumers не схлопывай в одну строку или «shared consumers» ради краткости.
 search_evidence фиксирует target, method, evidence_paths и conclusion реального impact sweep;
 конкретная shell-команда не обязательна. closure_summary объясняет полноту исследования,
@@ -310,7 +297,7 @@ code/config или escaping path и смешанная prose/code boundary за�
 Задача не должна менять behavioral/semantic/state contract.
 Нужно конкретное closure_summary с указанием evidence path и
 объяснением отсутствия behavioral impact. Проверь, что этот текст не исполняется и не служит
-config/API/state contract. Все четыре contract/consumer arrays, affected_consumers, risks,
+config/API/state contract. Все четыре contract/consumer arrays, risks,
 State Model collections и consumer/boundary proofs пусты; state_model.applicable=false.
 Proofs только LOCAL_DETERMINISTIC с capabilities из GIT/DOCS_SYNC или без capabilities.
 Не фабрикуй consumers для тривиальной задачи. Малый code change с изменением поведения
@@ -355,10 +342,10 @@ unknown вместо READY с невыполнимым proof.
 
 
 def planner_required_capabilities(plan: Mapping[str, Any]) -> set[str]:
-    """Collect capabilities; READY closure proofs exactly mirror affected_consumers."""
+    """Collect capabilities directly from the single authoritative consumer ledger."""
 
     proofs: list[Mapping[str, Any]] = []
-    for item in plan.get("affected_consumers", []):
+    for item in plan.get("impact_closure", {}).get("in_scope_consumers", []):
         if isinstance(item, Mapping) and isinstance(item.get("required_proof"), Mapping):
             proofs.append(item["required_proof"])
     state = plan.get("state_model")
@@ -584,7 +571,7 @@ def _validate_impact_closure(
         state = plan["state_model"]
         behavioral = any(closure[group] for group in (
             "changed_contracts", "in_scope_consumers", "not_affected_consumers", "related_out_of_scope",
-        )) or bool(plan["affected_consumers"] or plan["risks"] or state["applicable"])
+        )) or bool(plan["risks"] or state["applicable"])
         behavioral = behavioral or any(state[key] for key in ("representations", "authority", "lifecycle", "boundaries"))
         behavioral = behavioral or bool(plan["evidence_plan"]["consumers"] or plan["evidence_plan"]["boundaries"])
         proofs = [state["required_proof"], plan["documentation"]["required_proof"]]
@@ -608,29 +595,9 @@ def _validate_impact_closure(
     if not closure["changed_contracts"]:
         _impact_error("IMPACT_CONTRACTS_MISSING", field=f"{field}.changed_contracts", message="Applicable READY requires changed semantic/state contracts", actual=[])
 
-    affected: dict[str, dict[str, Any]] = {}
-    for index, item in enumerate(plan["affected_consumers"]):
-        name = _impact_text(item["name"], field=f"affected_consumers[{index}].name").casefold()
-        if name in affected:
-            _impact_error("IMPACT_DUPLICATE_CONSUMER", field="affected_consumers", message="Affected consumer names must be unique", actual=name)
-        affected[name] = item
-    in_scope = {_impact_text(item["name"], field="in_scope_consumers.name").casefold(): item for item in closure["in_scope_consumers"]}
-    if affected.keys() != in_scope.keys():
-        _impact_error("IMPACT_CONSUMER_MISMATCH", field="affected_consumers", message="IN_SCOPE and affected_consumers must correspond one-to-one", actual={"affected": sorted(affected), "in_scope": sorted(in_scope)})
-    for name, consumer in in_scope.items():
-        target = affected[name]
-        for source_key, target_key in (("why_affected", "why_affected"), ("required_behavior", "must_verify")):
-            if _impact_text(consumer[source_key], field=source_key) != _impact_text(target[target_key], field=target_key):
-                _impact_error("IMPACT_BEHAVIOR_MISMATCH", field=f"affected_consumers.{name}.{target_key}", message="Affected consumer must retain the IN_SCOPE reason and required behavior", actual=target)
-        source_proof, target_proof = consumer["required_proof"], target["required_proof"]
-        if (
-            _impact_text(source_proof["claim"], field="required_proof.claim") != _impact_text(target_proof["claim"], field="required_proof.claim")
-            or source_proof["level"] != target_proof["level"]
-            or set(source_proof["capabilities"]) != set(target_proof["capabilities"])
-        ):
-            _impact_error("IMPACT_PROOF_MISMATCH", field=f"affected_consumers.{name}.required_proof", message="IN_SCOPE proof claim, level and capabilities must match affected consumer proof", actual=target_proof)
 
 
+@boundary("B03")
 def validate_plan_artifact(
     plan: dict[str, Any], *, workspace: Path, task_contract: dict[str, Any],
     owner_allowed_paths: Sequence[str] = (),
@@ -693,14 +660,6 @@ def validate_plan_artifact(
     ensure_exact_keys(technical, allowed={"technical_acceptance", "derived_preservation"}, required={"technical_acceptance", "derived_preservation"}, field="technical_contract")
     require_string_list(technical["technical_acceptance"], field="technical_contract.technical_acceptance")
     require_string_list(technical["derived_preservation"], field="technical_contract.derived_preservation")
-
-    require_type(plan["affected_consumers"], list, field="affected_consumers")
-    for index, item in enumerate(plan["affected_consumers"]):
-        require_type(item, dict, field=f"affected_consumers[{index}]")
-        ensure_exact_keys(item, allowed={"name", "why_affected", "must_verify", "required_proof"}, required={"name", "why_affected", "must_verify", "required_proof"}, field=f"affected_consumers[{index}]")
-        for key in ("name", "why_affected", "must_verify"):
-            require_type(item[key], str, field=f"affected_consumers[{index}].{key}")
-        validate_proof_target(item["required_proof"], field=f"affected_consumers[{index}].required_proof")
 
     state = plan["state_model"]
     require_type(state, dict, field="state_model")
@@ -788,6 +747,7 @@ def validate_plan_artifact(
 
 
 
+@boundary("B03")
 def run_planner(
     codex: CodexAppServer,
     *,
@@ -838,7 +798,7 @@ MANIFEST_REPAIR_EVIDENCE:
 
 {replan_context}
 
-Исследуй текущий repository независимо и верни planner.v5 artifact.
+Исследуй текущий repository независимо и верни planner.v6 artifact.
 """.strip()
     raw = codex.run_turn(
         thread_id=thread_id,
@@ -868,8 +828,8 @@ CAPABILITY FEASIBILITY CORRECTION
 Controller-authoritative available capabilities:
 {json.dumps(sorted(set(available_verification_capabilities)), ensure_ascii=False)}
 
-Верни полный planner.v5 artifact. Сохрани product claims и impact closure, синхронизируй
-required_proof в IN_SCOPE и affected_consumers и выбери честный конкретный
+Верни полный planner.v6 artifact. Сохрани product claims и impact closure, синхронизируй
+required_proof в IN_SCOPE и выбери честный конкретный
 proof route только из available capabilities. Не заменяй недоступный executor фиктивным.
 Если без недоступной capability обязательный proof действительно невозможен, верни BLOCKED
 с конкретным BLOCKING unknown. Это единственный corrective turn.

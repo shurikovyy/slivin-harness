@@ -96,7 +96,7 @@ shell-команда и grep не обязательны. `closure_summary` об
 ## Planner obligations
 
 Planner работает read-only относительно candidate. Он сверяет RAW USER REQUEST
-с User Task Contract, исследует текущий repository и возвращает `planner.v5`.
+с User Task Contract, исследует текущий repository и возвращает `planner.v6`.
 `READY` требует обязательный typed `impact_closure`:
 
 | Поле | Содержание |
@@ -121,13 +121,10 @@ evidence. Он проверяет все path-bearing поля: safe repo-relati
 `before` и `after` должны различаться. Consumer names уникальны, классификации
 не пересекаются по имени.
 
-IN_SCOPE ↔ `affected_consumers` — взаимно однозначное соответствие по имени
-(с нормализацией whitespace и регистра). `why_affected` и
-`required_behavior` ↔ `must_verify` совпадают после нормализации whitespace.
-Proof claim совпадает после той же нормализации, level совпадает точно,
-capabilities сравниваются как множество. Это намеренно детерминированное
-соответствие вместо предположения о сходстве двух разных формулировок.
-Compiler сохраняет каждую строку `affected_consumers`; ни один IN_SCOPE consumer
+В `planner.v6` единственный consumer ledger — `impact_closure.in_scope_consumers`.
+Controller непосредственно компилирует его claims и proof, сохраняя immutable
+origin в `impact-sources.v1`. Второй `affected_consumers` в Planner wire запрещён.
+Compiler сохраняет каждую строку IN_SCOPE; ни один consumer
 не может быть потерян до компиляции. Число consumers не ограничено искусственным
 порогом компактности. NOT_AFFECTED и RELATED_OUT_OF_SCOPE не компилируются в
 obligations. Follow-up findings сохраняются в полном Planner artifact и входят
@@ -149,7 +146,7 @@ authority. Даже genuine prose task без owner boundary не может п�
 отсутствия behavioral impact. Механический минимум summary — хотя бы
 шесть слов объяснения помимо path. Planner обязан проверить, что текст не служит
 исполняемым/config/API/state contract; расширение файла само по себе этого не доказывает.
-Все четыре contract/consumer arrays, `affected_consumers`, risks, State Model
+Все четыре contract/consumer arrays, risks, State Model
 collections и consumer/boundary proof arrays пусты; state model неприменим.
 Proofs только `LOCAL_DETERMINISTIC` с `GIT`/`DOCS_SYNC` либо без capabilities.
 Поведенческий code change требует `applicable=true`, даже если patch очень мал.
@@ -192,7 +189,7 @@ Implementation Contract остаётся open-world: найденные material
 добавляются через существующий Controller-owned expansion, а не теряются.
 Technical evidence не создаёт новый explicit user intent.
 
-`implementer.v5` требует `terminal_reason_kind` с точным соответствием status:
+`implementer.v6` требует `terminal_reason_kind` с точным соответствием status:
 
 | Status | terminal_reason_kind |
 | --- | --- |
@@ -210,10 +207,13 @@ preservation выполненным без evidence или возвращать 
 `INFRASTRUCTURE_BLOCKED` означает недоступную обязательную capability/операцию/system,
 которую autonomous repair/replan не может восстановить.
 
-Controller использует существующий clean semantic reset → fresh Planner → новый
-Contract/Verification Plan → fresh Implementer. Planner получает только terminal
-reason kind/reason/evidence, перепроверяет их на baseline и сохраняет user product intent.
-Rejected patch и остальной Implementer report не передаются как solution hint.
+Для `PROOF_MODEL_DIVERGENCE` Controller сохраняет candidate и вызывает независимый
+read-only Planner с `proof-route-review.v1`. READY означает подтверждение прежней
+product model. Planner возвращает только proof changes по item IDs; Controller
+сохраняет исходные requirements, source records и checks, добавляет proof revision,
+инвалидирует downstream evidence и продолжает тот же Implementer thread с новым
+self-verify. `TECHNICAL_MODEL_DIVERGENCE` использует отдельный clean semantic reset.
+Неопределённый proof review сохраняет candidate и даёт controlled stop.
 Owner-configured checks остаются обязательными даже при baseline-red. IN_SCOPE
 regressions и semantic preservation не становятся advisory. Независимые baseline defects
 сохраняются как RELATED_OUT_OF_SCOPE в текущей final model и доставляются через user handoff.
@@ -225,27 +225,31 @@ Exploratory broad suites, baseline-red unrelated tests и RELATED_OUT_OF_SCOPE d
 требуют trusted verification.
 
 Planner impact closure is a hypothesis to verify against the actual patch.
-В `implementer.v5` COMPLETE требует обязательный `post_patch_impact`: новый sweep
+В `implementer.v6` COMPLETE требует обязательный `post_patch_impact`: новый sweep
 фактического candidate/diff после реализации и до final self-verification.
 Planner closure задаёт starting technical model, но не границу исследования.
 Implementer проверяет реально изменённые contracts/shared symbols/state/API,
 их writers/readers/decision points, sibling consumers и новые material risks.
 
-Changed contracts должны совпадать с Planner по normalized name и before/after
-semantics. Все Planner IN_SCOPE consumers сохраняются с `source=PLANNER`, прежними
-why_affected/required_behavior и proof claim/level/capabilities. Paths/symbols/evidence
-описывают final workspace. Изменение или добавление semantic contract, неполный
-root cause либо неверное required behavior требуют `REPLAN_REQUIRED` с evidence.
+Controller переносит Planner claims без изменений и выдаёт `source_id`/`source_revision`.
+Implementer возвращает для каждого origin явную `source_assessments` запись:
+CONFIRM, CHALLENGE, PROMOTE либо INSUFFICIENT_EVIDENCE, собственное observation и
+paths/symbols/evidence текущего workspace. Отсутствие assessment не означает CONFIRM.
+Unknown/duplicate/stale references отклоняются. CHALLENGE и INSUFFICIENT_EVIDENCE
+несовместимы с COMPLETE. Новая product model требует `REPLAN_REQUIRED` с evidence.
 Controller использует общий semantic reset → fresh Planner → новый Contract → fresh
 Implementer; такое расхождение не устраняется молчаливым редактированием Contract.
 
-Каждый Planner NOT_AFFECTED consumer либо подтверждается post-patch evidence,
-либо становится DISCOVERED IN_SCOPE. Новый consumer и каждый `new_risks` entry
-соответствуют один-к-одному `discovered_obligations` consumer/risk по name,
-reason, required behavior/failure mode, proof и evidence. Controller расширяет
+NOT_AFFECTED и RELATED_OUT_OF_SCOPE origin можно явно PROMOTE в новую IN_SCOPE
+observation. Controller сохраняет исходную запись и transition к target reference;
+последующий report не может молча вернуть прежнюю outside classification.
+Новые observations имеют уникальный `observation_id` и передаются один раз.
+`discovered_obligations` отсутствует в wire: Controller сам выводит obligations из
+новых observations, включая исходные Evaluator findings до continuation, и расширяет
 Contract и Verification Plan, инвалидирует self-verification и продолжает тот же
-Implementer thread. COMPLETE закрывает все новые items; повторные discoveries
-idempotent и сохраняются в последующих reports. RELATED_OUT_OF_SCOPE findings,
+Implementer thread. COMPLETE закрывает все новые items; повторное событие с тем же
+ID/payload idempotent, изменённый payload с тем же ID отвергается. Все origins
+остаются явно assessed в последующих reports. RELATED_OUT_OF_SCOPE findings,
 включая Planner relation/reason/evidence/follow-up, сохраняются отдельно и не
 становятся obligations.
 
@@ -263,7 +267,7 @@ boundary. Behavioral/state/runtime obligations не допускаются. Non-
 reports требуют reason/evidence, но могут оставлять impact arrays пустыми/частичными.
 
 После validated final COMPLETE Controller сохраняет private authoritative
-`implementation_impact_closure_NN.json` (`implementation-impact-closure.v1`),
+`implementation_impact_closure_NN.json` (`implementation-impact-closure.v2`),
 связывающий candidate_id, Planner/Contract fingerprints, exact changed paths,
 post_patch_impact и текущий revision binding стабильным fingerprint. Artifact
 входит в Implementer stage evidence. Изменение candidate/Plan/Contract/revisions
@@ -294,7 +298,7 @@ Evaluator independently reconstructs the impact model from the actual candidate
 before seeing either closure. Evaluator PASS requires evidence-backed challenge of
 both prior closures.
 
-В Phase A `evaluator.v6` самостоятельно исследует changed semantic/state contracts,
+В Phase A `evaluator.v7` самостоятельно исследует changed semantic/state contracts,
 shared symbols/API, readers/writers/decision points и sibling consumers. Changed paths
 служат seed для outward sweep, а не границей review. Каждый changed path рассматривается
 ровно один раз, включая deletion. Остальные evidence paths должны быть существующими
@@ -336,7 +340,7 @@ User is not responsible for reading internal artifacts to discover follow-up wor
 Пользователь получает описание проблемы, её связь с задачей, причину исключения из
 текущего scope, repository paths/symbols/evidence и конкретную следующую задачу.
 
-Controller создаёт `user-follow-up.v1` в private authoritative copy и public immutable
+Controller создаёт `user-follow-up.v2` в private authoritative copy и public immutable
 `user_follow_up_report.json` после final agent loop и до held-out. Console всегда
 показывает путь и count, в том числе 0, а для каждой finding — title и next task.
 FULL использует только current Planner/Implementer/blind findings с независимой

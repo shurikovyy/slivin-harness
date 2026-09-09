@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class Phase5ExecutableIntegrationTests(unittest.TestCase):
     def test_phase5_contract_versions_remain_available(self) -> None:
-        self.assertEqual(IMPLEMENTER_PROTOCOL_VERSION, "implementer.v5")
+        self.assertEqual(IMPLEMENTER_PROTOCOL_VERSION, "implementer.v6")
         self.assertEqual(PHASE5_VERSION, "phase5-contract-runtime.v1")
         self.assertEqual(PROJECT_RUNTIME_VERSION, "project-runtime.v1")
 

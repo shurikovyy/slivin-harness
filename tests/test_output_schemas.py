@@ -24,7 +24,7 @@ def strict_object(**properties: dict) -> dict:
 
 class StrictOutputSchemaTests(unittest.TestCase):
     def test_implementer_v5_requires_strict_post_patch_impact(self) -> None:
-        self.assertEqual(IMPLEMENTER_REPORT_SCHEMA["properties"]["protocol_version"]["enum"], ["implementer.v5"])
+        self.assertEqual(IMPLEMENTER_REPORT_SCHEMA["properties"]["protocol_version"]["enum"], ["implementer.v6"])
         self.assertIn("post_patch_impact", IMPLEMENTER_REPORT_SCHEMA["required"])
         self.assertIn("terminal_reason_kind", IMPLEMENTER_REPORT_SCHEMA["required"])
         self.assertEqual(set(IMPLEMENTER_REPORT_SCHEMA["properties"]["terminal_reason_kind"]["enum"]), {
@@ -34,15 +34,16 @@ class StrictOutputSchemaTests(unittest.TestCase):
         closure = IMPLEMENTER_REPORT_SCHEMA["properties"]["post_patch_impact"]
         self.assertEqual(set(closure["required"]), {
             "applicable", "changed_contracts", "in_scope_consumers", "not_affected_consumers",
-            "related_out_of_scope", "new_risks", "changed_path_review", "search_evidence", "closure_summary",
+            "related_out_of_scope", "new_risks", "changed_path_review", "search_evidence", "closure_summary", "source_assessments",
         })
         validate_strict_output_schema(IMPLEMENTER_REPORT_SCHEMA)
         consumers = closure["properties"]["in_scope_consumers"]["items"]
-        self.assertEqual(consumers["properties"]["source"]["enum"], ["PLANNER", "DISCOVERED"])
+        self.assertNotIn("source", consumers["properties"])
+        self.assertIn("observation_id", consumers["required"])
         self.assertIn("required_proof", closure["properties"]["new_risks"]["items"]["required"])
 
     def test_planner_v5_requires_strict_typed_impact_closure(self) -> None:
-        self.assertEqual(PLANNER_SCHEMA["properties"]["protocol_version"]["enum"], ["planner.v5"])
+        self.assertEqual(PLANNER_SCHEMA["properties"]["protocol_version"]["enum"], ["planner.v6"])
         self.assertIn("impact_closure", PLANNER_SCHEMA["required"])
         closure = PLANNER_SCHEMA["properties"]["impact_closure"]
         self.assertEqual(set(closure["required"]), {
@@ -52,7 +53,7 @@ class StrictOutputSchemaTests(unittest.TestCase):
         validate_strict_output_schema(PLANNER_SCHEMA)
         consumer = closure["properties"]["in_scope_consumers"]["items"]
         self.assertIn("required_proof", consumer["required"])
-        self.assertNotIn("maxItems", PLANNER_SCHEMA["properties"]["affected_consumers"])
+        self.assertNotIn("affected_consumers", PLANNER_SCHEMA["properties"])
 
     def test_every_production_app_server_output_schema_is_strict(self) -> None:
         schemas = production_output_schemas()

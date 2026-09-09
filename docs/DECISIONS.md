@@ -61,6 +61,7 @@
 | [D-024](#d-024) | Существенное решение включает rationale и rejected alternatives | IMPLEMENTED в 0.8.0a29 как documentation policy; links и structural check |
 | [D-025](#d-025) | Framework-aware trusted runner и replay | IMPLEMENTED в 0.8.0a30 |
 | [D-026](#d-026) | Bounded report-only evidence correction | IMPLEMENTED в 0.8.0a30 |
+| [D-027](#d-027) | Immutable origins, recovery с progress и обязательная квалификация сборки | IMPLEMENTED в 0.8.0a31; qualification определяется отдельным release record |
 
 <a id="d-001"></a>
 
@@ -138,6 +139,8 @@
 
 ## D-005. Implementer пересматривает impact по фактическому patch
 
+> Часть текущего механизма заменена D-027 в 0.8.0a31; исходная запись ниже сохранена как историческое основание.
+
 **Статус:** ACCEPTED. **Реализация:** IMPLEMENTED.
 
 **Проблема и основание.** План — гипотеза до реализации; реальное изменение может затронуть новых consumers или опровергнуть NOT_AFFECTED. Добровольного `discovered_obligations` недостаточно.
@@ -173,6 +176,8 @@
 <a id="d-007"></a>
 
 ## D-007. Связанные out-of-scope находки обязательно получает пользователь
+
+> Часть текущего механизма заменена D-027 в 0.8.0a31; исходная запись ниже сохранена как историческое основание.
 
 **Статус:** ACCEPTED. **Реализация:** IMPLEMENTED.
 
@@ -354,6 +359,8 @@
 
 ## D-017. Не путать product requirement, обязательный запуск проверки и выбранный proof route
 
+> Часть текущего механизма заменена D-027 в 0.8.0a31; исходная запись ниже сохранена как историческое основание.
+
 **Статус:** ACCEPTED. **Реализация:** IMPLEMENTED.
 
 **Проблема и основание.** Широкий suite с baseline failures был превращён в препятствие завершению. Первоначальный вывод, будто suite придумал только Planner, позже уточнён: repository instructions действительно требовали соответствующий full suite.
@@ -509,6 +516,8 @@ peer-canary дополнен проверкой активных granted roots �
 
 ## D-020. Не терять активную работу из-за транспорта, timeout или кодировки
 
+> Часть текущего механизма заменена D-027 в 0.8.0a31; исходная запись ниже сохранена как историческое основание.
+
 **Статус:** ACCEPTED. **Реализация:** IMPLEMENTED.
 
 **Проблема и основание.** Исторические прогоны выявляли premature abort на retryable stream event, фиксированном wall-clock timeout и Unicode output в Windows console.
@@ -659,6 +668,8 @@ Controller и reconstruction; combined workflow использует agent doubl
 
 ## D-026. Неполное локальное evidence отчёта исправляется без новой реализации продукта
 
+> Часть текущего механизма заменена D-027 в 0.8.0a31; исходная запись ниже сохранена как историческое основание.
+
 **Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в 0.8.0a30.
 
 **Проблема и основание.** На исходном `04d7359` populated related finding с `symbols=[]`
@@ -697,6 +708,90 @@ agent replies — doubles, subprocess checks — реальные. Это не �
 **Пересмотр.** Расширять allowlist только для доказанной локальной ошибки с сохранением
 identity/semantic fields, guards и конечного retry budget. Новая technical model требует
 существующего replan, а не косметического переписывания claims.
+
+<a id="d-027"></a>
+
+## D-027. Immutable origins и квалификация safety вместе с positive progress
+
+**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED; факт qualification конкретного SHA
+определяется отдельным `qualification.json`, а не этой записью.
+**Дата регистрации:** 2026-09-10. **Заменяет:** части D-005/D-007/D-017/D-020/D-026,
+перечисленные ниже; прежние решения и причины сохранены как история.
+
+**Проблема и проверенные основания.** Пакет владельца
+`HARNESS_SYSTEMIC_RELIABILITY_PACKAGE/CODEX_SYSTEM_STABILIZATION.md` изменил критерий
+приёмки с локальных fixes на qualified build. Native baseline probe показал, что
+first-error recovery исчерпывает два исправления при 3/5 независимых errors; исправление
+трёх сразу отклонялось как CHANGED_CLAIMS. Cross-role копии prose создавали новые
+ошибки identity. Independent review выявил тупики legal promotion, timeout до raw и
+proof→technical transition; defect probes также показали ложную qualification по
+marker files, неполным stage evidence и infrastructure-only mutation ERROR.
+
+**Решение.** Controller владеет immutable original claims и стабильными ID/revision.
+Роли передают собственные explicit assessments и новые observations, не переписывают
+prior prose. COMPLETE требует каждого current source; CHALLENGE/missing не превращается
+в CONFIRM. Promotion сохраняет original outside claim и текущий IN_SCOPE target.
+Evaluator A остаётся blind и durable до B; B оценивает current source refs и promotion.
+Handoff компилируется из origins/current dispositions с отдельным original provenance.
+
+Report correction собирает batch безопасных independent diagnostics, сохраняет
+candidate/claims и имеет два corrective turns/no-progress guard. До validation
+сохраняются private candidate/evidence checkpoints. Timeout/unknown transport без raw
+не позволяет назвать baseline текущим candidate. Bounded atomic persistence допускает
+только Windows transient sharing/access failures и сверяет ambiguous completed write.
+Изменённый typed check/config допускает bounded rebind на BLOCKED до current verification.
+
+Proof-only revision сохраняет candidate и immutable requirements. Независимый Planner
+возвращает `proof-route-review.v1`; Controller применяет только effective proof routes,
+инвалидирует downstream evidence и сохраняет owner gates. Лишь независимо установленная
+technical model divergence направляется в существующий semantic reset. Review и reset
+используют один manifest replan cycle; BLOCKED не разрешает reset.
+
+Обязательный `release_check.py --profile windows-local` проверяет frozen clean SHA,
+все boundary families, stateful/fault scenarios, семь mutation controls, actual mixed
+Node/Jest, native scoped roles и два generic FULL task плюс повтор первого до final
+acceptance/reconstruction/safe delivery. Actual delivered candidate проверяется frozen
+public assertions и полными current artifacts. Mandatory NOT_RUN/SKIP/FAIL запрещает
+qualification; controlled stop корректной задачи считается FAIL.
+
+**Почему.** Это сохраняет независимость ролей, устраняя зависимость identity от точного
+копирования текста. Batch correction восстанавливает корректный результат без изменения
+claims. Разделение proof/product routes избегает потери пригодного candidate и сохраняет
+проверку affected behavior. Проверяемая boundary map защищает обязательность case families,
+а независимый replay результата обнаруживает false-positive release summaries.
+
+**Отвергнутые варианты.** REJECTED: увеличение retries вместо batch diagnostics;
+неявное CONFIRM пропущенных records; нормализация текста, маскирующая semantic drift;
+удаление source findings или owner checks для PASS; always-stop validator; blanket reset
+candidate из-за proof route; Controller smoke вместо native role/real-model acceptance;
+подсчёт любого ERROR как killed mutant; benchmark coaching/reference fixes. DEFERRED:
+cross-process resume и универсальная crash recovery — checkpoint не утверждает их наличие.
+
+**Последствия и цена.** Wire versions несовместимы с предыдущими role artifacts:
+planner.v6, implementer.v6, implementation-contract.v4, implementation-impact-closure.v2,
+evaluator.v7, user-follow-up.v2; workflow.v7 содержит новую map. Старые runs читаются
+исторически и не получают автоматического upgrade/reuse. Дополнительные private bytes,
+Controller validation и real-model qualification увеличивают стоимость. Product intent,
+все IN_SCOPE obligations, owner checks, hidden isolation, runtime/Git/candidate integrity,
+scoped permissions и reconstructed assertions сохраняются.
+
+**Реализация / evidence.** `source_records.py`, `report_recovery.py`, `checkpoint.py`,
+`proof_routes.py`, production boundary hooks и `boundary_contracts.json`; mandatory
+tests связаны в map. [SYSTEMIC_RELIABILITY](SYSTEMIC_RELIABILITY.md) задаёт конкретный
+release workflow, fixture/budget inventory и уровни доказательств. Developer/reviewer
+probes сохранены отдельно; они не приравниваются к квалификации неизменного build.
+
+**Superseded boundaries.** D-005/D-007: cross-role копирование текста и DTO уступают
+Controller origins; обязательная полнота/follow-ups сохранены. D-017: proof-only reset
+заменён сохранением candidate и независимым review; настоящий technical reset сохранён.
+D-020: terminal inventory/checkpoints и bounded idempotent persistence дополняют
+transport distinction. D-026: first-error/one-field correction заменены batch диагностикой;
+bounded retries, semantic allowlist и guards сохранены.
+
+**Пересмотр.** Новое изменение ownership/recovery допустимо только с проверенным
+counterexample, сохранением positive и adversarial cases, обновлением boundary map и
+повторной qualification нового SHA. Конечные generic runs не доказывают универсальную
+полноту поиска или успешность отдельного исторического product trial.
 
 ## Шаблон новой записи
 

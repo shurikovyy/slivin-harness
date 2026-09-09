@@ -113,12 +113,12 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
 
     def build_impact(self):
         report = attach_post_patch_impact({
-            "protocol_version": "implementer.v5", "status": "COMPLETE", "summary": "Entry reads corrected.",
+            "protocol_version": "implementer.v6", "status": "COMPLETE", "summary": "Entry reads corrected.",
             "reason": "", "evidence": [], "blockers": [], "additional_check_paths": [], "registered_checks": [],
             "discovered_obligations": [],
             "contract_evidence": [{"item_id": row["id"], "status": "VERIFIED", "evidence": ["The configured regression passed."]} for row in self.contract["items"]],
             "self_verification": {"status": "PASS", "command": "self", "evidence": ["SELF_VERIFY_PASS"], "receipt_id": ""},
-        }, plan=self.plan, changed_paths=self.changed_paths)
+        }, plan=self.plan, changed_paths=self.changed_paths, contract=self.contract)
         return build_implementation_impact_closure(
             report, workspace=self.workspace, changed_paths=self.changed_paths, candidate_id=self.candidate_id,
             plan=self.plan, contract=self.contract, self_verification_ok=True, revision_binding=self.binding,
@@ -151,9 +151,11 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
             finding["category"] = "MODEL"
         self.verdict.update(status="REPLAN_REQUIRED" if group == "blind_contract_dispositions" else "FINDINGS", findings=[finding], reason="The independently inspected candidate has a material impact gap.")
 
-    def run_phases(self, *, observer=None, persist=None, impact=None):
+    def run_phases(self, *, observer=None, persist=None, impact=None, responses=None, on_raw_report=None, run_name="run"):
         server = ScriptedEvaluator(self.audit, self.verdict, observer)
-        plane = ControllerPlane(self.root / "run")
+        if responses is not None:
+            server.responses = responses
+        plane = ControllerPlane(self.root / run_name)
 
         def persist_blind(audit):
             plane.write_json_once("blind.json", audit, visibility=ArtifactVisibility.PRIVATE)
@@ -171,8 +173,95 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
             checks_evidence={"controller_marker": "CHECKS_SECRET"}, runtime_evidence={"controller_marker": "RUNTIME_SECRET"},
             plan=self.plan, implementation_impact_closure=impact or self.impact, revision_binding=self.binding,
             on_blind_audit=persist or persist_blind, on_phase_complete=guard,
+            on_raw_report=on_raw_report,
         )
         return server, plane, result
+
+    def test_phase_a_batch_correction_never_discloses_phase_b_early(self):
+        for index in range(2, 26):
+            self.audit["impact_analysis"]["related_out_of_scope"].append({
+                "impact_id": f"RELATED-{index}", "name": f"Navigation finding {index}",
+                "paths": ["README.md"], "symbols": ["README.md#notes"],
+                "relation": "Repository prose navigation", "reason": "Navigation has no effect on entry reads.",
+                "evidence": ["README.md heading inspected independently."],
+                "suggested_follow_up": f"Review navigation entry {index}.",
+            })
+        self.verdict = self.pass_verdict()
+        invalid = copy.deepcopy(self.audit)
+        for row in invalid["impact_analysis"]["related_out_of_scope"]:
+            row["symbols"] = []
+        raw_records = []
+        def observe(turn, options):
+            if turn <= 2:
+                for marker in ("CONTRACT_CLOSURE_SECRET", "CHECKS_SECRET", self.impact["fingerprint"]):
+                    self.assertNotIn(marker, options["prompt"])
+                self.assertFalse((self.root / "run/controller_private/blind.json").exists())
+            if turn == 2:
+                self.assertEqual(len(json.loads(options["prompt"].splitlines()[-1])["allowed_fields"]), 25)
+            if turn == 3:
+                self.assertTrue((self.root / "run/controller_private/blind.json").exists())
+        server, _, (_, verdict) = self.run_phases(
+            responses=[invalid, self.audit, self.verdict], observer=observe,
+            on_raw_report=lambda phase, attempt, raw: raw_records.append((phase, attempt, raw)),
+        )
+        self.assertEqual(len(server.prompts), 3)
+        self.assertEqual(verdict["status"], "PASS")
+        self.assertEqual([(phase, attempt) for phase, attempt, _ in raw_records], [("PHASE_A", 0), ("PHASE_A", 1), ("PHASE_B", 0)])
+
+    def test_phase_b_batch_repair_no_progress_and_candidate_write_guards(self):
+        invalid = copy.deepcopy(self.verdict)
+        rows = invalid['impact_challenge']['related_follow_up_dispositions']
+        self.assertGreaterEqual(len(rows), 3)
+        for row in rows:
+            row['evidence_paths'] = []
+        server, _, (_, verdict) = self.run_phases(responses=[self.audit, invalid, self.verdict])
+        self.assertEqual(verdict['status'], 'PASS')
+        self.assertEqual(len(server.prompts), 3)
+        with self.assertRaisesRegex(RuntimeError, 'NO_PROGRESS'):
+            self.run_phases(responses=[self.audit, invalid, invalid], run_name='no-progress')
+        def mutate(turn, _options):
+            if turn == 3:
+                (self.workspace / 'state.py').write_text('changed during B correction', encoding='utf-8')
+        with self.assertRaisesRegex(RuntimeError, 'mutated the candidate'):
+            self.run_phases(responses=[self.audit, invalid, self.verdict], observer=mutate, run_name='mutated')
+
+    def test_promoted_origins_require_current_target_and_independent_confirmation(self):
+        from slivin_harness.implementer import report_discoveries
+        from slivin_harness.phase5 import expand_contract_and_verification_plan
+        from slivin_harness.source_records import source_ref, register_observations
+        for author in ('PLANNER', 'IMPLEMENTER'):
+            with self.subTest(author=author):
+                contract = copy.deepcopy(self.contract)
+                old = next(row for row in contract['source_inventory']['records'] if row['group'] == 'related_out_of_scope')
+                if author == 'IMPLEMENTER':
+                    observation = dict(copy.deepcopy(old['claim']), observation_id='independent-outside', name='Additional eligibility consumer')
+                    contract['source_inventory'], _ = register_observations(contract['source_inventory'], {'related_out_of_scope':[observation]})
+                    from slivin_harness.protocol import stable_fingerprint
+                    contract['fingerprint'] = stable_fingerprint({key:value for key,value in contract.items() if key != 'fingerprint'})
+                    old = contract['source_inventory']['records'][-1]
+                wire = attach_post_patch_impact({'status':'COMPLETE'}, plan=self.plan, changed_paths=self.changed_paths, contract=contract)
+                assessment = next(row for row in wire['post_patch_impact']['source_assessments'] if row['source_ref'] == source_ref(old))
+                assessment.update(disposition='PROMOTE', promotion_id='promoted-metrics')
+                wire['post_patch_impact']['in_scope_consumers'].append(dict(observation_id='promoted-metrics', name=old['claim']['name'], paths=['metrics.py'], symbols=['ratio'],
+                    why_affected='Independent investigation finds an eligibility dependency.', required_behavior='Count eligible entries only.', evidence=['metrics.py ratio caller inspected.'],
+                    required_proof=proof('Assert eligibility-aware ratio for expired and fresh entries.')))
+                expanded = expand_contract_and_verification_plan(implementation_contract=contract,
+                    previous_verification_plan=compile_verification_plan(contract, project_checks=[]),
+                    discoveries=report_discoveries(wire, contract=contract, plan=self.plan), project_checks=[], task_checks=[], observations=wire['post_patch_impact'])
+                self.contract = expanded.implementation_contract
+                self.impact = self.build_impact()
+                self.verdict = self.pass_verdict()
+                self.validate_b()
+                original_impact, original_verdict = copy.deepcopy(self.impact), copy.deepcopy(self.verdict)
+                target = self.contract['source_inventory']['transitions'][-1]['target_ref']['source_id']
+                for change in ('no_transition', 'no_target', 'no_confirmation', 'stale_confirmation'):
+                    self.impact, self.verdict = copy.deepcopy(original_impact), copy.deepcopy(original_verdict)
+                    if change == 'no_transition': self.impact['source_inventory']['transitions'] = []
+                    elif change == 'no_target': self.impact['post_patch_impact']['in_scope_consumers'] = [row for row in self.impact['post_patch_impact']['in_scope_consumers'] if row['source_ref']['source_id'] != target]
+                    elif change == 'no_confirmation': self.verdict['impact_challenge']['implementer_consumer_dispositions'] = []
+                    else: next(row for row in self.verdict['impact_challenge']['implementer_consumer_dispositions'] if row['reference'] == target)['source_revision'] = '0' * 64
+                    self.reject_b()
+                self.contract = contract
 
     def test_good_candidate_all_independent_dispositions_pass(self):
         self.validate_a()
@@ -181,7 +270,9 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
 
     def test_phase_a_is_blind_and_phase_b_follows_immutable_persistence(self):
         self.plan["diagnosis"]["high_level_approach"] = ["PLANNER_REASONING_SECRET"]
+        self.contract = build_implementation_contract(self.plan, task_contract=synthetic_task_contract())
         self.impact = self.build_impact()
+        self.verdict = self.pass_verdict()
         expected_blind = copy.deepcopy(self.audit)
 
         def inspect(phase, kwargs):
@@ -191,6 +282,7 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
                 for marker in ("CONTRACT_CLOSURE_SECRET", "CHECKS_SECRET", "RUNTIME_SECRET", self.impact["fingerprint"], self.plan["impact_closure"]["in_scope_consumers"][0]["name"]):
                     self.assertNotIn(marker, prompt)
             else:
+                self.assertTrue((self.root / "run/controller_private/blind.json").is_file(), "PHASE_A_NOT_PERSISTED_BEFORE_B")
                 saved = json.loads((self.root / "run" / "controller_private" / "blind.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved, expected_blind)
                 for marker in ("CONTRACT_CLOSURE_SECRET", "CHECKS_SECRET", "RUNTIME_SECRET", self.impact["fingerprint"]):
@@ -423,8 +515,8 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
         row = self.verdict["impact_challenge"]["blind_consumer_dispositions"][0]
         row["matches"] = []
         self.reject_b("actual IN_SCOPE")
-        row["matches"] = [{"source": "PLANNER", "classification": "IN_SCOPE", "name": "Invented consumer"}]
-        self.reject_b("existing normalized ledger")
+        row["matches"] = [{"source": "PLANNER", "classification": "IN_SCOPE", "reference": "Invented-consumer", "source_revision": "0" * 64}]
+        self.reject_b("unknown or has a stale")
 
     def test_disposition_evidence_requires_existing_safe_files(self):
         self.verdict["impact_challenge"]["planner_consumer_dispositions"][0]["evidence_paths"] = ["../escape.py"]
@@ -499,9 +591,9 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "mutated the candidate"):
                     self.run_phases(observer=mutate, persist=lambda _audit: None)
 
-    def test_strict_v2_v6_output_schemas(self):
+    def test_strict_v2_v7_output_schemas(self):
         self.assertEqual(BLIND_AUDIT_SCHEMA["properties"]["protocol_version"]["enum"], ["blind-audit.v2"])
-        self.assertEqual(EVALUATOR_SCHEMA["properties"]["protocol_version"]["enum"], ["evaluator.v6"])
+        self.assertEqual(EVALUATOR_SCHEMA["properties"]["protocol_version"]["enum"], ["evaluator.v7"])
         validate_strict_output_schema(BLIND_AUDIT_SCHEMA)
         validate_strict_output_schema(EVALUATOR_SCHEMA)
 
@@ -566,7 +658,6 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
             if observed["planner_calls"] == 1:
                 plan["summary"] = "The value reader needs expiration-aware eligibility."
                 plan["diagnosis"]["high_level_approach"] = ["Update eligibility and the value reader."]
-                plan["affected_consumers"] = plan["affected_consumers"][:1]
                 closure = plan["impact_closure"]
                 closure["in_scope_consumers"] = closure["in_scope_consumers"][:1]
                 closure["search_evidence"][0]["evidence_paths"].remove("reader_b.py")
@@ -591,11 +682,11 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
             if continuing and not repair and not contract_gap:
                 observed["expanded_items"] = copy.deepcopy(contract["items"])
                 report = attach_post_patch_impact({
-                    "protocol_version": "implementer.v5", "status": "BLOCKED", "summary": "The new reader obligation remains unresolved.",
+                    "protocol_version": "implementer.v6", "status": "BLOCKED", "summary": "The new reader obligation remains unresolved.",
                     "reason": "The material sibling defect has not been corrected.", "evidence": ["reader_b.py still reads active alone."],
                     "contract_evidence": [], "self_verification": {"status": "NOT_RUN", "command": "", "evidence": [], "receipt_id": ""},
                     "additional_check_paths": [], "registered_checks": [], "discovered_obligations": [], "blockers": [],
-                }, plan=kwargs["plan"], changed_paths=collect_changed_paths(workspace))
+                }, plan=kwargs["plan"], changed_paths=collect_changed_paths(workspace), contract=contract)
                 return report
             (workspace / "state.py").write_text("def is_current(entry):\n    return entry['active'] and entry['expires_at'] > entry['now']\n", encoding="utf-8")
             (workspace / "reader_a.py").write_text("from state import is_current\n\ndef read_value(entry):\n    return entry['value'] if is_current(entry) else None\n", encoding="utf-8")
@@ -608,19 +699,15 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
                 workspace=workspace, stamp_path=kwargs["stamp_path"], control_plane=kwargs["control_plane"],
                 run_state=kwargs["run_state"], check_registry_digest=kwargs["check_registry_digest"],
             ))
-            discoveries = []
-            if continuing and not contract_gap:
-                finding = observed["finding"]
-                discoveries = [{"kind": "consumer", "name": finding["title"], "reason": finding["failure_mode"], "required_behavior": finding["required_action"], "required_proof": finding["required_proof"], "evidence": finding["evidence"]}]
             report = attach_post_patch_impact({
-                "protocol_version": "implementer.v5", "status": "COMPLETE", "summary": "Configured entry regression passed.",
+                "protocol_version": "implementer.v6", "status": "COMPLETE", "summary": "Configured entry regression passed.",
                 "reason": "", "evidence": [], "blockers": [], "additional_check_paths": [], "registered_checks": [],
-                "discovered_obligations": discoveries,
                 "contract_evidence": [{"item_id": row["id"], "status": "VERIFIED", "evidence": ["Configured regression passed."]} for row in contract["items"]],
                 "self_verification": {"status": "PASS", "command": "self", "evidence": ["SELF_VERIFY_PASS"], "receipt_id": ""},
-            }, plan=kwargs["plan"], changed_paths=collect_changed_paths(workspace))
-            for row in report["post_patch_impact"]["in_scope_consumers"]:
-                if row["source"] == "DISCOVERED":
+            }, plan=kwargs["plan"], changed_paths=collect_changed_paths(workspace), contract=contract)
+            evaluator_ids = {row["source_id"] for row in contract["source_inventory"]["records"] if row["author"] == "EVALUATOR"}
+            for row in report["post_patch_impact"]["source_assessments"]:
+                if row["source_ref"]["source_id"] in evaluator_ids:
                     row.update(paths=["reader_b.py"], symbols=["can_read"])
             return report
 
@@ -703,7 +790,7 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
                 implemented = context("CONTROLLER-NORMALIZED IMPLEMENTATION IMPACT CLOSURE")
                 verdict = valid_pass(blind_audit=audit, planner_impact=planned, implementation_impact=implemented)
                 for consumer, disposition in zip(audit["impact_analysis"]["affected_consumers"], verdict["impact_challenge"]["blind_consumer_dispositions"]):
-                    disposition["matches"] = [{"source": src, "classification": "IN_SCOPE", "name": row["name"]} for src, ledger in (("PLANNER", planned), ("IMPLEMENTER", implemented["post_patch_impact"])) for row in ledger["in_scope_consumers"] if set(row["paths"]) & set(consumer["paths"])]
+                    disposition["matches"] = [{"source": src, "classification": "IN_SCOPE", "reference": row["source_ref"]["source_id"], "source_revision": row["source_ref"]["source_revision"]} for src, ledger in (("PLANNER", planned), ("IMPLEMENTER", implemented["post_patch_impact"])) for row in ledger["in_scope_consumers"] if set(row["paths"]) & set(consumer["paths"])]
                     if not disposition["matches"]:
                         disposition.update(disposition="MISSING", finding_ids=["SIBLING-GAP"])
                 if audit["findings"]:
@@ -728,7 +815,7 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
                     observed["finding"] = copy.deepcopy(verdict["findings"][0])
                 elif contract_gap == "MATERIAL_GAP":
                     verdict["impact_challenge"]["blind_contract_dispositions"][-1]["matches"] = [
-                        {"source": "PLANNER", "classification": "CHANGED_CONTRACT", "name": "Availability decision authority"},
+                        {"source": "PLANNER", "classification": "CHANGED_CONTRACT", "reference": planned["changed_contracts"][-1]["source_ref"]["source_id"], "source_revision": planned["changed_contracts"][-1]["source_ref"]["source_revision"]},
                     ]
                 return json.dumps(verdict)
 
