@@ -165,3 +165,59 @@ actual denied writes and cached assertions separately from reported policy metad
 ## Current alpha boundary
 
 `0.8.0a6` introduced the Phase 4 primitives. Phase 5 (`0.8.0a8`) implemented automatic Contract/Verification Plan recompilation and optional worktree-local `.venv` bootstrap/rebuild. Phase 6 (`0.8.0a9`) adds executable runtime proof and the two-phase Evaluator. A universal OS-enforced Controller subprocess sandbox remains pending; the Broker still records `ADVISORY`/`UNAVAILABLE` honestly instead of labelling it enforced.
+
+## Discovered runner resolution and replay
+
+`test_runners.py` resolves supported JavaScript frameworks from executable lexical
+module evidence: CommonJS `require('node:test')`, ESM static/dynamic imports, or
+Jest imports/test/assertion syntax. Comments, literal examples and filename extensions
+are not framework evidence. Mixed/unknown syntax gets `TEST_RUNNER_AMBIGUOUS` or
+`TEST_RUNNER_UNSUPPORTED`; missing configured tools get `TEST_RUNNER_TOOL_MISSING`.
+This conservative resolver is not a full JS parser or proof that assertions cover semantics.
+Explicit owner commands bypass inference and remain mandatory exactly as configured.
+
+Each native file compiles to `{node} {workspace}/path`, without `--test` child-process
+routing; multiple files become multiple checks. Jest keeps its existing config and
+argv behavior. Python templates keep project-first interpreter resolution. These
+Controller templates are expanded in self_verify.py, Controller confirmation/checks
+and reconstructed verification against their respective workspace/toolchain.
+Registry digests include compiled specs. Re-registration recompiles all active paths,
+replaces stale derived commands, retains owner gates and probes required tools/configs.
+A compiler mismatch is repaired in the compiler, not by deleting tests or replanning
+product code until a different runner happens to pass.
+
+## Bounded report-only evidence correction
+
+`run_implementer_report()` persists raw output privately before validation. For typed
+local errors in populated post-patch `symbols`, `evidence` or `evidence_paths`, Controller
+returns the exact field/code and permits at most two corrective turns in the same thread.
+Only identified evidence arrays can change. Findings, order, names, classification,
+behavior, proof, discoveries, registered checks and all other report fields are frozen.
+Concrete documentation link targets/heading anchors are valid identifiers; empty arrays
+and invented code functions are not a substitute for repository evidence.
+
+Correction does not authorize project/test/runtime/Git writes or permission changes.
+Existing runtime/Git guards wrap the turn; physical candidate comparison occurs before
+any receipt validation. Mutation or changed claims yields a controlled stop. Correction
+timeouts do not get additional timeout continuation turns. Exhaustion produces
+`IMPLEMENTER_REPORT_CORRECTION_EXHAUSTED`, without Final Acceptance. Semantic model
+conflicts, missing consumers, failing checks and capabilities are not cosmetic retries.
+
+Every attempt has a separate private raw artifact and diagnostic; public outcomes expose
+codes/fields without raw private values. `terminal_candidate_observation.json` records
+current physical files, or UNKNOWN with an explicitly stale previous identity if observation
+is unsafe/unavailable. Successful correction still runs the full validator and existing
+trusted checks, binding and Contract expansion; it does not itself prove COMPLETE.
+
+Real installed-tool acceptance (no LLM/sandbox turns):
+
+```powershell
+py tools/smoke_trusted_test_runners.py --node C:/path/node.exe --jest C:/path/node_modules/jest/bin/jest.js
+```
+
+The disposable smoke runs passing/failing assertions through compiled checks, generated
+self-verification and Controller; it checks replay paths, stale stamps, native-only
+capabilities, then a mixed-runner expansion/report correction/Evaluator/Final Gate flow.
+Agent responses in that workflow are doubles. Logs distinguish that from real subprocess
+results. Installed runtime fingerprints must remain unchanged. Scoped sandbox integration
+is preserved and is separately covered by `smoke_readonly_scratch.py`.

@@ -6,7 +6,7 @@
 
 **Проверенный срез репозитория:** `256f9e789b4b33d13431fa36b8e178380c959e46`, Harness `0.8.0a28`.
 
-**Текущая сверка:** исходный срез сохранён; дополнения версии `0.8.0a29` отмечены явно. Перечисленные short commit IDs сверены с локальной историей Harness; исторические product fixes не открывались. Ниже ссылки на код/tests удостоверяют наличие механизма, а не повторное исполнение каждого исторического trial.
+**Текущая сверка:** исходный срез сохранён; дополнения версий `0.8.0a29` и `0.8.0a30` отмечены явно. Перечисленные short commit IDs сверены с локальной историей Harness; исторические product fixes не открывались. Ниже ссылки на код/tests удостоверяют наличие механизма, а не повторное исполнение каждого исторического trial.
 
 **Основания:** явные решения владельца в рабочем обсуждении, [CHANGELOG](../CHANGELOG.md), [HISTORY](HISTORY.md), нормативный контракт, тематическая документация, упомянутые ниже commits и сохранённые материалы испытаний. Наличие реализации и её описания не приравнивается к независимо пройденному end-to-end испытанию.
 
@@ -59,6 +59,8 @@
 | [D-022](#d-022) | Прямые consumers и синхронизация docs входят в полный patch | Действующая политика разработки |
 | [D-023](#d-023) | Исправленные выводы сохраняются, а не превращаются в вечные правила | Действующая политика; реестр ниже |
 | [D-024](#d-024) | Существенное решение включает rationale и rejected alternatives | IMPLEMENTED в 0.8.0a29 как documentation policy; links и structural check |
+| [D-025](#d-025) | Framework-aware trusted runner и replay | IMPLEMENTED в 0.8.0a30 |
+| [D-026](#d-026) | Bounded report-only evidence correction | IMPLEMENTED в 0.8.0a30 |
 
 <a id="d-001"></a>
 
@@ -611,6 +613,90 @@ peer-canary дополнен проверкой активных granted roots �
 **Проверка.** В repo должны появиться журнал, читаемые ссылки и правило обновления; принятые, но не реализованные решения нельзя переименовать в IMPLEMENTED без commit/test evidence.
 
 **Пересмотр.** Возможна разбивка на отдельные ADR-файлы при росте объёма; сохранить стабильные IDs, обратные ссылки и историю замен.
+
+<a id="d-025"></a>
+
+## D-025. Framework определяет trusted runner, расширение файла — только navigation hint
+
+**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в 0.8.0a30.
+
+**Проблема и основание.** На исходном `04d7359` generic regression с одинаковыми
+`.test.cjs` показал: native node:test получает Jest argv только из-за наличия Jest.
+Это ошибка Controller compiler. Изменённая формулировка Planner не меняет эту команду.
+
+**Решение.** Source-backed lexical descriptor различает CommonJS/ESM node:test imports
+и Jest syntax. Native route — один configured Node process на файл; Jest сохраняет
+config/argv. Unknown/mixed evidence даёт typed controlled diagnostic. Owner explicit
+commands не переписываются. Command templates с workspace/toolchain placeholders
+служат общей authority для generated runner, Controller и reconstruction. Compiled
+specs входят в digest registry; runner drift заменяет прежнюю команду и инвалидирует
+verification, а не добавляет ещё один старый runner.
+
+**Отвергнуто и почему.** REJECTED: удалить native tests, переписать их на Jest,
+ослабить assertions, выбирать runner по случайному PASS или бесконечно replanning
+product patch — каждый вариант скрывает compiler defect. Не требовать `node --test`
+как единственный route: direct file execution сохраняет assertions и не требует
+дополнительного spawn-маршрута. Новый универсальный framework plugin system отложен:
+для подтверждённого класса достаточно conservative supported descriptors.
+
+**Последствия и цена.** Неподдерживаемые syntactic forms требуют явного owner check;
+resolver не является полным JS parser или доказательством качества assertions.
+Все необходимые checks сохраняются. Owner gates, changed/new tests, runtime/Git guards,
+receipt binding и reconstruction остаются обязательными. Baseline failures нельзя
+объявить unrelated по runner/extension или unchanged paths (D-017).
+
+**Реализация / доказательства.** `test_runners.py`, `task_runner.build_dynamic_check_specs`,
+`CheckRegistry.bind_compiled_specs`; `test_runner_report_recovery.py` воспроизводит
+before/after. `test_native_trusted_runners.py` и `tools/smoke_trusted_test_runners.py`
+проверяют установленные Node/Jest, passing/failing assertions, generated runner,
+Controller и reconstruction; combined workflow использует agent doubles. Это не
+новый Planner sandbox smoke и не product benchmark PASS. См. D-013/D-014/D-018.
+
+**Пересмотр.** Добавление runner/form только с проверяемым descriptor и runnable
+регрессией обоих исходов. Нельзя заменить failure fallback-ом на установленный runner.
+
+<a id="d-026"></a>
+
+## D-026. Неполное локальное evidence отчёта исправляется без новой реализации продукта
+
+**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в 0.8.0a30.
+
+**Проблема и основание.** На исходном `04d7359` populated related finding с `symbols=[]`
+корректно отклоняется validator, но теряет bounded recovery и завершает run исключением.
+Сохранённый run state старого trial имел HARNESS_EXCEPTION и пустой previous candidate
+inventory. Generic regression отдельно воспроизводит именно artifact boundary.
+
+**Решение.** Не более двух report-only turns в том же Implementer thread для точных
+allowlisted leaf evidence errors. Candidate и все остальные поля report frozen;
+Controller не придумывает symbols и не удаляет findings. Реальные documentation
+link targets/anchors — identifiers, fake code function не требуется. Каждый raw attempt
+сохраняется private до validation, typed outcome публикуется без private values.
+После correction полный validator, checks, binding и expansion сохраняются.
+Terminal candidate observation использует физические текущие files либо явный UNKNOWN
+со stale previous identity; алгоритм candidate identity не меняется.
+
+**Отвергнуто и почему.** REJECTED: автоматически принять пустое evidence, удалить
+finding/test/consumer, изменить assertions, перезапустить всю продуктовую реализацию
+ради ссылки, catch-all RuntimeError → retry, бесконечная correction, доверие прежнему
+receipt после mutation. Semantic gaps, missing consumers/capabilities, failing checks
+и integrity violations не являются косметическими JSON errors.
+
+**Последствия и цена.** Дополнительные bounded model turns и private forensic artifacts.
+Только локальные evidence arrays, указанные Controller, разрешено уточнять; смена
+остальных claims или candidate даёт controlled failure. Correction timeout не получает
+ещё один recovery turn. Role wire `implementer.v5` и требование concrete evidence не
+меняются. Scratch permissions не расширяются. Связь с D-005/D-013/D-019/D-020/D-023.
+
+**Реализация / доказательства.** `report_recovery.py`, `run_implementer_report`,
+`observe_terminal_report_candidate`; focused adversarial tests проверяют exhaustion,
+claim retention, mutation и обязательную полную validation. Combined synthetic workflow
+регистрирует native+Jest, исправляет documentation locator, проходит Evaluator/Final Gate;
+agent replies — doubles, subprocess checks — реальные. Это не доказательство semantic
+полноты конкретного внешнего candidate или исправности всех возможных malformed reports.
+
+**Пересмотр.** Расширять allowlist только для доказанной локальной ошибки с сохранением
+identity/semantic fields, guards и конечного retry budget. Новая technical model требует
+существующего replan, а не косметического переписывания claims.
 
 ## Шаблон новой записи
 

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.8.0a30
+
+- Discovered JavaScript checks use source-backed runner resolution: native `node:test`
+  executes one file per configured Node process; Jest retains its config/argv route.
+  Mixed/unknown runner evidence fails with a typed diagnostic. Owner commands remain unchanged.
+- Trusted command templates survive generated self-verification, Controller confirmation
+  and reconstruction; registry fingerprints include compiled checks and runner drift
+  refreshes verification. Dynamic tool/config probes retain candidate/runtime/Git guards.
+- Implementer evidence errors have up to two report-only corrective turns in the same
+  thread. Candidate and all non-targeted claims remain frozen; raw attempts are private,
+  public outcomes are typed, and terminal inventory is freshly observed or explicitly unknown.
+  Full validation and receipts remain required; no role wire versions change.
+- DECISIONS D-025/D-026 record runner authority and bounded evidence correction.
+
 ## 0.8.0a29 — Scoped scratch for read-only roles
 
 - Planner/Evaluator share a Controller-owned execution context: project remains read-only; each fresh thread selects a unique writable session/cache root using installed Codex 0.153.4 named permission profiles. Turns retain the same policy and never inherit a whole-project write grant.

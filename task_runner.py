@@ -109,6 +109,11 @@ from slivin_harness.preflight import (
     resolve_python_command,
     run_static_toolchain_preflight,
 )
+from slivin_harness.report_recovery import (
+    MAX_REPORT_CORRECTIONS, correctable_report_field, correction_prompt, preserves_report_claims,
+)
+from slivin_harness.test_runners import resolve_javascript_runner, TestRunnerResolutionError
+from slivin_harness.impact import impact_paths
 from slivin_harness.protocol import (
     ArtifactContractError,
     EVALUATOR_PROTOCOL_VERSION,
@@ -195,7 +200,9 @@ IMPLEMENTER_INSTRUCTIONS = """
 - регистрируй existing tests как typed `registered_checks`/`additional_check_paths` только когда
   они являются material evidence для active Contract consumer/risk/state/acceptance requirement.
   Exploratory broad-suite tests, baseline-red unrelated tests и RELATED_OUT_OF_SCOPE diagnostics
-  не превращай в authoritative registered_checks. Changed/new regression tests по-прежнему
+  не превращай в authoritative registered_checks. Controller определяет runner по framework
+  evidence (node:test imports либо Jest syntax), а не по extension/install availability.
+  Не удаляй native tests и не меняй assertions/runner ради green output. Changed/new regression tests по-прежнему
   должны быть покрыты trusted verification. Trusted check ID сейчас только `git.diff-check`;
   произвольные/неизвестные Controller команды и IDs запрещены;
 - Planner proof plan — гипотеза. Если Planner-derived proof route доказанно непригоден
@@ -253,6 +260,10 @@ IMPLEMENTER_INSTRUCTIONS = """
   NEEDS_USER_DECISION → USER_DECISION_REQUIRED. INFRASTRUCTURE_BLOCKED означает физически
   недоступную обязательную capability/операцию/external system, которую autonomous
   repair/replan не может восстановить; unrelated baseline-red suite к этому не относится.
+  Для documentation evidence symbols могут быть реальными link targets/heading anchors;
+  не выдумывай code functions. Если Controller запрашивает REPORT-ONLY CORRECTION,
+  уточни только указанные evidence поля того же report, не меняя candidate, tests,
+  findings, obligations, Plan/Contract или permissions. Full validation остаётся обязательной.
   Пустые contract_evidence/discovered_obligations/registered_checks допустимы и не должны
   превращаться в искусственный ledger по каждому item.
   post_patch_impact wire fields остаются обязательными, но при non-COMPLETE его arrays
@@ -1258,12 +1269,14 @@ def build_dynamic_check_specs(
         if not path.is_file():
             notes.append(f"UNSUPPORTED_DYNAMIC_CHECK {rel}: file does not exist")
             continue
-        if any(rel in " ".join(str(part).replace("\\", "/") for part in base.get("command", [])) for base in base_specs):
+        if any(any(str(part).replace("\\", "/") in {rel, "{workspace}/" + rel, str(path).replace("\\", "/")} for part in base.get("command", [])) for base in base_specs):
             notes.append(f"DYNAMIC_CHECK_ALREADY_COVERED {rel}")
             continue
         lower = rel.lower()
         test_like = (
             "/__tests__/" in "/" + lower
+            or "/tests/" in "/" + lower
+            or ".spec." in lower
             or Path(lower).name.startswith("test_")
             or ".test." in lower
             or lower.endswith("_test.py")
@@ -1271,36 +1284,43 @@ def build_dynamic_check_specs(
         if not test_like:
             notes.append(f"UNSUPPORTED_DYNAMIC_CHECK {rel}: path is not test-like")
             continue
-        if lower.endswith((".js", ".cjs", ".mjs")) and toolchain.get("node") and toolchain.get("jest"):
-            command = [toolchain["node"], toolchain["jest"]]
-            config = workspace / "jest.config.cjs"
-            if config.is_file():
-                command += ["--config", str(config)]
-            command += ["--runTestsByPath", str(path), "--runInBand", "--no-cache"]
+        if lower.endswith((".js", ".cjs", ".mjs")):
+            impact_paths([rel], field="registered_checks.path", workspace=workspace)
+            runner = resolve_javascript_runner(path, relative=rel)
+            required = ("node", "jest") if runner == "JEST" else ("node",)
+            if any(not toolchain.get(key) for key in required):
+                raise TestRunnerResolutionError("TEST_RUNNER_TOOL_MISSING", rel, f"{runner} requires configured {', '.join(required)}")
+            # Templates are the single trusted definition: expand for execution,
+            # retain for replay against a reconstructed workspace/toolchain.
+            command = ["{node}"]
+            if runner == "JEST":
+                command.append("{jest}")
+                if (workspace / "jest.config.cjs").is_file():
+                    command += ["--config", "{workspace}/jest.config.cjs"]
+                command += ["--runTestsByPath", "{workspace}/" + rel, "--runInBand", "--no-cache"]
+            else:
+                command.append("{workspace}/" + rel)
             specs.append({
-                "name": f"Discovered Jest: {rel}",
-                "feedback": "repair",
-                "command": command,
-                "timeout_seconds": 180,
+                "name": f"Discovered {'Jest' if runner == 'JEST' else 'node:test'}: {rel}",
+                "feedback": "repair", "runner": runner, "check_path": rel,
+                "command": command, "timeout_seconds": 180,
             })
             continue
 
         python_cmd = None
-        for base in base_specs:
+        for base in (base_specs if lower.endswith(".py") else []):
             cmd = list(base.get("command", []))
             if not cmd or "{python}" not in cmd:
                 continue
             if "manage.py" in cmd and "test" in cmd:
                 label = rel[:-3].replace("/", ".") if rel.endswith(".py") else rel
                 python_cmd = [
-                    resolve_python_command(toolchain).value,
-                    "manage.py", "test", label,
+                    "{python}", "manage.py", "test", label,
                 ]
                 break
             if "-m" in cmd and "pytest" in cmd:
                 python_cmd = [
-                    resolve_python_command(toolchain).value,
-                    "-m", "pytest", rel, "-q",
+                    "{python}", "-m", "pytest", rel, "-q",
                 ]
                 break
         if python_cmd:
@@ -2015,7 +2035,132 @@ def run_agent_turn(
     )
 
 
-def run_implementer_report(
+def observe_terminal_report_candidate(workspace: Path, plane: ControllerPlane, run_state: RunState | None, reason: str) -> None:
+    """Record observed physical files; failed observation is explicitly non-authoritative."""
+    try:
+        identity = build_candidate_identity(workspace)
+        observation = {"status": "OBSERVED", "reason_code": reason, "candidate": identity.to_dict()}
+        if run_state is not None:
+            run_state.observe_candidate(identity, reason_code=reason)
+        plane.write_private_json("candidate_identity_current.json", identity.to_dict())
+        plane.write_public_json("candidate_identity_current.json", identity.to_dict())
+    except (RuntimeError, OSError, ValueError) as exc:
+        observation = {"status": "UNKNOWN", "reason_code": reason, "previous_identity_stale": True,
+                       "observation_error_type": type(exc).__name__}
+        if run_state is not None:
+            previous = run_state.data.get("current_candidate") or {}
+            observation["previous_candidate_id"] = previous.get("candidate_id")
+            run_state.data["current_candidate"] = None
+            run_state.data["terminal_candidate_observation"] = observation
+            run_state.persist()
+    plane.write_private_json("terminal_candidate_observation.json", observation)
+    plane.write_public_json("terminal_candidate_observation.json", observation)
+
+
+def run_implementer_report(codex: CodexAppServer, **kwargs) -> dict:
+    """Bounded evidence correction; no changes to the active product definition."""
+    workspace = kwargs["workspace"]
+    plane = kwargs.get("control_plane")
+    if plane is None:
+        # Standalone callers still keep forensic data outside candidate files.
+        plane = ControllerPlane(workspace.parent / (workspace.name + "-report-diagnostics"))
+    run_state = kwargs.get("run_state")
+    prefix = "implementation_report_recovery_" + hashlib.sha256(os.urandom(16)).hexdigest()[:16]
+    artifacts: list[str] = []
+    original: dict | None = None
+    allowed_fields: list[str] = []
+    frozen_candidate: str | None = None
+    current = dict(kwargs)
+
+    def observe_terminal(reason: str) -> None:
+        observe_terminal_report_candidate(workspace, plane, run_state, reason)
+        artifacts.append("terminal_candidate_observation.json")
+
+    def stop(reason: str) -> None:
+        observe_terminal(reason)
+        if run_state is not None:
+            run_state.route_stage(StageId.IMPLEMENTER, outcome=WorkflowOutcome.BLOCKED,
+                                  result_code=StageResultCode.BLOCKED, reason_code=reason,
+                                  artifacts=tuple(artifacts))
+        raise HarnessControlledStop(reason)
+
+    for attempt in range(MAX_REPORT_CORRECTIONS + 1):
+        raw_value = ""
+        name = f"{prefix}_{attempt:02d}"
+
+        def save_raw(raw: str) -> None:
+            nonlocal raw_value, frozen_candidate, original
+            raw_value = raw
+            plane.write_text(name + ".raw.json", raw, visibility=ArtifactVisibility.PRIVATE)
+            # Freeze after development, before accepting/repairing report evidence.
+            identity = candidate_content_fingerprint(workspace)
+            if frozen_candidate is None:
+                frozen_candidate = identity
+            elif identity != frozen_candidate:
+                stop("IMPLEMENTER_REPORT_CORRECTION_MUTATED_CANDIDATE")
+            parsed = parse_implementation_report(raw)
+            if original is None:
+                original = parsed
+            elif not preserves_report_claims(original, parsed, fields=allowed_fields):
+                stop("IMPLEMENTER_REPORT_CORRECTION_CHANGED_CLAIMS")
+
+        try:
+            if attempt and candidate_content_fingerprint(workspace) != frozen_candidate:
+                stop("IMPLEMENTER_REPORT_CORRECTION_MUTATED_CANDIDATE")
+            result = _run_implementer_report_once(codex, **current, raw_report_sink=save_raw)
+            if attempt:
+                outcome = {"schema_version": "implementation-report-recovery.v1", "status": "CORRECTED",
+                           "corrections": attempt, "candidate_id": frozen_candidate, "raw_artifact": name + ".raw.json"}
+                plane.write_private_json(name + ".json", outcome)
+                plane.write_public_json(name + ".json", outcome)
+                print(f"IMPLEMENTER_REPORT_CORRECTED: {attempt}")
+            return result
+        except ArtifactContractError as exc:
+            field = correctable_report_field(exc)
+            private = {"schema_version": "implementation-report-recovery.v1", "status": "INVALID",
+                       "correction_attempt": attempt, "candidate_id": frozen_candidate,
+                       "raw_artifact": name + ".raw.json", "diagnostic": exc.feedback(),
+                       "correctable": field is not None}
+            plane.write_private_json(name + ".json", private)
+            # Raw prose/values are private. Public outcome exposes only typed routing.
+            public = {key: value for key, value in private.items() if key != "diagnostic"}
+            public["diagnostic"] = {"code": exc.code, "field": exc.field}
+            plane.write_public_json(name + ".json", public)
+            artifacts.append(name + ".json")
+            if field is None:
+                stop("IMPLEMENTER_REPORT_INVALID")
+            if attempt >= MAX_REPORT_CORRECTIONS:
+                stop("IMPLEMENTER_REPORT_CORRECTION_EXHAUSTED")
+            if field not in allowed_fields:
+                allowed_fields.append(field)
+            print(f"IMPLEMENTER_REPORT_CORRECTION: {attempt + 1}/{MAX_REPORT_CORRECTIONS} {exc.code} {exc.field}")
+            current["prompt"] = correction_prompt(exc, fields=allowed_fields)
+            current["label"] = f"{kwargs['label']} REPORT CORRECTION {attempt + 1}"
+            current["timeout"] = min(kwargs["timeout"], 300)
+            current["allow_timeout_continuation"] = False
+        except HarnessControlledStop as exc:
+            observe_terminal(str(exc))
+            raise
+        except TurnTimeoutError:
+            if attempt:
+                stop("IMPLEMENTER_REPORT_CORRECTION_TIMEOUT")
+            raise
+        except (RuntimeError, OSError) as exc:
+            # Persistence only, never a catch-all retry. Semantic/test failures
+            # keep their existing routes, with honest final inventory.
+            if raw_value:
+                plane.write_private_json(name + ".json", {
+                    "status": "INVALID", "raw_artifact": name + ".raw.json",
+                    "error_type": type(exc).__name__, "reason": str(exc),
+                })
+                plane.write_public_json(name + ".json", {
+                    "status": "INVALID", "reason_code": "IMPLEMENTER_REPORT_VALIDATION_FAILED",
+                })
+                observe_terminal("IMPLEMENTER_REPORT_VALIDATION_FAILED")
+            raise
+
+
+def _run_implementer_report_once(
     codex: CodexAppServer,
     *,
     thread_id: str,
@@ -2034,6 +2179,8 @@ def run_implementer_report(
     runtime_integrity_manager: RuntimeProjectionIntegrityManager | None = None,
     git_integrity_manager: GitControlIntegrityManager | None = None,
     execution_broker: ExecutionBroker | None = None,
+    raw_report_sink=None,
+    allow_timeout_continuation: bool = True,
 ) -> dict:
     def stop_for_integrity(
         reason_code: str,
@@ -2092,7 +2239,7 @@ def run_implementer_report(
         except RuntimeProjectionIntegrityError as exc:
             stop_for_integrity(exc.reason_code, cause=exc)
         except TurnTimeoutError:
-            if timeout_continuations >= 1:
+            if not allow_timeout_continuation or timeout_continuations >= 1:
                 raise
             timeout_continuations += 1
             print(
@@ -2104,6 +2251,8 @@ def run_implementer_report(
                 self_verify_command=self_verify_command,
             )
             current_label = f"{label} CONTINUE"
+    if raw_report_sink is not None:
+        raw_report_sink(raw)
     report = parse_implementation_report(raw)
     changed_paths = collect_changed_paths(workspace)
     stamp_matches_candidate = verify_self_verification_stamp(
@@ -2160,15 +2309,6 @@ def run_implementer_report(
     elif projection_confirmation_required:
         controller_self_verify_ok = False
     self_verification_ok = bool(stamp_matches_candidate and controller_self_verify_ok)
-    if self_verification_ok:
-        self_verification_ok = verify_self_verification_stamp(
-            workspace=workspace,
-            stamp_path=stamp_path,
-            control_plane=control_plane,
-            run_state=run_state,
-            check_registry_digest=check_registry_digest,
-            issue_receipt=True,
-        )
     validate_implementation_report(
         report,
         contract=implementation_contract,
@@ -2179,6 +2319,17 @@ def run_implementer_report(
         plan=plan,
         owner_allowed_paths=owner_allowed_paths or (),
     )
+    if self_verification_ok:
+        self_verification_ok = verify_self_verification_stamp(
+            workspace=workspace,
+            stamp_path=stamp_path,
+            control_plane=control_plane,
+            run_state=run_state,
+            check_registry_digest=check_registry_digest,
+            issue_receipt=True,
+        )
+    if report.get("status") == ImplementerStatus.COMPLETE.value and not self_verification_ok:
+        raise RuntimeError("Implementer COMPLETE requires current trusted self-verification receipt")
     print("=== IMPLEMENTATION REPORT ===")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return report
@@ -3121,6 +3272,8 @@ def main(argv: list[str] | None = None) -> int:
                 digest_before = check_registry.digest()
                 requested_paths = [str(value) for value in report.get("additional_check_paths", [])]
                 requested_ids: list[str] = []
+                for reference in check_registry.references():
+                    (requested_paths if reference.kind == "path" else requested_ids).append(reference.value)
                 for item in report.get("registered_checks", []):
                     if not isinstance(item, dict):
                         continue
@@ -3142,7 +3295,7 @@ def main(argv: list[str] | None = None) -> int:
                     note for note in path_notes if note.startswith("UNSUPPORTED_DYNAMIC_CHECK")
                 ]
                 if unsupported:
-                    raise Phase5ContractError("; ".join(unsupported))
+                    raise TestRunnerResolutionError("TEST_RUNNER_UNSUPPORTED", ", ".join(requested_paths), "; ".join(unsupported))
                 id_specs, id_notes = build_trusted_check_id_specs(
                     requested_ids,
                     base_specs=repair_specs,
@@ -3154,10 +3307,8 @@ def main(argv: list[str] | None = None) -> int:
                     check_registry.register_id(value)
 
                 before = len(dynamic_specs)
-                dynamic_specs = merge_dynamic_specs(
-                    dynamic_specs,
-                    [*path_specs, *id_specs],
-                )
+                dynamic_specs = sorted(merge_dynamic_specs([], [*path_specs, *id_specs]), key=lambda spec: tuple(spec["command"]))
+                check_registry.bind_compiled_specs(dynamic_specs)
                 for note in [*path_notes, *id_notes]:
                     if note not in dynamic_notes:
                         dynamic_notes.append(note)
@@ -3210,7 +3361,7 @@ def main(argv: list[str] | None = None) -> int:
                     expansion.verification_plan["fingerprint"]
                     != verification_plan["fingerprint"]
                 )
-                if not contract_changed and not plan_changed:
+                if not contract_changed and not plan_changed and not registry_changed:
                     return False
 
                 trigger = (
@@ -3262,6 +3413,15 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     raise HarnessControlledStop("OWNER_BOUNDARY_CONFLICT")
 
+                dynamic_preflight = run_static_toolchain_preflight(
+                    dynamic_specs, workspace=workspace, harness_root=HARNESS_ROOT,
+                    toolchain=toolchain, probe_registry=tool_probe_registry,
+                    candidate_baseline_sha=session.base_sha or preflight["head_sha"],
+                )
+                if not dynamic_preflight.passed:
+                    recorder.write_authoritative_json("dynamic_toolchain_failure.json", dynamic_preflight.public_dict())
+                    run_state.fail_active_stage(reason_code="DYNAMIC_TOOLCHAIN_FAILED", detail="Discovered check tool/config probe failed")
+                    raise HarnessControlledStop("DYNAMIC_TOOLCHAIN_FAILED")
                 dynamic_tool_probes = tool_probe_registry.ensure_capabilities(
                     verification_plan["required_capabilities"],
                     batch_id=f"post-plan-capability-gate-{capability_gate_index + 1:02d}",
@@ -4987,6 +5147,23 @@ def main(argv: list[str] | None = None) -> int:
         print(success_code.value)
         print(f"TOTAL_ELAPSED: {time.monotonic() - started:.2f}s")
         return 0
+    except TestRunnerResolutionError as exc:
+        if recorder is not None:
+            recorder.write_private_json("test_runner_resolution_failure.json", exc.feedback())
+            recorder.write_json("test_runner_resolution_failure.json", {
+                "schema_version": "test-runner-resolution-failure.v1", "status": "BLOCKED",
+                "reason_code": exc.code, "field": exc.field,
+            })
+            if session is not None:
+                observe_terminal_report_candidate(session.workspace, recorder.control_plane, run_state, exc.code)
+        if run_state is not None:
+            run_state.route_stage(StageId.IMPLEMENTER, outcome=WorkflowOutcome.BLOCKED,
+                                  result_code=StageResultCode.BLOCKED, reason_code=exc.code,
+                                  artifacts=("test_runner_resolution_failure.json", "terminal_candidate_observation.json"))
+        print("HARNESS_TASK_STOPPED:", exc.code, file=sys.stderr)
+        if recorder is not None:
+            print("RUN_DIR:", recorder.root, file=sys.stderr)
+        return 2
     except ScopedExecutionPolicyError as exc:
         if recorder is not None:
             recorder.write_authoritative_json(

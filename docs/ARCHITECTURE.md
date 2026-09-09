@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a29 — Phase 7
+# Архитектура Slivin Harness 0.8.0a30 — Phase 7
 
 ## Назначение
 
-`0.8.0a29` требует typed impact closure в `planner.v5` до `READY`, сохраняет
+`0.8.0a30` требует typed impact closure в `planner.v5` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a29
+Harness                     0.8.0a30
 Manifest                    version = 2
 Workflow                    workflow.v6
 Run State                   run-state.v1
@@ -225,7 +225,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a29`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a30`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -370,6 +370,15 @@ Controller-private self-verification receipt остаётся единствен
 Open-world discovery расширяет Contract/Verification Plan транзакционно; старые items не удаляются.
 
 Task-local `.venv` пересобирается при dependency/package drift. Runtime-only `.env` восстанавливается, если агент его изменил.
+
+
+Discovered checks используют общий framework-aware compiler и replayable Controller
+command templates. Native node:test и Jest не выбираются по одному extension.
+Compiled registry drift обновляет verification evidence, owner commands сохраняются.
+Локальное evidence report исправляется bounded correction в том же thread без
+изменения candidate/claims; invalid attempts сохраняются, COMPLETE по-прежнему
+требует полный validator и trusted evidence. Детали и native smoke:
+[Phase 4 — runner resolution / report correction](PHASE4_EXECUTION.md).
 
 ## 7. Step 4 — deterministic checks
 
@@ -609,7 +618,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a29` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a30` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 Planner/Evaluator используют один `RoleExecutionContext` (`role-execution-context.v1`)
 из `ExecutionBroker.prepare_readonly_role()`. Project root остаётся контекстом repository,

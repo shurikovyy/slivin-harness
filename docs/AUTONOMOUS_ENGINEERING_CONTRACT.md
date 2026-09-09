@@ -270,6 +270,20 @@ post_patch_impact и текущий revision binding стабильным finger
 делает его stale: после repair требуется новый report, sweep и self-verification.
 Current Controller-private receipt и все integrity checks остаются обязательными.
 
+Не отождествлять test framework с расширением файла или доступностью Jest. Все
+material registered checks сохраняются и получают подтверждённый Controller runner;
+ошибка compiler не исправляется новой продуктовой реализацией или выбором случайно
+зелёной команды. Owner gates и assertions остаются обязательными.
+
+Локальное неполное evidence отчёта допускает не более двух report-only corrections
+в том же Implementer thread. Уточняются только указанные evidence поля; candidate,
+семантика, findings, consumers и checks сохраняются. Реальные documentation link
+targets/anchors могут служить identifiers. Пустые arrays не принимаются автоматически.
+Full validation, trusted verification и expansion после correction обязательны.
+Исходные invalid artifacts сохраняются private; terminal observation честно отражает
+фактический candidate либо невозможность безопасного наблюдения. См. D-025/D-026
+в [журнале решений](DECISIONS.md) и [Phase 4](PHASE4_EXECUTION.md).
+
 ## Evaluator obligations
 
 Evaluator независимо проверяет candidate и достаточность evidence, ищет

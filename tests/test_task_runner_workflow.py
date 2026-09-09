@@ -151,9 +151,21 @@ timeout_seconds = 30
         jest_refresh: bool = False,
         jest_refresh_failure: str | None = None,
         runtime_rebuild: str | None = None,
+        trusted_js_toolchain: dict | None = None,
+        malformed_report: bool = False,
     ) -> tuple[int, Path, str]:
         root = Path(tempfile.mkdtemp(prefix="slivin-main-workflow-"))
         repo = self.make_repo(root)
+        if trusted_js_toolchain:
+            (repo / "native.test.cjs").write_text(
+                "const {test} = require('node:test'); const assert = require('node:assert/strict');\n"
+                "test('target state', () => assert.equal(require('node:fs').readFileSync('target.txt', 'utf8').trim(), 'after'));\n", encoding="utf-8")
+            (repo / "unit.test.cjs").write_text(
+                "test('target state', () => expect(require('node:fs').readFileSync('target.txt', 'utf8').trim()).toBe('after'));\n", encoding="utf-8")
+            (repo / "jest.config.cjs").write_text("module.exports = {testRegex: 'unit\\\\.test\\\\.cjs$', testEnvironment: 'node'};\n", encoding="utf-8")
+            (repo / "README.md").write_text("# Usage\n\nSynthetic reader documentation.\n", encoding="utf-8")
+            git(repo, "add", "native.test.cjs", "unit.test.cjs", "jest.config.cjs", "README.md")
+            git(repo, "commit", "-m", "Synthetic mixed test runners")
         if projected_jest:
             jest = repo / "node_modules" / "jest" / "bin" / "jest.js"
             jest.parent.mkdir(parents=True)
@@ -344,7 +356,16 @@ timeout_seconds = 30
             else:
                 report["registered_checks"] = []
                 report["discovered_obligations"] = []
+            if trusted_js_toolchain:
+                report["registered_checks"] = [{"kind": "path", "value": p} for p in ("native.test.cjs", "unit.test.cjs")]
             attach_post_patch_impact(report, plan=kwargs["plan"], changed_paths=task_runner.collect_changed_paths(workspace))
+            if malformed_report:
+                report["post_patch_impact"]["related_out_of_scope"].append({
+                    "name": "Documentation navigation", "paths": ["README.md"], "symbols": ["README.md#usage"],
+                    "relation": "Usage documentation describes the reader.", "reason": "Navigation does not change target state.",
+                    "evidence": ["README.md Usage heading lacks a navigation example."],
+                    "suggested_follow_up": "Add a navigation example below the Usage heading.",
+                })
             if related and kwargs["plan"] is None:
                 report["post_patch_impact"]["related_out_of_scope"] = [related_finding()]
             for row in report["post_patch_impact"]["in_scope_consumers"] + report["post_patch_impact"]["new_risks"]:
@@ -363,6 +384,28 @@ timeout_seconds = 30
                 report["post_patch_impact"] = previous_impact
             previous_impact = copy.deepcopy(report["post_patch_impact"])
             return report
+
+        production_implementer = task_runner.run_implementer_report
+        correction_count = 0
+        invalid_artifact = None
+
+        def actual_report_boundary(codex, **kwargs):
+            nonlocal correction_count, invalid_artifact
+            def agent(*_args, **turn):
+                nonlocal correction_count, invalid_artifact
+                if "REPORT-ONLY CORRECTION" in turn["prompt"]:
+                    correction_count += 1
+                    self.assertEqual(turn["thread_id"], kwargs["thread_id"])
+                    corrected = copy.deepcopy(invalid_artifact)
+                    corrected["post_patch_impact"]["related_out_of_scope"][-1]["symbols"] = ["README.md#usage"]
+                    return json.dumps(corrected)
+                report = fake_implementer_report(codex, **kwargs)
+                if malformed_report and invalid_artifact is None:
+                    report["post_patch_impact"]["related_out_of_scope"][-1]["symbols"] = []
+                    invalid_artifact = copy.deepcopy(report)
+                return json.dumps(report)
+            with mock.patch.object(task_runner, "run_agent_turn", side_effect=agent):
+                return production_implementer(codex, **kwargs)
 
         original_run_checks = task_runner.run_checks
 
@@ -413,6 +456,8 @@ timeout_seconds = 30
             },
             "workspace": {"root": str(root / "workspaces")},
         }
+        if trusted_js_toolchain:
+            local_config["projects"]["demo"]["toolchain"] = trusted_js_toolchain
         if jest_refresh:
             local_config["projects"]["demo"]["toolchain"] = {
                 "node": sys.executable, "jest": str(jest),
@@ -432,7 +477,7 @@ timeout_seconds = 30
             mock.patch.object(task_runner, "run_planner", side_effect=fake_planner),
             mock.patch.object(task_runner, "validate_planner_artifact", wraps=task_runner.validate_planner_artifact) as planner_validation,
             mock.patch.object(task_runner, "run_evaluator", side_effect=fake_evaluator),
-            mock.patch.object(task_runner, "run_implementer_report", side_effect=fake_implementer_report),
+            mock.patch.object(task_runner, "run_implementer_report", side_effect=actual_report_boundary if trusted_js_toolchain else fake_implementer_report),
             mock.patch.object(task_runner, "run_checks", side_effect=controller_checks),
             mock.patch.object(task_runner, "run_authoritative_reconstructed_verification", side_effect=reconstructed_verification),
             mock.patch.object(task_runner, "deliver_candidate_transaction", side_effect=delivery),
@@ -444,6 +489,11 @@ timeout_seconds = 30
             self.assertEqual(planner_validation.call_count, 2 if with_replan else 1, output.getvalue())
             for call in planner_validation.call_args_list:
                 self.assertEqual(call.kwargs["owner_allowed_paths"], owner_allowed_paths)
+        if trusted_js_toolchain and result == 0:
+            self.assertEqual(implementer_calls, 2, "One registration expansion, no compiler/replan loop")
+            self.assertEqual(len(set(implementer_threads)), 1)
+            self.assertEqual(correction_count, int(malformed_report))
+            self.assertEqual(evaluator_calls, 1)
         return result, run_root, output.getvalue()
 
     def test_infeasible_corrected_plan_stops_before_contract_and_implementer(self) -> None:
@@ -526,7 +576,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a29")
+        self.assertEqual(build_identity["version"], "0.8.0a30")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)

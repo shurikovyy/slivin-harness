@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a29
+# Документация Slivin Harness 0.8.0a30
 
-Актуальная версия: **0.8.0a29 — Scoped Scratch for Read-only Roles**.
+Актуальная версия: **0.8.0a30 — Runner-aware Verification and Report Recovery**.
 
 Основные документы:
 

@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a29 — Phase 7
+# Модель качества Slivin Harness 0.8.0a30 — Phase 7
 
 Для Planner/Evaluator различаются requested scratch-only policy, reported App Server
 policy и результаты реальных sandbox operations. Metadata PASS не означает запуск
@@ -434,3 +434,11 @@ delivery-record.v2
 heldout-evidence.v2
 benchmark-isolation.v1
 ```
+
+Discovered checks используют общий framework-aware compiler и replayable Controller
+command templates. Native node:test и Jest не выбираются по одному extension.
+Compiled registry drift обновляет verification evidence, owner commands сохраняются.
+Локальное evidence report исправляется bounded correction в том же thread без
+изменения candidate/claims; invalid attempts сохраняются, COMPLETE по-прежнему
+требует полный validator и trusted evidence. Детали и native smoke:
+[Phase 4 — runner resolution / report correction](PHASE4_EXECUTION.md).

@@ -272,3 +272,11 @@ a Contract, check-registry, or runtime change.
 ## Historical Phase 5 boundary
 
 At `0.8.0a8`, runtime/evaluator/replan/final delivery were still pending. Phase 6 and Phase 7 subsequently implemented those layers. The remaining cross-platform boundary is the universal OS-enforced Controller subprocess sandbox; Execution Broker still reports the actual `ENFORCED`, `ADVISORY`, or `UNAVAILABLE` level.
+
+Discovered checks используют общий framework-aware compiler и replayable Controller
+command templates. Native node:test и Jest не выбираются по одному extension.
+Compiled registry drift обновляет verification evidence, owner commands сохраняются.
+Локальное evidence report исправляется bounded correction в том же thread без
+изменения candidate/claims; invalid attempts сохраняются, COMPLETE по-прежнему
+требует полный validator и trusted evidence. Детали и native smoke:
+[Phase 4 — runner resolution / report correction](PHASE4_EXECUTION.md).

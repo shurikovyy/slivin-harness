@@ -217,6 +217,15 @@ class CheckRegistry:
         data = self.load()
         return tuple(CheckReference(**item) for item in data["checks"])
 
+    def bind_compiled_specs(self, specs: Sequence[Mapping[str, Any]]) -> None:
+        """Bind executable templates as well as path names; runner drift is a revision."""
+        data = self.load()
+        compiled = sorted((dict(spec) for spec in specs), key=lambda spec: tuple(spec["command"]))
+        if data.get("compiled_specs", []) != compiled:
+            data["compiled_specs"] = compiled
+            data["revision"] = int(data.get("revision", 0)) + 1
+            self.save(data)
+
     def digest(self) -> str:
         data = self.load()
         payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

@@ -470,7 +470,7 @@ def validate_post_patch_impact(
                 else:
                     values = require_string_list(value, field=key_field)
                     if not values:
-                        _impact_mismatch("IMPACT_EVIDENCE_EMPTY", f"{key_field} requires concrete evidence", value)
+                        impact_error("IMPACT_EVIDENCE_EMPTY", field=key_field, message=f"{key_field} requires concrete evidence", actual=value)
                     for entry in values:
                         impact_text(entry, field=key_field)
                     if key in {"paths", "evidence_paths"}:
@@ -478,7 +478,7 @@ def validate_post_patch_impact(
                         if group == "search_evidence":
                             search_paths.extend(paths)
                     if key == "symbols" and any(any(char.isspace() for char in entry) or not any(char.isalnum() for char in entry) for entry in values):
-                        _impact_mismatch("IMPACT_SYMBOL_GENERIC", "Post-patch symbols must name concrete identifiers", values)
+                        impact_error("IMPACT_SYMBOL_GENERIC", field=key_field, message="Post-patch symbols require concrete identifiers or documentation link targets/anchors", actual=values)
             if "name" in row:
                 name = _impact_name(row)
                 if name in by_group[group]:
@@ -746,7 +746,7 @@ def parse_implementation_report(raw: str) -> dict[str, Any]:
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Implementer returned invalid JSON structured output.\n" + raw) from exc
+        raise ArtifactContractError(code="REPORT_INVALID_JSON", field="report", message="Implementer returned invalid JSON", expected="An Implementer JSON object") from exc
     if not isinstance(value, dict):
-        raise RuntimeError("Implementer structured output must be an object")
+        raise ArtifactContractError(code="TYPE_MISMATCH", field="report", message="Implementer report must be an object", expected="An Implementer JSON object")
     return value

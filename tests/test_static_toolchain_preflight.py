@@ -431,7 +431,7 @@ raise SystemExit(9)
             ],
         )
         self.assertFalse(notes)
-        self.assertEqual(specs[0]["command"][0], "project-python")
+        self.assertEqual(task_runner.expand_command(specs[0]["command"], workspace=self.workspace, toolchain={"project_python": "project-python", "python": "configured-python"})[0], "project-python")
 
     def test_unknown_and_missing_known_placeholders_are_distinct(self) -> None:
         unknown = run_static_toolchain_preflight(
