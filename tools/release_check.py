@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 from slivin_harness import __version__
 from slivin_harness.build_identity import detect_harness_build_identity, source_manifest
 from slivin_harness.workflow import workflow_snapshot
+from tools.release_identity import codex_launch_identity
 
 
 def write(path, value):
@@ -51,6 +52,7 @@ def tools_from_profile(args):
     for name, executable, argv in (("node", node, [str(node), "--version"]), ("jest", jest, [str(node), str(jest), "--version"]), ("codex", codex, [str(codex), "--version"])):
         version = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", check=True, timeout=30).stdout.strip()
         record[name] = dict(path=str(executable), sha256=hashlib.sha256(executable.read_bytes()).hexdigest(), version=version)
+    record['codex']['launch_chain'] = codex_launch_identity(codex, cwd=ROOT)
     return node, jest, codex, runtime, record
 
 
@@ -117,7 +119,10 @@ def main() -> int:
             if stage["status"] != "PASS":
                 break
         report["source_unchanged"] = initial == source_manifest(ROOT)
-        report["executables_unchanged"] = all(hashlib.sha256(Path(value["path"]).read_bytes()).hexdigest() == value["sha256"] for value in versions.values())
+        # Resolve again as well as hashing: an unchanged shim can select another
+        # PATH/local Node or platform package/native payload after the run.
+        report["executables_after"] = tools_from_profile(args)[4]
+        report["executables_unchanged"] = report["executables_after"] == versions
         qualified = not args.diagnostic and report["source_unchanged"] and report["executables_unchanged"] and all(stage["status"] == "PASS" for stage in report["stages"].values())
         report["status"] = "RELEASE_QUALIFIED" if qualified else "NOT_QUALIFIED"
     except Exception as error:

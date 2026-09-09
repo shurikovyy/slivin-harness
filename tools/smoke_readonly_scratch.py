@@ -283,6 +283,10 @@ def main() -> int:
         if not all(invariance[key] for key in ("project_files_unchanged", "candidate_unchanged", "source_runtime_unchanged", "canaries_unchanged")) or invariance["git_status"]:
             summary["status"] = "FAIL"
         write_json(logs / "invariance.json", invariance)
+        summary['policy_evidence_sha256'] = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(logs.iterdir()) if path.is_file() and
+            (path.name in {'app_server_command.json', 'requests.jsonl', 'commands.jsonl', 'invariance.json'}
+             or path.name.endswith('_thread.json'))}
         write_json(logs / "result.json", summary)
     print("NATIVE_SCOPED_SCRATCH_" + summary["status"], logs, flush=True)
     return 0 if summary["status"] == "PASS" else 1

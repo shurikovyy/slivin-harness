@@ -130,7 +130,12 @@ digests/current receipt, reconstruction и keep_worktree delivery. Правил�
 завершившаяся controlled stop, остаётся FAIL.
 
 `qualification.json` связывает stages/logs с full Git SHA, source manifest,
-Harness/workflow и exact executables. Изменение sources/executables во время прогона
+Harness/workflow и exact executables. Для npm Codex сверяется полная цепочка:
+`codex.cmd`, фактически выбранный им Node, `codex.js`, package metadata,
+native vendor payload со всеми helpers и command processor. Resolution и hashes
+повторяются после прогона; неизвестный wrapper не получает qualification.
+Native summary связывает hashes launch requests, role contexts и actual canary
+results с этой сборкой. Изменение sources/executables во время прогона
 запрещает RELEASE_QUALIFIED. Обязательный NOT_RUN/SKIP/FAIL запрещает qualification.
 Отдельные unsupported platform checks отмечаются по exact test ID/reason; native
 role и реальные runner assertions нельзя пропустить этим исключением.

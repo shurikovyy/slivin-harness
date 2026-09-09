@@ -781,6 +781,15 @@ tests связаны в map. [SYSTEMIC_RELIABILITY](SYSTEMIC_RELIABILITY.md) з�
 release workflow, fixture/budget inventory и уровни доказательств. Developer/reviewer
 probes сохранены отдельно; они не приравниваются к квалификации неизменного build.
 
+Executable binding включает разрешённую installed цепочку launcher/Node/native
+payload/helpers, а не только hash `codex.cmd` и строку версии. Review первого
+frozen запуска установил, что неизменный shim не замечал подмены native executable;
+тот запуск остановлен как NOT_QUALIFIED до model stages. Release entrypoint заново
+определяет цепочку и hashes после испытаний; неизвестные wrappers не квалифицируются.
+Цена — два локальных `--version` probes и hashing native payload без изменения
+installed runtime/settings. Tests изменяют только disposable payload и проверяют
+helper/native/launcher replacement, PATH/local Node и platform retarget.
+
 **Superseded boundaries.** D-005/D-007: cross-role копирование текста и DTO уступают
 Controller origins; обязательная полнота/follow-ups сохранены. D-017: proof-only reset
 заменён сохранением candidate и независимым review; настоящий technical reset сохранён.
