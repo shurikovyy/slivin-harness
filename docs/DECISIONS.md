@@ -803,7 +803,9 @@ Qualification использует короткие внутренние case/wo
 Real-model replay также выявил два production boundary дефекта. B17 больше не пытается
 sealing исчезающие reserved Jest cache-файлы, но продолжает сохранять authored scratch.
 Patch packaging помещает raw physical blobs в disposable object database и использует
-binary delta только для путей, изменённых Git filters. Reconstruction применяет patch
+binary delta только когда configured worktree conversion не может воспроизвести exact
+physical bytes; воспроизводимые text paths остаются читаемыми для Evaluator. Windows
+read-only loose objects очищаются вместе с disposable store. Reconstruction применяет patch
 к private index, materializes exact blobs без filters и не ослабляет сравнение candidate.
 Delivery валидирует patch/blob mapping в отдельном index, после чего переносит accepted
 postimages с прежними source rechecks, rollback и concurrent-edit guards.

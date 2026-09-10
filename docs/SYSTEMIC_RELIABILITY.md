@@ -141,10 +141,14 @@ Candidate checkpoint сохраняет authored role scratch, но исключ
 role artifact; обычные proof-файлы по-прежнему sealing до report validation.
 
 `candidate.patch` строится из exact physical blobs в disposable Git object database.
-Пути, bytes которых Git clean/EOL filters нормализуют, кодируются binary delta; остальные
-остаются обычным text diff. Controller-owned `info/attributes` в disposable Git directory
-не позволяет project diff driver отменить required binary delta. Reconstruction применяет patch к private index, materializes
-его blobs без checkout filters и затем требует прежний exact `candidate_id`.
+Пути, exact bytes которых configured Git worktree conversion не воспроизводит из
+filtered blob, кодируются binary delta; остальные сохраняют читаемый text diff.
+Истинно binary content также остается binary. Disposable loose objects удаляются,
+включая снятие Windows read-only bit после завершения packaging. Controller-owned
+`info/attributes` в disposable Git directory
+не позволяет project diff driver отменить required binary delta. Reconstruction
+применяет patch к private index, materializes его blobs без checkout filters и затем
+требует прежний exact `candidate_id`.
 `apply_to_source` сначала сопоставляет тот же patch и каждый blob с accepted candidate
 в disposable index, затем переносит exact postimages при сохранении source HEAD/clean
 rechecks, transactional rollback и защиты concurrent user edits. Реальный Git index и

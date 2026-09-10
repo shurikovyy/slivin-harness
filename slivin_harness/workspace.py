@@ -974,9 +974,12 @@ def _build_patch(repo: Path, *, scratch_root: Path | None = None) -> bytes:
                 path = repo / rel
                 raw = (os.readlink(path).encode("utf-8", errors="surrogateescape")
                        if entry["state"] == "symlink" else path.read_bytes())
+                roundtrip = run(
+                    "cat-file", "--filters", f"--path={rel}", filtered[1]
+                ).stdout
                 raw_blob = run("hash-object", "-w", "--stdin", input_bytes=raw).stdout.decode("ascii").strip()
                 run("update-index", "--add", "--cacheinfo", str(entry["mode"]), raw_blob, rel)
-                if raw_blob != filtered[1]:
+                if raw != roundtrip or b"\0" in raw[:8000]:
                     binary_paths.append(rel)
         attributes = diff_git_dir / "info" / "attributes"
         attributes.write_text(
@@ -1000,7 +1003,14 @@ def _build_patch(repo: Path, *, scratch_root: Path | None = None) -> bytes:
             )
         return patch
     finally:
-        shutil.rmtree(temp_root, ignore_errors=True)
+        # Git creates loose objects read-only on Windows.  Clear that bit so
+        # the Controller-owned scratch directory is actually removed rather
+        # than silently retained by ``ignore_errors``.
+        if object_directory.exists():
+            for item in object_directory.rglob("*"):
+                if item.is_file():
+                    item.chmod(stat.S_IREAD | stat.S_IWRITE)
+        shutil.rmtree(temp_root)
 
 
 def build_repository_patch(repo: Path, *, scratch_root: Path | None = None) -> bytes:
