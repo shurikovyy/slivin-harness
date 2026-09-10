@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -911,15 +912,40 @@ def _build_patch(repo: Path, *, scratch_root: Path | None = None) -> bytes:
     index_path = temp_root / "index"
     hooks_path = temp_root / "h"
     hooks_path.mkdir()
+    diff_git_dir = temp_root / "git"
+    initialized = subprocess.run(
+        ["git", "init", "--bare", str(diff_git_dir)],
+        cwd=repo,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+    )
+    if initialized.returncode != 0:
+        shutil.rmtree(temp_root, ignore_errors=True)
+        raise RuntimeError(
+            "Failed to initialize disposable patch Git directory:\n"
+            + initialized.stderr.decode("utf-8", errors="replace")
+        )
+    common_git_dir = Path(str(_run_git(repo, "rev-parse", "--git-common-dir").stdout).strip())
+    if not common_git_dir.is_absolute():
+        common_git_dir = (repo / common_git_dir).resolve()
+    object_directory = temp_root / "objects"
+    object_directory.mkdir()
     environment = dict(os.environ)
     environment["GIT_INDEX_FILE"] = str(index_path)
     environment["GIT_OPTIONAL_LOCKS"] = "0"
+    # Raw candidate blobs are proof inputs, not new source-repository objects.
+    # Store them in the disposable isolated object database and read the
+    # baseline through a read-only alternate.
+    environment["GIT_OBJECT_DIRECTORY"] = str(object_directory)
+    environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = str(common_git_dir / "objects")
 
-    def run(*args: str) -> subprocess.CompletedProcess[bytes]:
+    def run(*args: str, input_bytes: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
         completed = subprocess.run(
             ["git", "-c", f"core.hooksPath={hooks_path}", *args],
             cwd=repo,
             env=environment,
+            input=input_bytes,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             shell=False,
@@ -933,15 +959,46 @@ def _build_patch(repo: Path, *, scratch_root: Path | None = None) -> bytes:
 
     try:
         run("read-tree", baseline.baseline_sha)
+        binary_paths: list[str] = []
         for entry in baseline.changed_entries():
             rel = str(entry["path"])
             if entry["state"] == "deleted":
                 run("update-index", "--force-remove", "--", rel)
             else:
+                # First observe the repository-filtered blob, then replace the
+                # isolated index entry with the exact physical candidate bytes.
                 run("add", "-f", "--", rel)
-        return run(
-            "diff", "--cached", "--binary", "--full-index", baseline.baseline_sha, "--"
+                filtered = run("ls-files", "--stage", "--", rel).stdout.decode("utf-8", errors="strict").split()
+                if len(filtered) < 2:
+                    raise RuntimeError("Failed to resolve filtered candidate blob: " + rel)
+                path = repo / rel
+                raw = (os.readlink(path).encode("utf-8", errors="surrogateescape")
+                       if entry["state"] == "symlink" else path.read_bytes())
+                raw_blob = run("hash-object", "-w", "--stdin", input_bytes=raw).stdout.decode("ascii").strip()
+                run("update-index", "--add", "--cacheinfo", str(entry["mode"]), raw_blob, rel)
+                if raw_blob != filtered[1]:
+                    binary_paths.append(rel)
+        attributes = diff_git_dir / "info" / "attributes"
+        attributes.write_text(
+            "".join(json.dumps(path, ensure_ascii=False) + " -diff\n" for path in binary_paths),
+            encoding="utf-8",
+        )
+        # info/attributes has higher precedence than repository and global
+        # attributes, so a product-defined text diff driver cannot silently
+        # downgrade an exact raw-blob delta.  This disposable Git directory
+        # shares only the isolated index/object database.
+        environment["GIT_DIR"] = str(diff_git_dir)
+        environment["GIT_WORK_TREE"] = str(repo)
+        patch = run(
+            "diff", "--cached", "--binary",
+            "--full-index", "--no-ext-diff", baseline.baseline_sha, "--"
         ).stdout
+        if patch.count(b"GIT binary patch") < len(binary_paths):
+            raise RuntimeError(
+                "Exact candidate patch did not encode every filter-normalized path as binary: "
+                f"paths={binary_paths!r} encoded={patch.count(b'GIT binary patch')}"
+            )
+        return patch
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 

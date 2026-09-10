@@ -25,6 +25,7 @@ CHECKPOINT_VERSION = "candidate-checkpoint.v1"
 # inputs, while authored proof scripts/results are sealed before scratch reset.
 _CONTROLLER_EVIDENCE = re.compile(r"(?:check_registry|verification_plan(?:_\d+)?|execution_policy|project_runtime(?:_replan)?_\d+|runtime_evidence_\d+|contract_closure_\d+|planner_tool_evidence_\d+|self_verify_receipt.*)\.json\Z")
 _SCRATCH_EXCLUDES = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", "cache", "npm", "npm-cache", "jest-cache"}
+_JEST_CACHE_FILE = re.compile(r"(?:haste-map|perf-cache)-[0-9a-f-]+\Z")
 _SENSITIVE_NAMES = {".env", ".receipt_key", "credentials", "credentials.json", "auth.json", "config.toml", "id_rsa", "id_ed25519"}
 
 
@@ -58,6 +59,9 @@ def seal_evidence(*, plane: ControllerPlane, workspace: Path) -> tuple[list[dict
             for name in sorted(filenames):
                 path = Path(parent) / name
                 locator = path.relative_to(workspace).as_posix()
+                if Path(parent).name == "jest" and _JEST_CACHE_FILE.fullmatch(name):
+                    excluded.append(dict(locator=locator, reason="REPRODUCIBLE_CACHE_OR_RUNTIME"))
+                    continue
                 if name in _SENSITIVE_NAMES or name.startswith(".env.") or path.suffix.lower() in {".key", ".pem", ".pfx", ".p12"}:
                     excluded.append(dict(locator=locator, reason="SENSITIVE_MATERIAL_NOT_READ"))
                     continue

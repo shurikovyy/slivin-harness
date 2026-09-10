@@ -77,9 +77,15 @@ class AdmissionMatrixTests(unittest.TestCase):
         original = root / 'proof.py'
         raw = b'assert 2 + 2 == 4\n'
         original.write_bytes(raw)
+        cache = root / 'jest' / ('haste-map-' + 'a' * 40 + '-' + 'b' * 40)
+        cache.parent.mkdir()
+        cache.write_bytes(b'volatile')
         checkpoint = save_report_checkpoint(plane=self.plane, workspace=self.fixture.workspace,
             name='durable', contract=self.fixture.contract, check_registry_digest='registry')
         row = next(row for row in checkpoint['evidence'] if row['kind'] == 'UNTRUSTED_ROLE_SCRATCH')
+        self.assertEqual(row['original_locator'], original.relative_to(self.fixture.workspace).as_posix())
+        self.assertIn(dict(locator=cache.relative_to(self.fixture.workspace).as_posix(),
+                           reason='REPRODUCIBLE_CACHE_OR_RUNTIME'), checkpoint['evidence_exclusions'])
         original.unlink()
         verify_checkpoint_evidence(self.plane, checkpoint)
         durable = self.plane.private_root / row['artifact']

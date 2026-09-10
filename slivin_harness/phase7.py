@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -372,6 +373,44 @@ def _status_porcelain(repo: Path) -> str:
     )
 
 
+def _materialize_index_candidate(repo: Path, entries: Iterable[Mapping[str, Any]]) -> None:
+    """Write exact post-patch index blobs without checkout filters."""
+    for entry in entries:
+        relative = _safe_relative(str(entry.get("path", "")))
+        path = repo / relative
+        state = entry.get("state")
+        if state == "deleted":
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.exists():
+                raise Phase7Error("Deleted candidate path unexpectedly became a directory: " + relative.as_posix())
+            continue
+        if state not in {"file", "symlink"}:
+            raise Phase7Error("Unsupported candidate entry during reconstruction: " + repr(state))
+        blob = subprocess.run(
+            ["git", "show", ":" + relative.as_posix()], cwd=repo,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        if blob.returncode != 0:
+            raise Phase7Error(
+                "Patched index is missing candidate blob: " + relative.as_posix() + "\n"
+                + blob.stderr.decode("utf-8", errors="replace")
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.exists():
+            raise Phase7Error("Candidate path unexpectedly became a directory: " + relative.as_posix())
+        if state == "symlink":
+            os.symlink(blob.stdout.decode("utf-8", errors="surrogateescape"), path)
+        else:
+            path.write_bytes(blob.stdout)
+            if os.name != "nt":
+                current = path.stat().st_mode
+                executable = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                path.chmod(current | executable if entry.get("mode") == "100755" else current & ~executable)
+
+
 def _safe_relative(raw: str) -> Path:
     rel = Path(str(raw).replace("\\", "/"))
     if not str(raw).strip() or rel.is_absolute() or ".." in rel.parts:
@@ -537,7 +576,7 @@ def build_patch_reconstruction_proof(
         # benchmarks separately require a material candidate change.
         if patch:
             applied = subprocess.run(
-                ["git", "apply", "--binary", "--whitespace=nowarn", "-"],
+                ["git", "apply", "--cached", "--binary", "--whitespace=nowarn", "-"],
                 cwd=proof_repo,
                 input=patch,
                 stdout=subprocess.PIPE,
@@ -548,6 +587,7 @@ def build_patch_reconstruction_proof(
                     "Accepted patch cannot reconstruct from the recorded baseline:\n"
                     + applied.stderr.decode("utf-8", errors="replace")
                 )
+            _materialize_index_candidate(proof_repo, expected_candidate.entries)
         reconstructed = build_candidate_identity(
             proof_repo,
             baseline_sha=baseline_sha,
@@ -654,7 +694,7 @@ def run_reconstructed_verification(
         )
         if patch:
             applied = subprocess.run(
-                ["git", "apply", "--binary", "--whitespace=nowarn", "-"],
+                ["git", "apply", "--cached", "--binary", "--whitespace=nowarn", "-"],
                 cwd=proof_repo,
                 input=patch,
                 stdout=subprocess.PIPE,
@@ -663,6 +703,7 @@ def run_reconstructed_verification(
             )
             if applied.returncode != 0:
                 raise Phase7Error("Reconstructed verification could not apply candidate.patch")
+            _materialize_index_candidate(proof_repo, expected_candidate.entries)
         reconstructed = build_candidate_identity(
             proof_repo,
             baseline_sha=baseline_sha,
@@ -858,6 +899,111 @@ def _git_common_dir(source: Path) -> Path:
     return (path if path.is_absolute() else source / path).resolve()
 
 
+def _delivery_patch_matches_candidate(
+    *,
+    source: Path,
+    baseline_sha: str,
+    patch: bytes,
+    expected_candidate: CandidateIdentity,
+) -> bool:
+    """Validate the patch in a disposable index and object database.
+
+    Delivery must not stage the user's repository or let checkout filters alter
+    the accepted physical bytes.  The binary patch is therefore applied to an
+    isolated index, and every resulting blob is compared with ``candidate.v1``
+    before the source worktree is touched.
+    """
+
+    temp_root = Path(tempfile.mkdtemp(prefix="sh-delivery-"))
+    index_path = temp_root / "index"
+    object_directory = temp_root / "objects"
+    hooks_path = temp_root / "hooks"
+    object_directory.mkdir()
+    hooks_path.mkdir()
+    environment = dict(os.environ)
+    environment["GIT_INDEX_FILE"] = str(index_path)
+    environment["GIT_OBJECT_DIRECTORY"] = str(object_directory)
+    environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = str(
+        _git_common_dir(source) / "objects"
+    )
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+
+    def run(*args: str, input_bytes: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            ["git", "-c", f"core.hooksPath={hooks_path}", *args],
+            cwd=source,
+            env=environment,
+            input=input_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+        )
+
+    try:
+        if run("read-tree", baseline_sha).returncode != 0:
+            return False
+        if patch and run(
+            "apply",
+            "--cached",
+            "--binary",
+            "--whitespace=nowarn",
+            "-",
+            input_bytes=patch,
+        ).returncode != 0:
+            return False
+
+        changed = run("diff", "--cached", "--name-only", "-z", baseline_sha)
+        if changed.returncode != 0:
+            return False
+        changed_paths = tuple(
+            sorted(
+                item.decode("utf-8", errors="surrogateescape")
+                for item in changed.stdout.split(b"\0")
+                if item
+            )
+        )
+        if changed_paths != tuple(sorted(expected_candidate.changed_paths)):
+            return False
+        entry_paths = tuple(
+            sorted(_safe_relative(str(item.get("path", ""))).as_posix()
+                   for item in expected_candidate.entries)
+        )
+        if entry_paths != changed_paths:
+            return False
+
+        for entry in expected_candidate.entries:
+            rel = _safe_relative(str(entry.get("path", ""))).as_posix()
+            staged = run("ls-files", "--stage", "-z", "--", rel)
+            if staged.returncode != 0:
+                return False
+            if entry.get("state") == "deleted":
+                if staged.stdout:
+                    return False
+                continue
+            fields = staged.stdout.rstrip(b"\0").split(None, 3)
+            if len(fields) < 4 or fields[2] != b"0":
+                return False
+            mode = fields[0].decode("ascii", errors="strict")
+            expected_mode = str(entry.get("mode") or "")
+            if mode != expected_mode:
+                return False
+            blob = run("show", ":" + rel)
+            if blob.returncode != 0:
+                return False
+            expected_state = "symlink" if mode == "120000" else "file"
+            if entry.get("state") != expected_state:
+                return False
+            if hashlib.sha256(blob.stdout).hexdigest() != entry.get("sha256"):
+                return False
+            if len(blob.stdout) != entry.get("size"):
+                return False
+        return True
+    except (OSError, UnicodeError, ValueError):
+        return False
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 @contextmanager
 def _delivery_lock(source: Path, *, timeout_seconds: float = 30.0) -> Iterator[Path]:
     lock_path = _git_common_dir(source) / "slivin-harness-delivery.lock"
@@ -1005,7 +1151,57 @@ def deliver_candidate_transaction(
                     rollback_status=None,
                     conflict_paths=(),
                 )
+            # Bind source comparisons to the clean physical checkout.  A Git
+            # tree stores canonical blobs, so using it directly as the
+            # worktree baseline would misclassify normal CRLF checkout bytes as
+            # unrelated edits under ``core.autocrlf=true``.
+            CandidateWorkspaceBaseline.capture(
+                source,
+                baseline_sha=source_head_before,
+                excluded_prefixes=(
+                    ".git",
+                    ".harness_tmp",
+                    ".venv",
+                    ".harness_git_excludes",
+                    *session.exposed_paths,
+                ),
+            )
+            observed_candidate = build_candidate_identity(
+                session.workspace,
+                baseline_sha=session.base_sha or final_candidate.baseline_sha,
+            )
+            if (
+                observed_candidate.candidate_id != final_candidate.candidate_id
+                or observed_candidate.changed_paths != final_candidate.changed_paths
+            ):
+                return DeliveryResult(
+                    schema_version=DELIVERY_RECORD_VERSION,
+                    status=StageResultCode.RESULT_DELIVERY_BLOCKED.value,
+                    result_mode=session.result_mode,
+                    destination=str(source),
+                    reason_code="ACCEPTED_CANDIDATE_CHANGED_BEFORE_DELIVERY",
+                    source_head_before=source_head_before,
+                    source_head_after=source_head_before,
+                    lock_path=str(lock_path),
+                    exact_patch_match=False,
+                    rollback_status=None,
+                    conflict_paths=(),
+                )
             if not patch:
+                if final_candidate.changed_paths:
+                    return DeliveryResult(
+                        schema_version=DELIVERY_RECORD_VERSION,
+                        status=StageResultCode.RESULT_DELIVERY_BLOCKED.value,
+                        result_mode=session.result_mode,
+                        destination=str(source),
+                        reason_code="PATCH_APPLY_CHECK_FAILED",
+                        source_head_before=source_head_before,
+                        source_head_after=source_head_before,
+                        lock_path=str(lock_path),
+                        exact_patch_match=False,
+                        rollback_status=None,
+                        conflict_paths=(),
+                    )
                 return DeliveryResult(
                     schema_version=DELIVERY_RECORD_VERSION,
                     status=StageResultCode.RESULT_DELIVERY_PASS.value,
@@ -1029,14 +1225,12 @@ def deliver_candidate_transaction(
                 rel: _snapshot_path(session.workspace / _safe_relative(rel))
                 for rel in changed_paths
             }
-            check = subprocess.run(
-                ["git", "apply", "--check", "--binary", "--whitespace=nowarn", "-"],
-                cwd=source,
-                input=patch,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            if check.returncode != 0:
+            if not _delivery_patch_matches_candidate(
+                source=source,
+                baseline_sha=source_head_before,
+                patch=patch,
+                expected_candidate=final_candidate,
+            ):
                 return DeliveryResult(
                     schema_version=DELIVERY_RECORD_VERSION,
                     status=StageResultCode.RESULT_DELIVERY_BLOCKED.value,
@@ -1081,14 +1275,10 @@ def deliver_candidate_transaction(
                     conflict_paths=(),
                 )
 
-            applied = subprocess.run(
-                ["git", "apply", "--binary", "--whitespace=nowarn", "-"],
-                cwd=source,
-                input=patch,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            if applied.returncode != 0:
+            try:
+                for rel in changed_paths:
+                    _restore_snapshot(source / _safe_relative(rel), postimages[rel])
+            except (OSError, Phase7Error):
                 rollback_status, conflicts = _rollback_delivery(
                     source=source,
                     preimages=preimages,

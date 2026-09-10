@@ -158,21 +158,23 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
         self.assertEqual(proof["status"], "PATCH_RECONSTRUCTION_PASS")
         self.assertEqual(proof["reconstructed_candidate_id"], candidate.candidate_id)
 
+        tampered = patch.replace(b"GIT binary patch", b"GIT binary patcx", 1)
+        self.assertNotEqual(tampered, patch)
         with self.assertRaises(Phase7Error):
             build_patch_reconstruction_proof(
                 repository=repo,
                 baseline_sha=head,
-                patch=patch.replace(b"+after", b"+wrong", 1),
+                patch=tampered,
                 expected_candidate=candidate,
                 private_root=root / "private2",
             )
 
     def test_patch_reconstruction_preserves_source_checkout_eol_policy(self) -> None:
-        """Regression for native Windows ``core.autocrlf=true`` worktrees.
+        """Regression for mixed physical EOL under ``core.autocrlf=true``.
 
-        The patch contains canonical LF lines, while ``candidate.v1`` binds the
-        exact CRLF bytes visible in the accepted worktree.  Reconstruction must
-        mirror the source checkout policy instead of forcing LF bytes.
+        Git's text diff normalizes the candidate, while ``candidate.v1`` binds
+        exact mixed bytes.  The patch must carry a raw binary delta and proof
+        materialization must bypass checkout filters.
         """
 
         root = Path(tempfile.mkdtemp(prefix="phase7-autocrlf-"))
@@ -182,12 +184,25 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
         git(repo, "config", "user.name", "Test")
         git(repo, "config", "user.email", "test@example.invalid")
         git(repo, "config", "core.autocrlf", "true")
-        (repo / "target.txt").write_bytes(b"before\r\n")
-        git(repo, "add", "target.txt")
+        (repo / ".gitattributes").write_text("target.txt diff\n", encoding="utf-8")
+        (repo / "target.txt").write_bytes(b"before\r\nsecond\r\n")
+        git(repo, "add", ".gitattributes", "target.txt")
         git(repo, "commit", "-m", "baseline")
         head = git(repo, "rev-parse", "HEAD")
+        CandidateWorkspaceBaseline.capture(
+            repo,
+            baseline_sha=head,
+            excluded_prefixes=(".git", ".harness_tmp", ".harness_git_excludes"),
+        )
+        common = Path(git(repo, "rev-parse", "--git-common-dir"))
+        if not common.is_absolute():
+            common = (repo / common).resolve()
+        objects_before = {
+            path.relative_to(common / "objects").as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (common / "objects").rglob("*") if path.is_file()
+        }
 
-        (repo / "target.txt").write_bytes(b"after\r\n")
+        (repo / "target.txt").write_bytes(b"after\r\nmixed\n")
         session = WorkspaceSession(
             workspace=repo,
             mode="static",
@@ -195,11 +210,17 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
             base_sha=head,
         )
         patch = build_candidate_patch(session)
+        objects_after = {
+            path.relative_to(common / "objects").as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (common / "objects").rglob("*") if path.is_file()
+        }
+        self.assertEqual(objects_after, objects_before)
         candidate = build_candidate_identity(repo, baseline_sha=head)
         target_entry = next(
             item for item in candidate.entries if item["path"] == "target.txt"
         )
-        self.assertEqual(target_entry["size"], len(b"after\r\n"))
+        self.assertEqual(target_entry["size"], len(b"after\r\nmixed\n"))
+        self.assertIn(b"GIT binary patch", patch)
 
         proof = build_patch_reconstruction_proof(
             repository=repo,
@@ -251,7 +272,14 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
             task_id="DELIVER",
         )
         try:
-            (session.workspace / "keep.txt").write_text("after\n", encoding="utf-8")
+            common = Path(git(source, "rev-parse", "--git-common-dir"))
+            if not common.is_absolute():
+                common = (source / common).resolve()
+            objects_before = {
+                path.relative_to(common / "objects").as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in (common / "objects").rglob("*") if path.is_file()
+            }
+            (session.workspace / "keep.txt").write_bytes(b"after\r\nmixed\n")
             patch = build_candidate_patch(session)
             candidate = build_candidate_identity(
                 session.workspace,
@@ -264,8 +292,14 @@ class PhaseSevenFinalGateTests(unittest.TestCase):
             )
             self.assertEqual(result.status, StageResultCode.RESULT_DELIVERY_PASS.value)
             self.assertTrue(result.exact_patch_match)
-            self.assertEqual((source / "keep.txt").read_text(encoding="utf-8"), "after\n")
+            self.assertEqual((source / "keep.txt").read_bytes(), b"after\r\nmixed\n")
             self.assertEqual(build_candidate_patch(WorkspaceSession(workspace=source, mode="static", managed=False)), patch)
+            self.assertEqual(git(source, "diff", "--cached", "--name-only"), "")
+            objects_after = {
+                path.relative_to(common / "objects").as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in (common / "objects").rglob("*") if path.is_file()
+            }
+            self.assertEqual(objects_after, objects_before)
         finally:
             remove_managed_workspace(session)
 

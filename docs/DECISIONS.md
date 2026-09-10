@@ -800,6 +800,13 @@ in-memory, после них сверяются bytes artifacts и physical cand
 Qualification использует короткие внутренние case/workspace identifiers и заранее
 проверяет фактическую длину самого глубокого runtime path. Поэтому Windows path limit
 не может подменить real-model execution быстрым инфраструктурным FAIL.
+Real-model replay также выявил два production boundary дефекта. B17 больше не пытается
+sealing исчезающие reserved Jest cache-файлы, но продолжает сохранять authored scratch.
+Patch packaging помещает raw physical blobs в disposable object database и использует
+binary delta только для путей, изменённых Git filters. Reconstruction применяет patch
+к private index, materializes exact blobs без filters и не ослабляет сравнение candidate.
+Delivery валидирует patch/blob mapping в отдельном index, после чего переносит accepted
+postimages с прежними source rechecks, rollback и concurrent-edit guards.
 При pre-freeze авторинге контроль третьего delta сначала ошибочно ожидал прежний
 compiled runner, затем отдельный post-stop registry digest. Контракт ограничивает
 continuations: правильный negative assertion фиксирует три чередующихся physical

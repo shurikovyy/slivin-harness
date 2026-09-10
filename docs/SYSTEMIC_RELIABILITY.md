@@ -135,6 +135,21 @@ Node, runtime/capability, Evaluator A/B и receipt; исходные artifacts �
 после fault injection должны остаться неизменны. Правильная задача,
 завершившаяся controlled stop, остаётся FAIL.
 
+Candidate checkpoint сохраняет authored role scratch, но исключает reserved Jest
+`haste-map-*`/`perf-cache-*` как воспроизводимый volatile runtime. Эти cache-файлы
+могут исчезать во время model turn и не заменяют доказательства, на которые ссылается
+role artifact; обычные proof-файлы по-прежнему sealing до report validation.
+
+`candidate.patch` строится из exact physical blobs в disposable Git object database.
+Пути, bytes которых Git clean/EOL filters нормализуют, кодируются binary delta; остальные
+остаются обычным text diff. Controller-owned `info/attributes` в disposable Git directory
+не позволяет project diff driver отменить required binary delta. Reconstruction применяет patch к private index, materializes
+его blobs без checkout filters и затем требует прежний exact `candidate_id`.
+`apply_to_source` сначала сопоставляет тот же patch и каждый blob с accepted candidate
+в disposable index, затем переносит exact postimages при сохранении source HEAD/clean
+rechecks, transactional rollback и защиты concurrent user edits. Реальный Git index и
+source object database для этой проверки не используются как writable storage.
+
 `qualification.json` связывает stages/logs с full Git SHA, source manifest,
 Harness/workflow и exact executables. Для npm Codex сверяется полная цепочка:
 `codex.cmd`, фактически выбранный им Node, `codex.js`, package metadata,
