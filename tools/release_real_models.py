@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -151,8 +152,11 @@ def verify_delivery(*, run: Path, folder: Path, repo: Path, baseline: str, task_
     checks["frozen_assertion_replay"] = all(row["assertion_executed"] for row in replay.values()) and (
         replay["native"]["exit_code"] == 0 and replay["jest"]["exit_code"] == 0 and replay["legacy"]["exit_code"] != 0)
     checks["candidate_stable_after_replay"] = build_candidate_identity(destination) == candidate
+    fault_controls = stage_payload_fault_controls(run=run, acceptance=acceptance, handoff=handoff,
+        candidate_id=candidate_id, workspace=destination, node=node)
+    checks['artifact_fault_controls'] = fault_controls['status'] == 'PASS'
     return dict(status="PASS" if all(checks.values()) else "FAIL", checks=checks, replay=replay,
-                actual_candidate=candidate.to_dict())
+                actual_candidate=candidate.to_dict(), artifact_fault_controls=fault_controls)
 
 
 def validate_stage_payloads(*, run: Path, acceptance: dict, handoff: dict, candidate_id: str, workspace: Path, node: Path) -> bool:
@@ -258,6 +262,82 @@ def validate_stage_payloads(*, run: Path, acceptance: dict, handoff: dict, candi
         return plane.verify_self_verify_receipt(binding=binding)
     except (KeyError, ValueError, TypeError, RuntimeError, OSError):
         return False
+
+
+def stage_payload_fault_controls(*, run: Path, acceptance: dict, handoff: dict,
+                                 candidate_id: str, workspace: Path, node: Path) -> dict:
+    """Reject independent counterfeit mutations of one actual successful FULL run."""
+    base_valid = validate_stage_payloads(run=run, acceptance=acceptance, handoff=handoff,
+        candidate_id=candidate_id, workspace=workspace, node=node)
+    payloads = {}
+    bindings = {row.get('artifact'): row for row in acceptance.get('artifact_bindings', [])}
+    for name, binding in bindings.items():
+        name = safe_artifact_name(name)
+        if name.endswith('.json'):
+            path = (run / ('controller_private' if binding['authoritative'] else '') / name).resolve()
+            payloads[path] = json.loads(path.read_text(encoding='utf-8'))
+    receipt_path = (run / 'controller_private/self_verify_receipt_current.json').resolve()
+    payloads[receipt_path] = json.loads(receipt_path.read_text(encoding='utf-8'))
+    stages = {row['stage']: row for row in acceptance.get('stage_bindings', [])}
+
+    def artifact_path(name):
+        binding = bindings[name]
+        return (run / ('controller_private' if binding['authoritative'] else '')
+                / safe_artifact_name(name)).resolve()
+
+    def one_path(stage, version):
+        matches = []
+        for name in stages[stage]['artifacts']:
+            path = artifact_path(name)
+            value = payloads.get(path)
+            if isinstance(value, dict) and value.get('protocol_version', value.get('schema_version')) == version:
+                matches.append(path)
+        if len(matches) != 1:
+            raise RuntimeError('Fault-control stage schema missing/duplicate: ' + version)
+        return matches[0]
+
+    checks_paths = [artifact_path(name) for name in stages['deterministic_checks']['artifacts']
+                    if re.fullmatch(r'checks_\d+\.json', name)]
+    if len(checks_paths) != 1:
+        raise RuntimeError('Fault-control checks artifact missing/duplicate')
+    checks_path = checks_paths[0]
+    runtime_path = one_path('runtime_verification', 'runtime-evidence.v1')
+    capability_path = one_path('implementation_contract', 'capability-gate.v1')
+    evaluation_path = one_path('evaluator', 'evaluator.v7')
+    audit_path = one_path('evaluator', 'blind-audit.v2')
+    before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in payloads}
+    original_read = Path.read_text
+
+    mutations = {
+        'owner_commands_replaced_with_noop': (checks_path,
+            lambda rows: [dict(row, command=[sys.executable, '-c', 'pass']) for row in rows]),
+        'owner_node_replaced_with_python': (checks_path,
+            lambda rows: [dict(row, command=[sys.executable, *row['command'][1:]])
+                if row.get('name') != 'Git diff hygiene' else row for row in rows]),
+        'runtime_reported_failure': (runtime_path, lambda row: dict(row, status='RUNTIME_BEHAVIOR_FAIL')),
+        'capability_missing_required': (capability_path, lambda row: dict(row, missing=['JEST'])),
+        'stale_evaluator_candidate': (evaluation_path, lambda row: dict(row, candidate_id='STALE')),
+        'missing_blind_schema': (audit_path, lambda row: dict(row, protocol_version='unknown')),
+        'failed_receipt': (receipt_path, lambda row: dict(row, passed=False)),
+    }
+    outcomes = {}
+    for name, (target, mutate) in mutations.items():
+        selected = dict(payloads)
+        selected[target] = mutate(json.loads(json.dumps(payloads[target])))
+
+        def read_text(path, *args, **kwargs):
+            value = selected.get(path.resolve())
+            return json.dumps(value) if value is not None else original_read(path, *args, **kwargs)
+
+        with mock.patch.object(Path, 'read_text', read_text):
+            outcomes[name] = not validate_stage_payloads(run=run, acceptance=acceptance, handoff=handoff,
+                candidate_id=candidate_id, workspace=workspace, node=node)
+    after = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in payloads}
+    candidate_unchanged = build_candidate_identity(workspace).candidate_id == candidate_id
+    passed = base_valid and all(outcomes.values()) and before == after and candidate_unchanged
+    return dict(status='PASS' if passed else 'FAIL', base_payload_valid=base_valid,
+                rejected_mutations=outcomes, originals_unchanged=before == after,
+                candidate_unchanged=candidate_unchanged)
 
 
 def execute_case(*, output: Path, label: str, kind: str, node: Path, codex: Path, runtime: Path) -> dict:

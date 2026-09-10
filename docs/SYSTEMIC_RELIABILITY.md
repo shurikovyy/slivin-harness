@@ -126,7 +126,10 @@ FULL fixtures фиксированы в `tools/release_real_models.py`: expiry, 
 assertions должны реально выполниться и упасть. Delivered candidate проверяется
 исходными frozen Node/Jest assertions, сохранностью tests/config и независимого
 legacy дефекта, двумя разными follow-ups, actual identity, полными stage payloads,
-digests/current receipt, reconstruction и keep_worktree delivery. Правильная задача,
+digests/current receipt, reconstruction и keep_worktree delivery. Каждый успешный
+FULL payload затем обязан отвергнуть независимые in-memory подмены owner command,
+Node, runtime/capability, Evaluator A/B и receipt; исходные artifacts и candidate
+после fault injection должны остаться неизменны. Правильная задача,
 завершившаяся controlled stop, остаётся FAIL.
 
 `qualification.json` связывает stages/logs с full Git SHA, source manifest,

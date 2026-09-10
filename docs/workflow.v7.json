@@ -321,7 +321,7 @@
           "IDEMPOTENT_NO_CHANGE",
           "TYPED_RUNNER_FAILURE"
         ],
-        "recovery_contract": "Recompile on actual framework/config drift and invalidate affected verification; no arbitrary runner fallback.",
+        "recovery_contract": "Recompile on actual framework/config drift and invalidate affected verification; BLOCKED without digest delta stops, and one stabilization permits at most two rebind continuations; no arbitrary runner fallback.",
         "checkpoint_contract": "Persist registry/compiled specs before receipt; failed resolution has typed diagnostics and current candidate observation.",
         "families": {
           "input": {
@@ -350,10 +350,12 @@
             "required": true
           },
           "recovery": {
-            "expectation": "Production repair changing test framework/config recompiles, refreshes probes, and successfully replays assertions.",
+            "expectation": "Production repair changing test framework/config recompiles, refreshes probes, and successfully replays assertions; BLOCKED without delta stops and a third consecutive delta cannot exceed two rebind continuations.",
             "unittest_ids": [
               "test_runner_report_recovery.RunnerResolutionTests.test_registry_binds_compiled_runner_idempotently",
-              "test_native_trusted_runners.NativeTrustedRunnerTests.test_repair_framework_config_rebind_reaches_current_reconstruction"
+              "test_native_trusted_runners.NativeTrustedRunnerTests.test_repair_framework_config_rebind_reaches_current_reconstruction",
+              "test_native_trusted_runners.NativeTrustedRunnerTests.test_blocked_without_registry_delta_stops_without_rebind",
+              "test_native_trusted_runners.NativeTrustedRunnerTests.test_three_registry_deltas_stop_after_two_rebind_continuations"
             ],
             "required": true
           }
@@ -928,7 +930,7 @@
           "RUNTIME_REBUILD_CONTINUATION",
           "REPAIR_OR_TYPED_STOP"
         ],
-        "recovery_contract": "Rebuild/rebind runtime and rerun necessary checks after drift; do not erase candidate for proof/environment correction.",
+        "recovery_contract": "Rebuild/rebind runtime and rerun necessary checks after drift; report check rebind is limited to two actual digest changes and preserves the stopped candidate; do not erase candidate for proof/environment correction.",
         "checkpoint_contract": "Each runtime/definition revision has private/public evidence; later impact uses resulting current binding.",
         "families": {
           "input": {
@@ -963,12 +965,14 @@
             "required": true
           },
           "recovery": {
-            "expectation": "Required Python refresh follows real rebuild; repeated stable runtime does not rebuild gratuitously.",
+            "expectation": "Required Python refresh follows real rebuild; repeated stable runtime does not rebuild gratuitously; report BLOCKED without a new check digest stops and check rebind is bounded at two continuations.",
             "unittest_ids": [
               "test_planner_tool_evidence_refresh.PlannerToolEvidenceWorkflowTests.test_real_runtime_rebuild_refreshes_only_required_project_python",
               "test_phase5_contract_runtime.ProjectRuntimeTests.test_build_creates_worktree_runtime_and_stable_state",
               "test_runner_report_recovery.RunnerResolutionTests.test_registry_binds_compiled_runner_idempotently",
               "test_native_trusted_runners.NativeTrustedRunnerTests.test_repair_framework_config_rebind_reaches_current_reconstruction",
+              "test_native_trusted_runners.NativeTrustedRunnerTests.test_blocked_without_registry_delta_stops_without_rebind",
+              "test_native_trusted_runners.NativeTrustedRunnerTests.test_three_registry_deltas_stop_after_two_rebind_continuations",
               "test_phase6_runtime_evaluator.RuntimePhaseTests.test_test_external_requires_readback_and_cleanup_boundary",
               "test_phase6_runtime_evaluator.RuntimePhaseTests.test_nonzero_command_cannot_smuggle_a_green_result"
             ],

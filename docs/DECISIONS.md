@@ -790,6 +790,20 @@ frozen запуска установил, что неизменный shim не 
 installed runtime/settings. Tests изменяют только disposable payload и проверяют
 helper/native/launcher replacement, PATH/local Node и platform retarget.
 
+Итоговая requirements review выявила два недостатка frozen coverage без нового
+runtime counterexample: предел двух check rebinds и direct rejection отдельных
+counterfeit stage payloads были доказаны лишь reviewer probes. Поэтому named native
+Node/Jest orchestration теперь требует stop без registry delta и после двух rebinds;
+каждый из трёх real-model FULL результатов запускает fault controls на своём actual
+payload. Prompt, число model runs и budgets не меняются. Подмены выполняются только
+in-memory, после них сверяются bytes artifacts и physical candidate.
+При pre-freeze авторинге контроль третьего delta сначала ошибочно ожидал прежний
+compiled runner, затем отдельный post-stop registry digest. Контракт ограничивает
+continuations: правильный negative assertion фиксирует три чередующихся physical
+изменения, distinct digests на трёх вызовах, последний candidate/checkpoint, ровно
+два продолжения и отсутствие acceptance. Hash берётся из записанных bytes, чтобы
+Windows newline normalization не подменяла проверку состояния сравнением с LF-строкой.
+
 **Superseded boundaries.** D-005/D-007: cross-role копирование текста и DTO уступают
 Controller origins; обязательная полнота/follow-ups сохранены. D-017: proof-only reset
 заменён сохранением candidate и независимым review; настоящий technical reset сохранён.

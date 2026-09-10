@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import task_runner
@@ -113,6 +115,77 @@ class NativeTrustedRunnerTests(unittest.TestCase):
         acceptance = json.loads((run_root / 'final_acceptance.json').read_text(encoding='utf-8'))
         self.assertEqual(acceptance['reconstructed_verification']['status'], 'PASS')
         self.assertIn('IMPLEMENTER_REPORT_CORRECTED', output)
+
+    def _run_blocked_rebind_limit(self, *, registry_deltas: bool):
+        calls = []
+        registry_digests = []
+        written_hashes = []
+        workspaces = []
+        actual_implementer = task_runner.run_implementer_report
+
+        def implementer_boundary(server, **kwargs):
+            calls.append(kwargs['label'])
+            registry_digests.append(kwargs['check_registry_digest'])
+            workspaces.append(kwargs['workspace'])
+            turn_number = len(calls)
+            existing_model = task_runner.run_agent_turn
+
+            def model(*args, **turn):
+                report = json.loads(existing_model(*args, **turn))
+                if turn_number >= 3:
+                    if registry_deltas:
+                        workspace = kwargs['workspace']
+                        if turn_number % 2:
+                            source = "test('target state', () => expect(require('node:fs').readFileSync('target.txt', 'utf8').trim()).toBe('after'));\n"
+                        else:
+                            source = "const {test}=require('node:test'); const assert=require('node:assert/strict'); test('target state',()=>assert.equal(require('node:fs').readFileSync('target.txt','utf8').trim(),'after'));\n"
+                        changed_test = workspace / 'native.test.cjs'
+                        changed_test.write_text(source, encoding='utf-8')
+                        written_hashes.append(hashlib.sha256(changed_test.read_bytes()).hexdigest())
+                    report.update(status='BLOCKED', terminal_reason_kind='INFRASTRUCTURE_BLOCKED',
+                        reason='Current typed runner needs review before verification.',
+                        evidence=['Frozen recovery-bound negative control.'])
+                    report['self_verification']['status'] = 'NOT_RUN'
+                return json.dumps(report)
+
+            with mock.patch.object(task_runner, 'run_agent_turn', side_effect=model):
+                return actual_implementer(server, **kwargs)
+
+        with mock.patch.object(task_runner, 'run_implementer_report', side_effect=implementer_boundary):
+            result, run_root, output = workflow_fixtures.TaskRunnerWorkflowIntegrationTests(methodName='runTest').run_case(
+                benchmark=False, risk='medium', trusted_js_toolchain=self.tools,
+                check_repair=True, framework_rebind=registry_deltas)
+        self.output.write(output)
+        state = json.loads((run_root / 'run_state.json').read_text(encoding='utf-8'))
+        current = json.loads((run_root / 'candidate_identity_current.json').read_text(encoding='utf-8'))
+        checkpoints = [json.loads(path.read_text(encoding='utf-8')) for path in
+            (run_root / 'controller_private/checkpoints').glob('implementation_report_recovery_*.json')]
+        rebinds = [label for label in calls if 'CHECK REBIND' in label]
+        self.assertEqual(result, 2, output)
+        self.assertFalse((run_root / 'final_acceptance.json').exists())
+        self.assertEqual(state['current_candidate']['candidate_id'], current['candidate_id'])
+        physical = task_runner.build_candidate_identity(workspaces[-1])
+        self.assertEqual(physical.candidate_id, current['candidate_id'])
+        self.assertTrue(any(row.get('schema_version') == 'candidate-checkpoint.v1'
+            and row.get('candidate', {}).get('candidate_id') == current['candidate_id'] for row in checkpoints))
+        if registry_deltas:
+            self.assertEqual(len(set(registry_digests[-3:])), 3)
+            self.assertEqual(len(written_hashes), 3)
+            self.assertEqual(written_hashes[0], written_hashes[2])
+            self.assertNotEqual(written_hashes[0], written_hashes[1])
+            final_entry = next(row for row in current['entries'] if row['path'] == 'native.test.cjs')
+            self.assertEqual(final_entry['sha256'], written_hashes[-1])
+        return calls, rebinds
+
+    def test_blocked_without_registry_delta_stops_without_rebind(self):
+        calls, rebinds = self._run_blocked_rebind_limit(registry_deltas=False)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(rebinds, [])
+
+    def test_three_registry_deltas_stop_after_two_rebind_continuations(self):
+        calls, rebinds = self._run_blocked_rebind_limit(registry_deltas=True)
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(len(rebinds), 2)
 
     def test_combined_expansion_report_correction_evaluator_final_gate(self):
         fixture = workflow_fixtures.TaskRunnerWorkflowIntegrationTests(methodName="runTest")
