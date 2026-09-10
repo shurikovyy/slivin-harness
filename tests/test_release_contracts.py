@@ -21,6 +21,32 @@ from slivin_harness.source_records import register_evaluator_findings, source_re
 from slivin_harness.task_contract import validate_task_contract
 from slivin_harness.verification import compile_verification_plan
 from tools.release_mutations import defect_detected
+from tools.release_check import default_output_root
+from tools.release_real_models import (
+    WINDOWS_WORKSPACE_PATH_LIMIT,
+    qualification_case_layout,
+)
+
+
+class ReleaseOrchestrationTests(unittest.TestCase):
+    def test_default_real_model_layout_preserves_windows_runtime_copy_headroom(self):
+        output = default_output_root() / "real_models"
+        runtime_relative = Path(
+            "@babel/plugin-bugfix-safari-id-destructuring-collision-in-function-expression/lib/index.js.map"
+        )
+        projected = []
+        task_ids = set()
+        folders = set()
+        for label in ("expiry-1", "suspension-1", "expiry-2"):
+            folder, workspace_root, project_name, task_id = qualification_case_layout(output, label)
+            folders.add(folder)
+            task_ids.add(task_id)
+            projected.append(workspace_root / project_name / task_id /
+                             "20000101-000000-00000000" / "node_modules" / runtime_relative)
+        self.assertEqual(len(folders), 3)
+        self.assertEqual(len(task_ids), 3)
+        self.assertTrue(all(len(str(path.resolve())) <= WINDOWS_WORKSPACE_PATH_LIMIT
+                            for path in projected))
 
 
 class AdmissionMatrixTests(unittest.TestCase):

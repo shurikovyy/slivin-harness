@@ -797,6 +797,9 @@ Node/Jest orchestration теперь требует stop без registry delta �
 каждый из трёх real-model FULL результатов запускает fault controls на своём actual
 payload. Prompt, число model runs и budgets не меняются. Подмены выполняются только
 in-memory, после них сверяются bytes artifacts и physical candidate.
+Qualification использует короткие внутренние case/workspace identifiers и заранее
+проверяет фактическую длину самого глубокого runtime path. Поэтому Windows path limit
+не может подменить real-model execution быстрым инфраструктурным FAIL.
 При pre-freeze авторинге контроль третьего delta сначала ошибочно ожидал прежний
 compiled runner, затем отдельный post-stop registry digest. Контракт ограничивает
 continuations: правильный negative assertion фиксирует три чередующихся physical

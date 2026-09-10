@@ -108,6 +108,9 @@ sharing/access violations с bounded budget. Ambiguous completed replace све�
 чистый Git commit. Используются текущие configured executables; доступны explicit
 `--node`, `--jest`, `--codex`, `--output`. Evidence сохраняется вне checkout.
 `--diagnostic` допускает dirty tree, но никогда не квалифицирует сборку.
+Default evidence root и внутренние имена FULL workspaces ограничены по длине; перед
+model turns gate вычисляет фактический Windows path budget для physical `node_modules`
+и завершает этап типизированным FAIL, если безопасного запаса нет.
 
 `slivin_harness/boundary_contracts.json` фиксирует entrypoints, schemas, owner,
 pre/postconditions, freshness/evidence, outcomes, recovery/checkpoint и обязательные

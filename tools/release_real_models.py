@@ -25,6 +25,38 @@ from slivin_harness.run_state import build_candidate_identity
 from dataclasses import asdict
 
 
+CASE_LAYOUTS = {
+    "expiry-1": ("e1", "QE1"),
+    "suspension-1": ("s1", "QS1"),
+    "expiry-2": ("e2", "QE2"),
+}
+WINDOWS_WORKSPACE_PATH_LIMIT = 240
+
+
+def qualification_case_layout(output: Path, label: str) -> tuple[Path, Path, str, str]:
+    """Return bounded physical names while preserving the public case label."""
+    case_directory, task_id = CASE_LAYOUTS[label]
+    folder = output / case_directory
+    return folder, folder / "w", "q", task_id
+
+
+def assert_workspace_path_headroom(*, workspace_root: Path, project_name: str,
+                                   task_id: str, runtime: Path) -> dict:
+    """Fail before model execution if a Windows runtime copy would exceed its budget."""
+    relative_paths = [path.relative_to(runtime) for path in runtime.rglob("*")]
+    longest = max(relative_paths, key=lambda path: len(str(path)), default=Path())
+    projected = (workspace_root / project_name / task_id /
+                 "20000101-000000-00000000" / "node_modules" / longest)
+    length = len(str(projected.resolve()))
+    if os.name == "nt" and length > WINDOWS_WORKSPACE_PATH_LIMIT:
+        raise RuntimeError(
+            "REAL_MODEL_WORKSPACE_PATH_BUDGET_EXCEEDED: "
+            f"projected={length} limit={WINDOWS_WORKSPACE_PATH_LIMIT} root={workspace_root}"
+        )
+    return {"projected_longest_path": length, "limit": WINDOWS_WORKSPACE_PATH_LIMIT,
+            "longest_runtime_relative": longest.as_posix()}
+
+
 def fixtures(kind: str) -> tuple[str, dict[str, str]]:
     if kind == "expiry":
         prompt = "Expired entries must not be available for reading. Preserve access to active, unexpired entries."
@@ -87,7 +119,7 @@ def run_assertions(workspace: Path, *, node: Path, runtime: Path, output: Path, 
     return results
 
 
-def verify_delivery(*, run: Path, folder: Path, repo: Path, baseline: str, task_id: str,
+def verify_delivery(*, run: Path, folder: Path, workspace_root: Path, repo: Path, baseline: str, task_id: str,
                     files: dict, acceptance: dict, handoff: dict, delivery: dict, node: Path, runtime: Path) -> dict:
     checks = {}
     checks["full_acceptance"] = (acceptance.get("quality_gate_status") == "FINAL_ACCEPTANCE_PASS"
@@ -97,7 +129,7 @@ def verify_delivery(*, run: Path, folder: Path, repo: Path, baseline: str, task_
     checks["delivery_status"] = (delivery.get("status") == "RESULT_DELIVERY_PASS"
         and delivery.get("result_mode") == "keep_worktree" and delivery.get("exact_patch_match") is True)
     destination = Path(delivery.get("destination", "")).resolve()
-    checks["contained_destination"] = destination.is_relative_to((folder / "workspaces").resolve()) and destination != repo.resolve()
+    checks["contained_destination"] = destination.is_relative_to(workspace_root.resolve()) and destination != repo.resolve()
     if not all(checks.values()):
         return dict(status="FAIL", checks=checks)
     candidate = build_candidate_identity(destination)
@@ -341,7 +373,7 @@ def stage_payload_fault_controls(*, run: Path, acceptance: dict, handoff: dict,
 
 
 def execute_case(*, output: Path, label: str, kind: str, node: Path, codex: Path, runtime: Path) -> dict:
-    folder = output / label
+    folder, workspace_root, project_name, task_id = qualification_case_layout(output, label)
     folder.mkdir()
     repo = folder / "source"
     repo.mkdir()
@@ -364,10 +396,11 @@ def execute_case(*, output: Path, label: str, kind: str, node: Path, codex: Path
         dict(name="Owner Jest availability assertions", feedback="repair", command=["{node}", "{jest}", "--config", "{workspace}/jest.config.cjs", "--runInBand", "--runTestsByPath", "{workspace}/tests/access.jest.cjs", "--watch=false"], timeout_seconds=90),
         dict(name="Git diff hygiene", feedback="repair", command=["git", "diff", "--check"], timeout_seconds=30),
     ]
+    path_budget = assert_workspace_path_headroom(workspace_root=workspace_root,
+        project_name=project_name, task_id=task_id, runtime=runtime)
     manifest = folder / "task.toml"
-    task_id = "QUALIFY_" + label.upper().replace("-", "_")
     manifest.write_text('\n'.join([
-        'version = 2', 'task_id = ' + json.dumps(task_id), 'project = "fixture"', 'workspace_mode = "git_worktree"',
+        'version = 2', 'task_id = ' + json.dumps(task_id), 'project = ' + json.dumps(project_name), 'workspace_mode = "git_worktree"',
         'result_mode = "keep_worktree"', 'risk = "medium"', 'max_fix_cycles = 2', 'max_replan_cycles = 2',
         'turn_timeout_seconds = 900', 'require_clean_git = true', 'prompt = ' + json.dumps(prompt),
         *['\n[[checks]]\n' + '\n'.join(key + ' = ' + json.dumps(value) for key, value in check.items()) for check in checks],
@@ -376,16 +409,16 @@ def execute_case(*, output: Path, label: str, kind: str, node: Path, codex: Path
     config.write_text(f'''[codex]
 command = {json.dumps(str(codex))}
 [workspace]
-root = {json.dumps(str(folder / 'workspaces'))}
-[projects.fixture]
+root = {json.dumps(str(workspace_root))}
+[projects.{project_name}]
 repo = {json.dumps(str(repo))}
 base_ref = "HEAD"
 result_mode = "keep_worktree"
 require_clean_source = true
-[projects.fixture.toolchain]
+[projects.{project_name}.toolchain]
 node = {json.dumps(str(node))}
 jest = "{{project_root}}/node_modules/jest/bin/jest.js"
-[projects.fixture.workspace]
+[projects.{project_name}.workspace]
 copy_untracked = ["node_modules"]
 allow_sensitive_copy = false
 ''', encoding="utf-8")
@@ -396,6 +429,7 @@ allow_sensitive_copy = false
     log_text = (folder / "pipeline.log").read_text(encoding="utf-8")
     matches = re.findall(r"^RUN_DIR:\s*(.+)$", log_text, flags=re.MULTILINE)
     record = dict(label=label, kind=kind, task_id=task_id, model_turns="REAL", exit_code=completed.returncode,
+                  workspace_path_budget=path_budget,
                   baseline_sha=baseline, status="FAIL", prompt=prompt, fixture_sha256=hashlib.sha256(json.dumps(files,sort_keys=True).encode()).hexdigest())
     if matches:
         run = Path(matches[-1].strip())
@@ -410,7 +444,7 @@ allow_sensitive_copy = false
             record["acceptance"] = json.loads(acceptance.read_text(encoding="utf-8"))
             record["handoff"] = json.loads(handoff.read_text(encoding="utf-8"))
             record["delivery"] = json.loads(delivery.read_text(encoding="utf-8"))
-            record["independent_validation"] = verify_delivery(run=run, folder=folder, repo=repo, baseline=baseline,
+            record["independent_validation"] = verify_delivery(run=run, folder=folder, workspace_root=workspace_root, repo=repo, baseline=baseline,
                 task_id=task_id, files=files, acceptance=record["acceptance"], handoff=record["handoff"], delivery=record["delivery"], node=node, runtime=runtime)
             record["status"] = "PASS" if completed.returncode == 0 and record["independent_validation"]["status"] == "PASS" else "FAIL"
     record["baseline_assertions"] = initial_assertions

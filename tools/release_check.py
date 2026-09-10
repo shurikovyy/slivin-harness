@@ -26,6 +26,11 @@ def write(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def default_output_root() -> Path:
+    """Keep enough Windows path headroom for nested worktree runtime copies."""
+    return Path(tempfile.gettempdir()) / ("shr-q-" + uuid.uuid4().hex[:10])
+
+
 def tools_from_profile(args):
     # Only explicit tool paths and runtime directories are read from the local
     # profile. It is never edited, copied into fixtures or emitted in evidence.
@@ -63,7 +68,7 @@ def main() -> int:
         parser.add_argument("--" + name, type=Path)
     parser.add_argument("--diagnostic", action="store_true", help="Allow a dirty development tree; outcome is always NOT_QUALIFIED")
     args = parser.parse_args()
-    output = args.output or Path(tempfile.gettempdir()) / ("shr-release-" + datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6])
+    output = args.output or default_output_root()
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     if output.is_relative_to(ROOT):
