@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Production and reconstructed checks resolve project-relative toolchain entries from
+  the managed workspace; historical benchmark resolution retains its recorded
+  source-to-workspace sanitize/rebind path.
+- Static preflight seals direct owner check scripts, explicit Jest configs and selected
+  tests by exact bytes. Deterministic, held-out and reconstructed batches reject drift
+  before execution with `OWNER_CHECK_INPUT_CHANGED`; added coverage uses separate files.
+- Phase B batches invented revisions on `source=BLIND` rows into a narrow report-only
+  correction, and Planner no longer expands already-correct general documentation solely
+  to add implementation detail. DECISIONS D-028 records these qualification boundaries.
+
 ## 0.8.0a30
 
 - Discovered JavaScript checks use source-backed runner resolution: native `node:test`

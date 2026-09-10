@@ -208,6 +208,27 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
         self.assertEqual(verdict["status"], "PASS")
         self.assertEqual([(phase, attempt) for phase, attempt, _ in raw_records], [("PHASE_A", 0), ("PHASE_A", 1), ("PHASE_B", 0)])
 
+    def test_phase_b_corrects_all_blind_source_revisions_in_one_bounded_turn(self):
+        invalid = copy.deepcopy(self.verdict)
+        changed_fields = []
+        for group in ("not_affected_dispositions", "related_follow_up_dispositions"):
+            for index, row in enumerate(invalid["impact_challenge"][group]):
+                if row["source"] == "BLIND":
+                    row["source_revision"] = "invented-fingerprint"
+                    changed_fields.append(
+                        f"impact_challenge.{group}[{index}].source_revision"
+                    )
+        self.assertTrue(changed_fields)
+        server, _, (_, verdict) = self.run_phases(
+            responses=[self.audit, invalid, self.verdict],
+            run_name="blind-revision-correction",
+        )
+        self.assertEqual(verdict["status"], "PASS")
+        self.assertEqual(len(server.prompts), 3)
+        diagnostic = json.loads(server.prompts[-1].splitlines()[-1])
+        self.assertEqual(set(diagnostic["allowed_fields"]), set(changed_fields))
+        self.assertIn('empty string for source_revision', diagnostic["expected"])
+
     def test_phase_b_batch_repair_no_progress_and_candidate_write_guards(self):
         invalid = copy.deepcopy(self.verdict)
         rows = invalid['impact_challenge']['related_follow_up_dispositions']

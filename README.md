@@ -113,6 +113,11 @@ placeholders/toolchain entries, executable resolution, manifest-known input
 files и bounded probes `git --version`, Python/Node `--version`, а для Jest —
 `node jest --version` и загрузку explicit либо cwd-discovered config через
 `--showConfig`. Tests и hidden semantic oracle при этом не запускаются.
+Direct Node/Python scripts, explicit Jest config и `--runTestsByPath` selections
+получают Controller-private byte baseline. Если Implementer меняет такой owner
+input, deterministic gate не исполняет изменённую проверку, возвращает
+`OWNER_CHECK_INPUT_CHANGED` и направляет candidate в bounded repair; дополнительное
+покрытие добавляется отдельным registered test file.
 
 `{python}` остаётся compatibility alias с project-first разрешением:
 `project_python` → configured `python` → Harness Python. `{project_python}`
@@ -130,6 +135,11 @@ candidate/runtime/revision binding, выполненные probes, переис�
 и reason codes. Отказ обязательного refresh останавливает Planner заранее;
 post-plan и dynamic gates остаются обязательными. Tool probe PASS не доказывает
 возможность exploratory команды в Planner sandbox или PASS продуктовых tests.
+
+В production `{project_root}` разрешается относительно managed workspace, включая
+Controller-copied runtime projection. Historical benchmark сохраняет отдельный
+source resolution и обязательный recorded sanitize/rebind. Reconstruction повторяет
+тот же выбор в своей независимой verification-копии.
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure

@@ -14,7 +14,7 @@ from slivin_harness.impact import impact_paths, impact_text, safe_impact_path, v
 from slivin_harness.implementer import validate_implementation_impact_closure
 from slivin_harness.source_records import source_ref
 from slivin_harness.report_recovery import ReportCorrectionState, ReportRecoveryStop, MAX_REPORT_CORRECTIONS, correction_prompt
-from slivin_harness.protocol import ArtifactContractError
+from slivin_harness.protocol import ArtifactContractError, ArtifactDiagnosticBatch
 from slivin_harness.phase6 import BLIND_AUDIT_VERSION
 from slivin_harness.protocol import EVALUATOR_PROTOCOL_VERSION, ensure_exact_keys, require_string_list, require_type
 from slivin_harness.verification import PROOF_TARGET_SCHEMA, validate_proof_target
@@ -206,7 +206,10 @@ PHASE B — independent impact challenge:
 - Каждый blind contract, blind affected consumer, Planner IN_SCOPE и Implementer DISCOVERED
   consumer получает evidence-backed disposition. Independently challenge каждый NOT_AFFECTED
   и RELATED_OUT_OF_SCOPE из всех трёх ledgers; source=BLIND references используют impact_id,
-  source=PLANNER/IMPLEMENTER — exact reference=source_id and source_revision from canonical source_ref. Never regenerate inherited names or text. Не считай согласие двух прежних агентов доказательством.
+  а обязательное поле source_revision для них всегда равно пустой строке "".
+  source=PLANNER/IMPLEMENTER используют exact reference=source_id and source_revision from
+  canonical source_ref. Never regenerate inherited names or text. Не считай согласие двух
+  прежних агентов доказательством.
 - Каждый actual changed path получает UNDERSTOOD/SUSPICIOUS/UNJUSTIFIED с repository evidence.
   Dispositions содержат concrete reason, existing evidence_paths и evidence. coverage_summary
   объясняет полноту challenge, но не заменяет ни одной строки.
@@ -463,6 +466,19 @@ def validate_impact_challenge(
         }
     final_ids = {row["finding_id"] for row in evaluation["findings"]}
     classifications = {"CHANGED_CONTRACT": "changed_contracts", "IN_SCOPE": "in_scope_consumers", "NOT_AFFECTED": "not_affected_consumers", "RELATED_OUT_OF_SCOPE": "related_out_of_scope"}
+    blind_revision_diagnostics: list[ArtifactContractError] = []
+    for group in ("not_affected_dispositions", "related_follow_up_dispositions"):
+        for row_index, row in enumerate(challenge[group]):
+            if row.get("source") == "BLIND" and row.get("source_revision"):
+                blind_revision_diagnostics.append(ArtifactContractError(
+                    code="BLIND_SOURCE_REVISION",
+                    field=f"impact_challenge.{group}[{row_index}].source_revision",
+                    message="Blind references have independent IDs and no prior-source revision",
+                    expected='An empty string for source_revision when source is "BLIND"',
+                    actual=row["source_revision"],
+                ))
+    if blind_revision_diagnostics:
+        raise ArtifactDiagnosticBatch(blind_revision_diagnostics)
     for group, dispositions in _CHALLENGE_DISPOSITIONS.items():
         rows = challenge[group]
         _validate_rows(rows, fields[group], workspace=workspace, field=f"impact_challenge.{group}")
@@ -480,8 +496,7 @@ def validate_impact_challenge(
             elif "source" in row:
                 key = (row["source"], row["reference"])
                 if row["source"] == "BLIND":
-                    if row["source_revision"]:
-                        raise RuntimeError("Blind references have independent IDs and no prior-source revision")
+                    pass
                 else:
                     input_group = "not_affected_consumers" if group == "not_affected_dispositions" else "related_out_of_scope"
                     _validate_origin_reference(row, sources[row["source"]].get(input_group, []))
@@ -765,6 +780,7 @@ Safe runtime probe guidance, если настроено:
 верни RETAINED либо DISMISSED_WITH_EVIDENCE. impact_challenge должен disposition каждый
 blind contract/consumer ID, каждый Planner IN_SCOPE, Implementer DISCOVERED, NOT_AFFECTED
 и RELATED_OUT_OF_SCOPE всех источников и каждый actual changed path ровно один раз.
+Для source=BLIND укажи exact blind impact_id и source_revision=""; не подставляй fingerprint.
 Negative dispositions требуют final finding_ids и запрещают PASS. Новые findings разрешены.
 """.strip()
     verdict = admit_phase("PHASE_B", phase_b_prompt, EVALUATOR_SCHEMA,

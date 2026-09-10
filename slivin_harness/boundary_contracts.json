@@ -44,7 +44,8 @@
             "test_planner_tool_evidence_refresh.PlannerToolEvidenceWorkflowTests.test_jest_evidence_refreshes_before_implementer_triggered_replan",
             "test_planner_tool_evidence_refresh.PlannerToolEvidenceWorkflowTests.test_evaluator_replan_uses_the_same_preparation",
             "test_planner_tool_evidence_refresh.PlannerToolEvidenceRegistryTests.test_changed_toolchain_reference_requires_new_probe",
-            "test_planner_tool_evidence_refresh.PlannerToolEvidenceRegistryTests.test_rejected_config_is_not_carried_into_fresh_explicit_or_auto_probe"
+            "test_planner_tool_evidence_refresh.PlannerToolEvidenceRegistryTests.test_rejected_config_is_not_carried_into_fresh_explicit_or_auto_probe",
+            "test_static_toolchain_preflight.StaticToolchainPreflightTests.test_owner_check_inputs_are_sealed_and_drift_blocks_execution"
           ],
           "required": true
         },
@@ -467,7 +468,8 @@
           "unittest_ids": [
             "test_control_plane.ControlPlaneTests.test_private_receipt_is_bound_to_every_revision_dimension",
             "test_implementer.ImplementerContractTests.test_self_verify_stamp_is_bound_to_current_candidate",
-            "test_control_plane.ControlPlaneTests.test_tampered_receipt_is_rejected"
+            "test_control_plane.ControlPlaneTests.test_tampered_receipt_is_rejected",
+            "test_static_toolchain_preflight.StaticToolchainPreflightTests.test_owner_check_inputs_are_sealed_and_drift_blocks_execution"
           ],
           "required": true
         },
@@ -658,7 +660,8 @@
             "test_evaluator_impact_challenge.EvaluatorAutonomyWorkflowTests.test_consumer_finding_expands_repairs_and_requires_fresh_blind_candidate",
             "test_evaluator_impact_challenge.EvaluatorAutonomyWorkflowTests.test_independent_contract_gaps_use_fresh_semantic_replan",
             "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_promoted_origins_require_current_target_and_independent_confirmation",
-            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_batch_repair_no_progress_and_candidate_write_guards"
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_batch_repair_no_progress_and_candidate_write_guards",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_corrects_all_blind_source_revisions_in_one_bounded_turn"
           ],
           "required": true
         }

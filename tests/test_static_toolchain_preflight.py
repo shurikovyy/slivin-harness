@@ -25,6 +25,7 @@ from slivin_harness.git_integrity import (
     TRUSTED_BATCH_MUTATED_CANDIDATE,
 )
 from slivin_harness.preflight import (
+    OWNER_CHECK_INPUT_CHANGED,
     STATIC_CHECK_INPUT_NOT_FOUND,
     STATIC_COMMAND_TEMPLATE_INVALID,
     STATIC_EXECUTABLE_NOT_FOUND,
@@ -45,6 +46,7 @@ from slivin_harness.preflight import (
     extract_command_placeholders,
     resolve_python_command,
     run_static_toolchain_preflight,
+    verify_owner_check_input_baseline,
 )
 from slivin_harness.run_state import build_candidate_identity
 from slivin_harness.runtime_projection import RuntimeProjectionIntegrityManager
@@ -1010,6 +1012,50 @@ raise SystemExit(9)
             probe_registry=self.registry({"node": sys.executable}),
         )
         self.assertIn(STATIC_CHECK_INPUT_NOT_FOUND, result.reason_codes)
+        self.assertFalse(marker.exists())
+
+    def test_owner_check_inputs_are_sealed_and_drift_blocks_execution(self) -> None:
+        jest = self.fake_jest()
+        spec = self.jest_check()
+        result = run_static_toolchain_preflight(
+            [spec],
+            workspace=self.workspace,
+            harness_root=self.harness_root,
+            toolchain={"node": sys.executable, "jest": str(jest)},
+            probe_registry=self.registry({"node": sys.executable, "jest": str(jest)}),
+        )
+        self.assertTrue(result.passed, result.public_dict())
+        baseline = tuple(result.private_details["owner_check_inputs"])
+        self.assertEqual(
+            {row["path"] for row in baseline},
+            {"jest.config.cjs", "tests/selection.test.cjs"},
+        )
+        self.assertEqual(verify_owner_check_input_baseline(self.workspace, baseline), ())
+
+        (self.workspace / "tests/selection.test.cjs").write_text(
+            "weakened assertion\n", encoding="utf-8"
+        )
+        marker = self.workspace / "owner-check-ran.marker"
+        blocked = task_runner.run_checks(
+            [{
+                "name": "must not execute",
+                "feedback": "repair",
+                "command": [
+                    sys.executable,
+                    "-c",
+                    f"from pathlib import Path; Path({str(marker)!r}).write_text('ran')",
+                ],
+                "timeout_seconds": 30,
+            }],
+            workspace=self.workspace,
+            toolchain={},
+            runtime_root=self.run_root / "checks",
+            label="OWNER INPUT GUARD",
+            owner_check_input_baseline=baseline,
+        )
+        self.assertEqual(len(blocked), 1)
+        self.assertFalse(blocked[0].passed)
+        self.assertIn(OWNER_CHECK_INPUT_CHANGED, blocked[0].output)
         self.assertFalse(marker.exists())
 
     def test_unknown_command_does_not_guess_argument_paths(self) -> None:

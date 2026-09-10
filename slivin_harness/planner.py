@@ -313,7 +313,9 @@ Proofs только LOCAL_DETERMINISTIC с capabilities из GIT/DOCS_SYNC ил�
 - используй самый дешёвый proof level, который честно доказывает claim;
 - owner-defined allowed_paths оцени как hard boundary, но не делай из своих предположений о
   путях новый owner contract;
-- documentation.required=true только когда final semantics требуют синхронизации docs.
+- documentation.required=true только когда existing canonical docs станут фактически ложными
+  или materially неполными из-за final semantics. Уже корректное общее описание не расширяй
+  ради подробности; отсутствие подробностей само по себе не создаёт documentation obligation.
 
 Semantic preservation requirement и выбранный proof route — разные сущности.
 evidence_plan.preservation не расширяет product scope: «preserve unrelated behavior»

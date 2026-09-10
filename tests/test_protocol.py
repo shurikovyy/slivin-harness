@@ -480,6 +480,36 @@ class ProtocolContractTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "PASS requires no findings"):
             validate_evaluation_artifact(evaluation, blind_audit=audit, **self.evaluation_context)
 
+    def test_blind_source_revision_is_a_narrowly_correctable_report_field(self) -> None:
+        audit = valid_blind_audit()
+        audit["impact_analysis"]["related_out_of_scope"] = [{
+            "impact_id": "RELATED-1",
+            "name": "Independent legacy behavior",
+            "paths": ["reader.py"],
+            "symbols": ["read_target"],
+            "relation": "The nearby legacy behavior is not part of the changed value.",
+            "reason": "It does not consume the changed target.",
+            "suggested_follow_up": "Review the legacy behavior separately.",
+            "evidence": ["reader.py contains the independent legacy branch."],
+        }]
+        evaluation = valid_pass(blind_audit=audit)
+        blind_row = next(
+            row
+            for row in evaluation["impact_challenge"]["related_follow_up_dispositions"]
+            if row["source"] == "BLIND"
+        )
+        blind_row["source_revision"] = "invented-fingerprint"
+        with self.assertRaises(ArtifactContractError) as context:
+            validate_evaluation_artifact(
+                evaluation, blind_audit=audit, **self.evaluation_context
+            )
+        self.assertEqual(context.exception.code, "BLIND_SOURCE_REVISION")
+        from slivin_harness.report_recovery import correctable_report_field
+        self.assertEqual(
+            correctable_report_field(context.exception),
+            "impact_challenge.related_follow_up_dispositions[0].source_revision",
+        )
+
     def test_findings_status_requires_a_finding(self) -> None:
         audit = valid_blind_audit()
         evaluation = valid_pass(blind_audit=audit)

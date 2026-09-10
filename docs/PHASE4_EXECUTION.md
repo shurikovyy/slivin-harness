@@ -132,12 +132,25 @@ bounded version/config probes. It does not execute a check body, test suite or
 hidden oracle. A newly registered dynamic check remains protected by the normal
 Controller batch guard and its post-plan capability gate.
 
+For known direct Node/Python scripts, explicit Jest config and selected
+`--runTestsByPath` files, preflight records a Controller-private byte baseline.
+The deterministic and reconstructed gates compare that baseline before executing
+owner checks. Drift returns `OWNER_CHECK_INPUT_CHANGED`, executes none of the
+changed owner inputs, and uses the existing bounded check-repair route. An
+Implementer may add coverage in separate registered files; it may not rewrite the
+owner assertion source that defines acceptance.
+
 `{python}` is the project-first compatibility alias (`project_python`, then a
 configured `python`, then the Harness interpreter). `{project_python}` is an
 explicit probe-backed requirement; `{harness_python}` always selects the
 Controller/Harness interpreter. Static expansion and actual manifest,
 self-verify, deterministic, held-out and generated dynamic check expansion share
 this resolver.
+
+Production resolves project-relative toolchain entries against the managed
+workspace, so a Controller-copied runtime is the executable authority. Historical
+benchmark resolution remains source-relative until its explicit provenance-bearing
+sanitize/rebind step. Reconstructed verification applies the same mode-specific rule.
 
 Because Jest config is executable project code, static preflight freezes the
 canonical `candidate.v1` before and after its runtime-guarded probe batch.
@@ -193,6 +206,9 @@ local errors in populated post-patch `symbols`, `evidence` or `evidence_paths`, 
 returns all independently diagnosable safe field/code errors in one batch and permits
 at most two corrective turns in the same thread. A malformed parent blocks only its
 children. Mixed local/semantic diagnostics cannot become a cosmetic correction.
+Evaluator rows with `source=BLIND` use independent `impact_id` values and an empty
+`source_revision`. Non-empty invented revisions are returned together as one typed
+`BLIND_SOURCE_REVISION` batch and may change only those exact report fields.
 Only identified evidence arrays can change. Findings, order, names, classification,
 behavior, proof, discoveries, registered checks and all other report fields are frozen.
 Concrete documentation link targets/heading anchors are valid identifiers; empty arrays

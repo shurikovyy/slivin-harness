@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from slivin_harness.boundaries import boundary
 
+import hashlib
 import os
 import re
 import shutil
@@ -54,6 +55,7 @@ STATIC_CHECK_INPUT_NOT_FOUND = "STATIC_CHECK_INPUT_NOT_FOUND"
 STATIC_COMMAND_TEMPLATE_INVALID = "STATIC_COMMAND_TEMPLATE_INVALID"
 STATIC_RUNTIME_INTEGRITY_FAILED = "STATIC_RUNTIME_INTEGRITY_FAILED"
 STATIC_PREFLIGHT_MUTATED_CANDIDATE = "STATIC_PREFLIGHT_MUTATED_CANDIDATE"
+OWNER_CHECK_INPUT_CHANGED = "OWNER_CHECK_INPUT_CHANGED"
 STATIC_GIT_CONTROL_INTEGRITY_FAILED = "STATIC_GIT_CONTROL_INTEGRITY_FAILED"
 STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT = "STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT"
 MAX_PRIVATE_PROBE_LOG_BYTES = 1_048_576
@@ -1186,8 +1188,9 @@ def _validate_known_inputs(
     workspace: Path,
     harness_root: Path,
     jest_path: Path | None,
-) -> tuple[JestConfigProbe, ...]:
+) -> tuple[tuple[JestConfigProbe, ...], tuple[Path, ...]]:
     configs: list[JestConfigProbe] = []
+    inputs: list[Path] = []
     if family == "jest":
         config_raw = _argument_after(command, "--config")
         if _option_present(command, "--config"):
@@ -1208,6 +1211,7 @@ def _validate_known_inputs(
                     path=config,
                 )
             )
+            inputs.append(config)
         else:
             configs.append(
                 JestConfigProbe(
@@ -1220,13 +1224,13 @@ def _validate_known_inputs(
             for raw in command[start:]:
                 if raw.startswith("-"):
                     break
-                _resolve_required_input(
+                inputs.append(_resolve_required_input(
                     raw,
                     workspace=workspace,
                     harness_root=harness_root,
                     reason_code=STATIC_CHECK_INPUT_NOT_FOUND,
-                )
-        return tuple(configs)
+                ))
+        return tuple(configs), tuple(inputs)
 
     if family == "node" and len(command) >= 2:
         if command[1] == "--check":
@@ -1245,22 +1249,52 @@ def _validate_known_inputs(
             candidate = command[1]
             if jest_path is None or canonical_path(Path(candidate)) != canonical_path(jest_path):
                 if _looks_path_like(candidate) or candidate.endswith((".js", ".cjs", ".mjs")):
-                    _resolve_required_input(
+                    inputs.append(_resolve_required_input(
                         candidate,
                         workspace=workspace,
                         harness_root=harness_root,
                         reason_code=STATIC_CHECK_INPUT_NOT_FOUND,
-                    )
+                    ))
     elif family in {"python", "project_python", "harness_python"} and len(command) >= 2:
         script = command[1]
         if not script.startswith("-") and script.endswith(".py"):
-            _resolve_required_input(
+            inputs.append(_resolve_required_input(
                 script,
                 workspace=workspace,
                 harness_root=harness_root,
                 reason_code=STATIC_CHECK_INPUT_NOT_FOUND,
-            )
-    return tuple(configs)
+            ))
+    return tuple(configs), tuple(inputs)
+
+
+def verify_owner_check_input_baseline(
+    workspace: Path,
+    baseline: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    """Return workspace-relative owner check inputs whose exact bytes drifted."""
+
+    root = canonical_path(workspace)
+    changed: list[str] = []
+    seen: set[str] = set()
+    for index, row in enumerate(baseline):
+        try:
+            relative = _safe_relative_path(str(row["path"])).as_posix()
+            if relative in seen:
+                raise ValueError("duplicate path")
+            seen.add(relative)
+            target = canonical_path(root / relative)
+            if not is_within(root, target):
+                raise ValueError("path escapes workspace")
+            raw = target.read_bytes()
+            if (
+                not target.is_file()
+                or len(raw) != int(row["size"])
+                or hashlib.sha256(raw).hexdigest() != str(row["sha256"])
+            ):
+                changed.append(relative)
+        except (KeyError, TypeError, ValueError, OSError):
+            changed.append(str(row.get("path", f"<invalid:{index}>")))
+    return tuple(sorted(set(changed)))
 
 
 def _run_static_toolchain_preflight_operation(
@@ -1281,6 +1315,7 @@ def _run_static_toolchain_preflight_operation(
     python_placeholders: set[str] = set()
     check_records: list[dict[str, Any]] = []
     private_checks: list[dict[str, Any]] = []
+    owner_check_inputs: set[Path] = set()
     reasons: list[str] = []
     jest_configs: set[JestConfigProbe] = set()
     allowed = set(_BUILTIN_PLACEHOLDERS) | set(toolchain) | set(_KNOWN_TOOLCHAIN_KEYS)
@@ -1368,14 +1403,18 @@ def _run_static_toolchain_preflight_operation(
                         key,
                         require_file=key in _KNOWN_TOOLCHAIN_KEYS,
                     )
-                jest_configs.update(
-                    _validate_known_inputs(
-                        expanded,
-                        family=family,
-                        workspace=canonical_path(workspace),
-                        harness_root=canonical_path(harness_root),
-                        jest_path=jest_path,
-                    )
+                configs, known_inputs = _validate_known_inputs(
+                    expanded,
+                    family=family,
+                    workspace=canonical_path(workspace),
+                    harness_root=canonical_path(harness_root),
+                    jest_path=jest_path,
+                )
+                jest_configs.update(configs)
+                owner_check_inputs.update(
+                    path
+                    for path in known_inputs
+                    if is_within(canonical_path(workspace), path)
                 )
             except (StaticPreflightError, RuntimeError, OSError) as exc:
                 reason = getattr(exc, "reason_code", STATIC_TOOLCHAIN_PATH_NOT_FOUND)
@@ -1438,6 +1477,14 @@ def _run_static_toolchain_preflight_operation(
         reason_codes=tuple(reasons),
         private_details={
             "checks": private_checks,
+            "owner_check_inputs": [
+                {
+                    "path": path.relative_to(canonical_path(workspace)).as_posix(),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "size": path.stat().st_size,
+                }
+                for path in sorted(owner_check_inputs, key=lambda item: item.as_posix())
+            ],
             "probe_commands": list(probe_registry.private_probe_commands),
             "integrity_reason_code": probe_result.integrity_reason_code,
         },

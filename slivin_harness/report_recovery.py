@@ -17,6 +17,10 @@ _LOCAL_FIELD = re.compile(
     r"changed_path_dispositions)\[\d+\]\."
     r"(?:symbols|evidence|evidence_paths)(?:\[\d+\])?$"
 )
+_BLIND_REVISION_FIELD = re.compile(
+    r"impact_challenge\.(?:not_affected_dispositions|related_follow_up_dispositions)"
+    r"\[\d+\]\.source_revision$"
+)
 
 
 class ReportRecoveryStop(RuntimeError):
@@ -54,6 +58,8 @@ class ReportCorrectionState:
 
 def correctable_report_field(error: ArtifactContractError) -> str | None:
     # No model, set coverage, classification, proof, capability or integrity errors.
+    if error.code == "BLIND_SOURCE_REVISION" and _BLIND_REVISION_FIELD.fullmatch(error.field):
+        return error.field
     if error.code == "MISSING_FIELDS" and isinstance(error.actual, list) and len(error.actual) == 1:
         candidate = error.field + "." + str(error.actual[0])
         return candidate if _LOCAL_FIELD.fullmatch(candidate) else None
@@ -109,7 +115,7 @@ def correction_prompt(error: ArtifactContractError, *, fields: list[str], role: 
     import json
     diagnostic = {
         "code": error.code, "field": error.field,
-        "expected": "Non-empty concrete repository evidence identifiers/locators at this field",
+        "expected": error.expected,
         "allowed_fields": fields,
         "diagnostics": [{"code": item.code, "field": item.field} for item in
                         (error.diagnostics if isinstance(error, ArtifactDiagnosticBatch) else (error,))],

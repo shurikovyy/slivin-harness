@@ -202,6 +202,12 @@ project Python. Jest требует успешных Node/Jest version probes и
 загружает executable project-owned config/test environment, но не запускает
 test suite или hidden oracle. Probes проходят через тот же
 `RuntimeProjectionIntegrityManager` с batch id `static-toolchain-preflight`.
+Для direct Node/Python scripts, explicit Jest config и выбранных через
+`--runTestsByPath` files Controller сохраняет private byte baseline. Перед
+deterministic, held-out и reconstructed checks он отклоняет drift как
+`OWNER_CHECK_INPUT_CHANGED`, не исполняет изменённый owner input и направляет
+candidate в bounded repair. Дополнительные assertions должны находиться в
+отдельных registered test files.
 Combined stdout/stderr читается потоково и ограничен 1 MiB; overflow завершает
 process group и даёт `STATIC_TOOLCHAIN_PROBE_OUTPUT_LIMIT`. Raw bytes остаются
 только в Controller-private log.
@@ -439,7 +445,10 @@ changed paths и revision binding непосредственно до раскр
 Required `impact_challenge` содержит exact dispositions blind contracts/affected consumers,
 Planner IN_SCOPE, Implementer DISCOVERED, всех NOT_AFFECTED/related rows (включая собственные
 blind rows) и changed paths. Blind IDs сохраняют naming independence; typed matches
-ссылаются на existing prior ledger rows. Каждый negative disposition требует final
+ссылаются на existing prior ledger rows. Для `source=BLIND` обязательный
+`source_revision` равен пустой строке: invented revisions собираются в один
+typed `BLIND_SOURCE_REVISION` batch с правом исправить только точные поля.
+Каждый negative disposition требует final
 finding_ids и запрещает PASS. Каждый blind finding retained либо dismissed с evidence.
 Blind changed-contract MATERIAL_GAP и MODEL_CONFLICT требуют только REPLAN_REQUIRED,
 concrete reason и final finding; PASS/FINDINGS/BLOCKED/NEEDS_USER_DECISION отклоняются.
@@ -501,6 +510,10 @@ agent turns выполняются static preflight, все active repair checks
 held-out. Candidate/Git/runtime guards должны остаться pristine; результат
 фиксирует `reconstructed-verification.v1`. Original workspace runtime, `.env`,
 `.harness_tmp` и loose unreferenced Git objects не переносятся.
+В production и proof `{project_root}` указывает на managed workspace с текущей
+Controller-copied runtime projection. Historical benchmark разрешает toolchain
+сначала относительно recorded source и затем выполняет обязательный
+provenance-bearing sanitize/rebind.
 
 ### Immutable acceptance
 

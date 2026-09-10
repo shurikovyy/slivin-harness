@@ -108,10 +108,12 @@ from slivin_harness.reconstructed_verification import (
     run_authoritative_reconstructed_verification,
 )
 from slivin_harness.preflight import (
+    OWNER_CHECK_INPUT_CHANGED,
     ToolProbeRegistry,
     expand_check_command,
     resolve_python_command,
     run_static_toolchain_preflight,
+    verify_owner_check_input_baseline,
 )
 from slivin_harness.report_recovery import (
     MAX_REPORT_CORRECTIONS, correction_fields, correction_prompt, preserves_report_claims,
@@ -209,8 +211,11 @@ IMPLEMENTER_INSTRUCTIONS = """
   Exploratory broad-suite tests, baseline-red unrelated tests и RELATED_OUT_OF_SCOPE diagnostics
   не превращай в authoritative registered_checks. Controller определяет runner по framework
   evidence (node:test imports либо Jest syntax), а не по extension/install availability.
-  Не удаляй native tests и не меняй assertions/runner ради green output. Changed/new regression tests по-прежнему
-  должны быть покрыты trusted verification. Trusted check ID сейчас только `git.diff-check`;
+  Не удаляй native tests и не меняй assertions/runner ради green output. Owner-authored files,
+  переданные manifest checks как direct script, config или selected test input, сохраняй
+  byte-for-byte; дополнительное покрытие помещай в отдельные test files и регистрируй.
+  Changed/new regression tests по-прежнему должны быть покрыты trusted verification.
+  Trusted check ID сейчас только `git.diff-check`;
   произвольные/неизвестные Controller команды и IDs запрещены;
 - Planner proof plan — гипотеза. Если Planner-derived proof route доказанно непригоден
   из-за pre-existing unrelated baseline failures, не меняй unrelated code/tests ради green
@@ -1493,11 +1498,31 @@ def run_checks(
     git_integrity_manager: GitControlIntegrityManager | None = None,
     batch_id: str | None = None,
     publish_output: bool = True,
+    owner_check_input_baseline: tuple[dict[str, Any], ...] = (),
 ) -> list[CheckResult]:
     print(f"=== {label} ===")
     started = time.monotonic()
 
     def execute() -> list[CheckResult]:
+        changed_owner_inputs = verify_owner_check_input_baseline(
+            workspace, owner_check_input_baseline
+        )
+        if changed_owner_inputs:
+            fingerprint = controller_check_fingerprint(workspace)
+            return [
+                CheckResult(
+                    name="Owner check input integrity",
+                    command=[],
+                    returncode=1,
+                    output=(
+                        f"{OWNER_CHECK_INPUT_CHANGED}: restore exact owner-authored check "
+                        "inputs and put any additional coverage in separate test files: "
+                        + ", ".join(changed_owner_inputs)
+                    ),
+                    candidate_before=fingerprint,
+                    candidate_after=fingerprint,
+                )
+            ]
         results: list[CheckResult] = []
         for index, spec in enumerate(specs, start=1):
             result = run_check(
@@ -2694,7 +2719,16 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
 
-        project_root = session.source_repo or workspace
+        # Production project-relative entries execute from the managed workspace,
+        # where source-owned runtime has already been copied by the Controller.
+        # Historical mode retains the explicit source resolution so its mandatory
+        # sanitize/rebind step records provenance instead of hiding the transition.
+        project_root = (
+            session.source_repo
+            if workflow_mode == WorkflowMode.HISTORICAL_BENCHMARK
+            and session.source_repo is not None
+            else workspace
+        )
         toolchain = resolve_toolchain(
             local_config,
             manifest,
@@ -2781,6 +2815,9 @@ def main(argv: list[str] | None = None) -> int:
                 ", ".join(static_preflight.reason_codes),
             )
             return 2
+        owner_check_input_baseline = tuple(
+            static_preflight.private_details.get("owner_check_inputs", ())
+        )
         print("STATIC_TOOLCHAIN_PREFLIGHT_PASS")
         runtime_scenarios = runtime_scenarios_from_config(
             local_config, project_name=session.project_name
@@ -4342,6 +4379,7 @@ def main(argv: list[str] | None = None) -> int:
                     runtime_integrity_manager=runtime_integrity_manager,
                     git_integrity_manager=git_integrity_manager,
                     batch_id=f"DETERMINISTIC_CHECKS:{check_index:02d}",
+                    owner_check_input_baseline=owner_check_input_baseline,
                 )
                 checks_artifact = f"checks_{check_index:02d}.json"
                 recorder.write_authoritative_json(checks_artifact, check_records(repair_results))
@@ -4990,6 +5028,7 @@ def main(argv: list[str] | None = None) -> int:
                 runtime_integrity_manager=runtime_integrity_manager,
                 git_integrity_manager=git_integrity_manager,
                 batch_id="FINAL_HELDOUT_CHECKS",
+                owner_check_input_baseline=owner_check_input_baseline,
             )
             heldout_results_artifact = "heldout_results.json"
             recorder.write_authoritative_json(
@@ -5104,6 +5143,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 run_checks=run_checks,
                 check_records=check_records,
+                owner_check_input_baseline=owner_check_input_baseline,
             ),
         )
         reconstructed_verification_artifact = "reconstructed_verification.json"

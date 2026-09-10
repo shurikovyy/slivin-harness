@@ -62,6 +62,7 @@
 | [D-025](#d-025) | Framework-aware trusted runner и replay | IMPLEMENTED в 0.8.0a30 |
 | [D-026](#d-026) | Bounded report-only evidence correction | IMPLEMENTED в 0.8.0a30 |
 | [D-027](#d-027) | Immutable origins, recovery с progress и обязательная квалификация сборки | IMPLEMENTED в 0.8.0a31; qualification определяется отдельным release record |
+| [D-028](#d-028) | Owner check inputs и production toolchain остаются властью Controller | IMPLEMENTED; qualification конкретного SHA ещё требуется |
 
 <a id="d-001"></a>
 
@@ -827,6 +828,67 @@ bounded retries, semantic allowlist и guards сохранены.
 counterexample, сохранением positive и adversarial cases, обновлением boundary map и
 повторной qualification нового SHA. Конечные generic runs не доказывают универсальную
 полноту поиска или успешность отдельного исторического product trial.
+
+<a id="d-028"></a>
+
+## D-028. Owner check inputs и production toolchain остаются властью Controller
+
+**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED; qualification конкретного SHA
+определяется отдельным `qualification.json`.
+**Дата регистрации:** 2026-09-10. **Связанные решения:** D-008, D-013, D-014,
+D-017, D-026, D-027.
+
+**Проблема и проверенные основания.** Real-model qualification сборки `ec81d02`
+выявила два false-positive пути в успешных product candidates. Production
+`{project_root}` ссылался на source checkout, хотя Controller уже скопировал runtime
+в managed workspace. Одновременно модели изменили direct owner test inputs, и Harness
+исполнил эти изменённые assertions. В третьем scenario Evaluator присвоил трём
+`source=BLIND` rows вымышленный revision; локальная protocol ошибка остановила
+корректный candidate вместо bounded report correction.
+
+**Решение.** Production и reconstructed proof разрешают project-relative toolchain
+от managed workspace. Historical benchmark сохраняет source-relative resolution лишь
+до обязательного recorded sanitize/rebind. Static preflight сохраняет exact bytes,
+размер и digest известных direct Node/Python scripts, explicit Jest config и выбранных
+test files. Перед deterministic, held-out и reconstructed batch Controller проверяет
+baseline; drift даёт `OWNER_CHECK_INPUT_CHANGED`, не исполняет изменённый owner input
+и использует существующий bounded product repair. Новое покрытие добавляется отдельным
+registered test file.
+
+Planner требует docs update только когда существующая canonical документация станет
+фактически ложной или materially неполной от final semantics. Уже корректное общее
+описание не превращается в обязательство расширить prose ради подробности. Для
+Evaluator все non-empty `source_revision` у `source=BLIND` собираются в один typed
+batch; correction allowlist содержит только точные поля этих revisions.
+
+**Почему.** Исполняемый runtime и acceptance assertions снова выводятся из текущего
+Controller-managed workspace и immutable owner evidence. Bounded correction устраняет
+локальную ошибку wire evidence без semantic replan, изменения candidate или прежних
+claims. Это закрывает наблюдавшиеся stops, сохраняя исходные owner checks и внешний
+frozen validator.
+
+**Отвергнутые варианты.** REJECTED: ослабить frozen validator; считать добавленные
+model assertions доверенными owner assertions; продолжать production execution из
+source checkout; удалять изменённые tests из evidence после выполнения; требовать
+расширение любой уже корректной документации; разрешить generic Evaluator retries или
+revision correction за пределами exact blind fields.
+
+**Последствия и цена.** Direct check input, который одновременно является изменяемым
+product file, нельзя использовать как саморедактируемое доказательство: owner должен
+вынести assertion в отдельный check или явно изменить будущую policy. Hashing известных
+inputs и их повторная проверка добавляют ограниченный I/O. Runtime semantics продукта,
+task prompts, budgets, qualification oracle, permissions и число model runs не меняются.
+
+**Реализация / evidence.** `preflight.py`, `task_runner.run_checks`,
+`reconstructed_verification.py`, `evaluator.py`, `report_recovery.py`, `planner.py`;
+mandatory boundary map включает owner-input drift и batched blind-revision recovery.
+Focused tests проверяют запрет исполнения изменённого input, exact correction allowlist,
+one-turn batch recovery и historical source rebind. Полная qualification нового clean
+SHA остаётся обязательной и не подменяется этими tests.
+
+**Пересмотр.** Расширять список замороженных inputs только для Controller-known
+acceptance definitions. Новые correction fields требуют отдельного typed
+counterexample, узкого allowlist и проверки сохранности candidate/claims.
 
 ## Шаблон новой записи
 

@@ -54,6 +54,7 @@ def run_authoritative_reconstructed_verification(
     exposed_runtime_file_snapshot: Callable[[WorkspaceSession], Mapping[str, str]],
     run_checks: Callable[..., list[Any]],
     check_records: Callable[[list[Any]], list[dict[str, Any]]],
+    owner_check_input_baseline: Sequence[Mapping[str, Any]] = (),
 ) -> ReconstructedVerificationResult:
     """Materialize and replay final evidence in a clean proof repository."""
 
@@ -131,7 +132,12 @@ def run_authoritative_reconstructed_verification(
             local_config,
             manifest,
             project_name=proof_session.project_name,
-            project_root=proof_session.source_repo or proof_workspace,
+            project_root=(
+                proof_session.source_repo
+                if workflow_mode == WorkflowMode.HISTORICAL_BENCHMARK
+                and proof_session.source_repo is not None
+                else proof_workspace
+            ),
         )
         if proof_runtime_state is not None:
             proof_toolchain["project_python"] = proof_runtime_state.project_python
@@ -196,6 +202,7 @@ def run_authoritative_reconstructed_verification(
             git_integrity_manager=proof_git,
             batch_id="RECONSTRUCTED_REPAIR_CHECKS",
             publish_output=False,
+            owner_check_input_baseline=tuple(owner_check_input_baseline),
         )
         private["repair_checks"] = check_records(proof_repair_results)
         repair_git_reason = next(
@@ -247,6 +254,7 @@ def run_authoritative_reconstructed_verification(
                 git_integrity_manager=proof_git,
                 batch_id="RECONSTRUCTED_HELDOUT_CHECKS",
                 publish_output=False,
+                owner_check_input_baseline=tuple(owner_check_input_baseline),
             )
             after_heldout = build_candidate_identity(
                 proof_workspace,
