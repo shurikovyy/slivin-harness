@@ -111,6 +111,11 @@ sharing/access violations с bounded budget. Ambiguous completed replace све�
 Default evidence root и внутренние имена FULL workspaces ограничены по длине; перед
 model turns gate вычисляет фактический Windows path budget для physical `node_modules`
 и завершает этап типизированным FAIL, если безопасного запаса нет.
+Успешные stages не стримят полный log. При failure console показывает stage, absolute
+stage-log path, существующий summary path, безопасно извлечённые typed status/reason и
+redacted tail последних 60 строк. Summary читается только как bounded JSON object;
+private artifacts не раскрываются, известные credential values и inline credential
+assignments в console tail маскируются. Полный log остаётся в release evidence root.
 
 `slivin_harness/boundary_contracts.json` фиксирует entrypoints, schemas, owner,
 pre/postconditions, freshness/evidence, outcomes, recovery/checkpoint и обязательные

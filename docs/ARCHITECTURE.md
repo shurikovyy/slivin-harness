@@ -650,7 +650,10 @@ context без cwd/permission overrides: в 0.153.4 повторный выбо�
 
 Codex 0.153.4 unelevated Windows не исполняет split writable roots при project session cwd;
 поэтому session root совпадает с единственным writable root. Ancestor discovery сохраняет
-repository AGENTS.md; применимые вложенные instructions читаются по project path.
+repository AGENTS.md. В synthetic native acceptance Controller задаёт отдельные exact
+`ReadAllText` commands для root и nested instructions; успешный `commandExecution` с
+project cwd и `exitCode=0` является authority независимо от наличия marker в
+`aggregatedOutput`. Echo/другая команда с текстом `AGENTS.md` evidence не создаёт.
 Reported instruction sources из `.harness_tmp` отклоняются, чтобы stale temporary
 instructions не попадали в fresh роль. Initial/replan Planner и fresh Evaluator получают
 пустые отдельные roots. Перед очисткой semantic reset архивирует старые scoped

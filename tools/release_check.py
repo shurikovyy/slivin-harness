@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,21 @@ from slivin_harness.workflow import workflow_snapshot
 from tools.release_identity import codex_launch_identity
 
 
+RELEASE_LOG_TAIL_LINES = 60
+RELEASE_LOG_TAIL_BYTES = 262_144
+RELEASE_LOG_LINE_CHARS = 2_000
+RELEASE_SUMMARY_DIAGNOSTIC_BYTES = 1_048_576
+_SECRET_NAME_RE = re.compile(
+    r"(?:^|_)(?:TOKEN|PASSWORD|PASSWD|SECRET|API_KEY|PRIVATE_KEY|ACCESS_KEY|CLIENT_SECRET|CREDENTIAL)(?:_|$)",
+    re.IGNORECASE,
+)
+_INLINE_SECRET_RE = re.compile(
+    r"(?i)\b(authorization|api[_-]?key|token|password|passwd|secret|private[_-]?key|"
+    r"access[_-]?key|client[_-]?secret|credential)(\s*[:=]\s*)((?:bearer\s+)?[^\s,;]+)"
+)
+_URL_CREDENTIAL_RE = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@")
+
+
 def write(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -29,6 +45,92 @@ def write(path, value):
 def default_output_root() -> Path:
     """Keep enough Windows path headroom for nested worktree runtime copies."""
     return Path(tempfile.gettempdir()) / ("shr-q-" + uuid.uuid4().hex[:10])
+
+
+def _sanitize_console_text(value: object, *, environ: dict[str, str]) -> str:
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    secrets = {
+        secret for key, secret in environ.items()
+        if secret and len(secret) >= 4 and _SECRET_NAME_RE.search(key)
+    }
+    for secret in sorted(secrets, key=len, reverse=True):
+        text = text.replace(secret, "<redacted>")
+    text = _URL_CREDENTIAL_RE.sub(r"\1<redacted>@", text)
+    text = _INLINE_SECRET_RE.sub(r"\1\2<redacted>", text)
+    if len(text) > RELEASE_LOG_LINE_CHARS:
+        text = text[:RELEASE_LOG_LINE_CHARS] + "...<truncated>"
+    return text
+
+
+def _safe_summary_diagnostic(path: Path) -> dict[str, str]:
+    try:
+        if path.is_symlink():
+            return {"read_status": "SUMMARY_UNSAFE_LINK"}
+        if path.stat().st_size > RELEASE_SUMMARY_DIAGNOSTIC_BYTES:
+            return {"read_status": "SUMMARY_TOO_LARGE"}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {"read_status": "SUMMARY_UNREADABLE"}
+    if not isinstance(payload, dict):
+        return {"read_status": "SUMMARY_NOT_OBJECT"}
+    diagnostic = {"read_status": "OK"}
+    for key in ("status", "reason_code", "result_code"):
+        if isinstance(payload.get(key), (str, int, float, bool)):
+            diagnostic[key] = str(payload[key])
+    if isinstance(payload.get("reason"), (str, int, float, bool)):
+        diagnostic["reason"] = str(payload["reason"])
+    error = payload.get("error")
+    if isinstance(error, dict):
+        for source, target in (("type", "reason_type"), ("status", "error_status"),
+                               ("reason_code", "error_reason_code"), ("reason", "reason")):
+            if target not in diagnostic and isinstance(error.get(source), (str, int, float, bool)):
+                diagnostic[target] = str(error[source])
+    elif "reason" not in diagnostic and isinstance(error, (str, int, float, bool)):
+        diagnostic["reason"] = str(error)
+    return diagnostic
+
+
+def _bounded_log_tail(path: Path) -> list[str]:
+    try:
+        if path.is_symlink():
+            return []
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            start = max(0, size - RELEASE_LOG_TAIL_BYTES)
+            handle.seek(start)
+            raw = handle.read(RELEASE_LOG_TAIL_BYTES)
+    except OSError:
+        return []
+    lines = raw.decode("utf-8", errors="replace").splitlines()
+    if start and lines:
+        lines = lines[1:]
+    return lines[-RELEASE_LOG_TAIL_LINES:]
+
+
+def emit_stage_failure_diagnostics(
+    stage_name: str,
+    *,
+    log_path: Path,
+    summary_path: Path | None,
+    environ: dict[str, str] | None = None,
+) -> None:
+    safe_env = dict(os.environ if environ is None else environ)
+    print("RELEASE_STAGE_FAILURE:", stage_name, flush=True)
+    print("RELEASE_STAGE_LOG:", log_path.resolve(), flush=True)
+    if summary_path is not None and summary_path.is_file():
+        print("RELEASE_STAGE_SUMMARY:", summary_path.resolve(), flush=True)
+        for key, value in _safe_summary_diagnostic(summary_path).items():
+            print(
+                "RELEASE_STAGE_SUMMARY_" + key.upper() + ":",
+                _sanitize_console_text(value, environ=safe_env),
+                flush=True,
+            )
+    tail = _bounded_log_tail(log_path)
+    print("RELEASE_STAGE_LOG_TAIL_BEGIN:", stage_name, "lines=" + str(len(tail)), flush=True)
+    for line in tail:
+        print("| " + _sanitize_console_text(line, environ=safe_env), flush=True)
+    print("RELEASE_STAGE_LOG_TAIL_END:", stage_name, flush=True)
 
 
 def tools_from_profile(args):
@@ -82,6 +184,8 @@ def main() -> int:
         stages={name: dict(status="NOT_RUN") for name in names})
     write(output / "qualification.json", report)
     print("RELEASE_EVIDENCE:", output, flush=True)
+    active_stage: tuple[str, Path, Path] | None = None
+    failure_diagnostics_emitted = False
     try:
         if os.name != "nt":
             raise RuntimeError("windows-local requires native Windows")
@@ -104,25 +208,38 @@ def main() -> int:
         for name in names:
             command, timeout = commands[name]
             started = time.monotonic()
-            report["stages"][name] = dict(status="RUNNING", command=command, timeout_seconds=timeout)
+            log_path = output / (name + ".log")
+            summary = output / name / ("diagnostics/result.json" if name == "native_roles" else "summary.json")
+            active_stage = (name, log_path, summary)
+            report["stages"][name] = dict(status="RUNNING", command=command, timeout_seconds=timeout,
+                                           log=str(log_path))
             write(output / "qualification.json", report)
             print("RELEASE_STAGE_START:", name, flush=True)
-            with (output / (name + ".log")).open("w", encoding="utf-8") as log:
+            with log_path.open("w", encoding="utf-8") as log:
                 result = subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
             stage = report["stages"][name]
             stage.update(status="PASS" if result.returncode == 0 else "FAIL", exit_code=result.returncode, elapsed_seconds=round(time.monotonic()-started, 3))
-            summary = output / name / ("diagnostics/result.json" if name == "native_roles" else "summary.json")
             if summary.is_file():
                 stage["summary"] = str(summary)
-                stage["summary_sha256"] = hashlib.sha256(summary.read_bytes()).hexdigest()
-                if json.loads(summary.read_text(encoding="utf-8")).get("status") != "PASS":
-                    stage["status"] = "FAIL"
+                try:
+                    raw_summary = summary.read_bytes()
+                    summary_payload = json.loads(raw_summary.decode("utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                    stage.update(status="FAIL", reason="Mandatory machine-readable evidence unreadable",
+                                 summary_error_type=type(error).__name__)
+                else:
+                    stage["summary_sha256"] = hashlib.sha256(raw_summary).hexdigest()
+                    if not isinstance(summary_payload, dict) or summary_payload.get("status") != "PASS":
+                        stage["status"] = "FAIL"
             elif name != "self_check":
                 stage.update(status="FAIL", reason="Mandatory machine-readable evidence missing")
             write(output / "qualification.json", report)
             print("RELEASE_STAGE_END:", name, stage["status"], flush=True)
             if stage["status"] != "PASS":
+                emit_stage_failure_diagnostics(name, log_path=log_path, summary_path=summary, environ=env)
+                failure_diagnostics_emitted = True
                 break
+            active_stage = None
         report["source_unchanged"] = initial == source_manifest(ROOT)
         # Resolve again as well as hashing: an unchanged shim can select another
         # PATH/local Node or platform package/native payload after the run.
@@ -135,6 +252,10 @@ def main() -> int:
         for stage in report["stages"].values():
             if stage["status"] == "RUNNING":
                 stage.update(status="FAIL", reason="Execution interrupted; see release error")
+        if active_stage is not None and not failure_diagnostics_emitted:
+            name, log_path, summary = active_stage
+            emit_stage_failure_diagnostics(name, log_path=log_path, summary_path=summary,
+                                           environ=locals().get("env", dict(os.environ)))
     report["completed_at"] = datetime.now(timezone.utc).isoformat()
     write(output / "qualification.json", report)
     print(report["status"], output / "qualification.json", flush=True)

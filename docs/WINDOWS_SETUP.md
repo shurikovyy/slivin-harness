@@ -193,8 +193,12 @@ The native unelevated restricted-token runner rejects split writable roots when
 the session cwd remains the project. Harness therefore uses
 `<project>/.harness_tmp/<role>/session-*` as the session root and sole write root.
 The agent sets command workdir to the project for repository-relative tests/search/Git.
-Ancestor AGENTS.md discovery remains available; nested instructions are read in the
-project context. A fresh session is empty and cannot inherit temporary AGENTS.md. Scratch uses ordinary
+Ancestor AGENTS.md discovery remains available. For synthetic acceptance the Controller
+supplies separate exact `ReadAllText` commands for `AGENTS.md` and `src/AGENTS.md`.
+Each instruction read requires its own successful `commandExecution` from project cwd;
+an `aggregatedOutput` marker is supplementary and may be absent. Echo or another command
+that merely contains an instruction filename/marker is rejected. A fresh session is empty
+and cannot inherit temporary AGENTS.md. Scratch uses ordinary
 inherited mkdir permissions: Python 3.13+ mkdtemp mode 0700 creates a protected DACL
 that the tested restricted-token runner cannot read. No manual ACL grants are added.
 TEMP/TMP/TMPDIR, XDG and npm cache settings belong to that thread, not the shared

@@ -58,6 +58,17 @@ console.log('PROBE_RESULT='+JSON.stringify({cwd:process.cwd(),tmpdir:require('os
 if(rows.some(r=>r.name.startsWith('scratch:')?r.result!=='ALLOWED':r.result!=='DENIED'))process.exitCode=7;
 """
 
+INSTRUCTION_READ_SPECS = (
+    ("root", "AGENTS.md", "ROOT_INSTRUCTIONS_READ",
+     "[System.IO.File]::ReadAllText('AGENTS.md', [System.Text.Encoding]::UTF8)"),
+    ("nested", "src/AGENTS.md", "NESTED_INSTRUCTIONS_READ",
+     r"[System.IO.File]::ReadAllText('src\AGENTS.md', [System.Text.Encoding]::UTF8)"),
+)
+_POWERSHELL_COMMAND = re.compile(
+    r'^"[^"\r\n]*[\\/]powershell\.exe" -NoProfile -Command "(?P<script>[^"\r\n]*)"$',
+    re.IGNORECASE,
+)
+
 
 def write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -102,6 +113,44 @@ class ObservedServer(CodexAppServer):
         return message
 
 
+def validate_instruction_read_evidence(commands: list[dict], *, project: Path) -> dict:
+    """Require the exact Controller-provided root and nested read commands."""
+    project = project.resolve()
+    evidence = {}
+    for label, relative_path, marker, expected_script in INSTRUCTION_READ_SPECS:
+        successful = []
+        for row in commands:
+            command = row.get("command")
+            cwd = row.get("cwd")
+            if not isinstance(command, str) or not isinstance(cwd, str):
+                continue
+            # App Server commandExecution escapes Windows separators in its
+            # rendered command. Collapse only that transport spelling before
+            # comparing the complete PowerShell payload.
+            rendered = command.replace("\\\\", "\\")
+            match = _POWERSHELL_COMMAND.fullmatch(rendered)
+            if match is None or match.group("script") != expected_script:
+                continue
+            try:
+                exact_cwd = Path(cwd).resolve() == project
+            except (OSError, RuntimeError, ValueError):
+                exact_cwd = False
+            if exact_cwd and row.get("exitCode") == 0:
+                successful.append(row)
+        if not successful:
+            raise RuntimeError(
+                f"Missing/failed exact repository instruction read: {relative_path}"
+            )
+        evidence[label] = {
+            "status": "PASS",
+            "path": relative_path,
+            "output_marker_observed": any(
+                marker in (row.get("aggregatedOutput") or "") for row in successful
+            ),
+        }
+    return evidence
+
+
 def validate_phase(commands: list[dict], *, project: Path, scratch: Path, peer: Path, initial: bool) -> dict:
     probes = [row for row in commands if (row["aggregatedOutput"] or "").startswith("PROBE_RESULT=")]
     if len(probes) != 1 or probes[0]["exitCode"] != 0 or Path(probes[0]["cwd"]) != project:
@@ -134,13 +183,13 @@ def validate_phase(commands: list[dict], *, project: Path, scratch: Path, peer: 
     cache_files = sorted(str(path.relative_to(scan_root)) for path in (scan_root / "jest").rglob("*") if path.is_file())
     if not cache_files:
         raise RuntimeError("No actual Jest cache files in role scratch")
-    if initial:
-        output = "\n".join(row["aggregatedOutput"] or "" for row in commands)
-        if "ROOT_INSTRUCTIONS_READ" not in output or "NESTED_INSTRUCTIONS_READ" not in output:
-            raise RuntimeError("Repository instruction files were not read")
-    return {"status": "PASS", "negative_attempts_denied": len(negative), "jest_passes": len(passed),
+    instruction_reads = validate_instruction_read_evidence(commands, project=project) if initial else None
+    result = {"status": "PASS", "negative_attempts_denied": len(negative), "jest_passes": len(passed),
         "intentional_assertion_failures": len(failed), "cache_files": cache_files,
         "peer_canary": str(peer), "child_process_observation": probe["child"]}
+    if instruction_reads is not None:
+        result["instruction_reads"] = instruction_reads
+    return result
 
 
 def main() -> int:
@@ -250,7 +299,11 @@ def main() -> int:
                     initial = turn_index == 0
                     node = "'" + str(args.node).replace("'", "''") + "'"
                     command = f"& {node} .\\node_modules\\jest\\bin\\jest.js --config .\\jest.config.cjs --runInBand --runTestsByPath .\\tests\\arithmetic.test.cjs --watch=false"
-                    prompt = f"""VALIDATION ONLY on disposable synthetic canaries. No product patch. Use project cwd {project} for every command; session root is scratch {scratch}. Keep existing permissions; never request escalation or install packages. Read project AGENTS.md, src/AGENTS.md and src/arithmetic.cjs. Execute each command separately and capture the full result:
+                    prompt = f"""VALIDATION ONLY on disposable synthetic canaries. No product patch. Use project cwd {project} for every command; session root is scratch {scratch}. Keep existing permissions; never request escalation or install packages."""
+                    if initial:
+                        prompt += " Execute these Controller-specified repository instruction read commands exactly as written, separately and from project cwd:\n"
+                        prompt += "\n".join(spec[3] for spec in INSTRUCTION_READ_SPECS) + "\n"
+                    prompt += f"""Read src/arithmetic.cjs. Execute each validation command separately and capture the full result:
 & {node} .\\sandbox_probe.cjs '{sibling}' '{private}' '{peer}'
 {command}
 """

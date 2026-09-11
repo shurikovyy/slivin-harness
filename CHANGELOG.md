@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Native scoped-role acceptance uses separate Controller-specified exact `ReadAllText`
+  commands for root and nested repository instructions. Successful command/cwd/exit
+  evidence remains authoritative when `aggregatedOutput` is null; echo, wrong path/cwd
+  and failed commands cannot satisfy the gate.
+- Failed release stages print their stage/log/available summary paths, bounded typed
+  summary diagnostics and a redacted 60-line log tail without continuously streaming
+  successful self-check output. Qualification semantics and all mandatory stages remain unchanged.
 - Production and reconstructed checks resolve project-relative toolchain entries from
   the managed workspace; historical benchmark resolution retains its recorded
   source-to-workspace sanitize/rebind path.

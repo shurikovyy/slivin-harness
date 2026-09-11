@@ -460,6 +460,13 @@ AGENTS sources отклоняются. Broad read access прежнего read-o
 [app_server.py](../slivin_harness/app_server.py),
 [tests/test_app_server.py](../tests/test_app_server.py),
 [воспроизводимый native smoke](../tools/smoke_readonly_scratch.py).
+В synthetic native acceptance Controller задаёт отдельные точные PowerShell
+`ReadAllText` commands для `AGENTS.md` и `src/AGENTS.md`. Authoritative evidence
+каждого чтения — соответствующий завершённый `commandExecution` с exact payload,
+project cwd и `exitCode=0`; marker в `aggregatedOutput` только дополняет evidence и
+не обязателен. Echo или другая команда, содержащая имя/marker instruction file,
+не принимается. Это уточняет Controller evidence D-013 и не меняет permission,
+Jest/cache или invariance boundaries решения.
 Локальные пакеты `slivin-scoped-scratch-391996c9b6/mechanism-*` и
 `production-native-*` содержат запрос, reported profile, command/exit/output и invariance.
 Исходный `slivin-planner-sandbox-smoke-3dbfda4104` не изменялся.
