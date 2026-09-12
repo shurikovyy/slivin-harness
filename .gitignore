@@ -18,6 +18,7 @@ runs/
 *.log
 *.tmp
 *.temp
+*.tmp-tests
 
 # -----------------------------------------------------------------------------
 # Disposable benchmark/project workspaces
