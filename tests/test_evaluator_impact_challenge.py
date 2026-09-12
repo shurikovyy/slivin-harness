@@ -17,19 +17,20 @@ import task_runner
 
 from slivin_harness.control_plane import ArtifactVisibility, ControllerPlane
 from slivin_harness.evaluator import (
-    BLIND_AUDIT_SCHEMA, EVALUATOR_SCHEMA, run_evaluator,
+    BLIND_AUDIT_SCHEMA, EVALUATOR_SCHEMA, admit_evaluation_artifact,
+    build_evaluator_schema, build_phase_b_origin_catalog, run_evaluator,
     validate_blind_audit, validate_evaluation_artifact,
 )
 from slivin_harness.implementer import build_implementation_contract, build_implementation_impact_closure
 from slivin_harness.output_schema import validate_strict_output_schema
 from slivin_harness.phase6 import BLIND_AUDIT_VERSION
-from slivin_harness.protocol import ArtifactContractError
+from slivin_harness.protocol import ArtifactContractError, ArtifactFailureKind
 from slivin_harness.run_state import build_candidate_identity
 from slivin_harness.verification import compile_verification_plan
 from task_runner import collect_changed_paths
 from test_implementer import git
 from test_planner_impact_closure import synthetic_plan, synthetic_task_contract
-from test_protocol import attach_post_patch_impact, evaluator_finding, proof, valid_pass
+from test_protocol import attach_post_patch_impact, evaluator_finding, phase_b_wire, proof, valid_pass
 
 
 class ScriptedEvaluator:
@@ -135,6 +136,37 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
         options.update(context)
         validate_evaluation_artifact(self.verdict, blind_audit=self.audit, **options)
 
+    def admit_wire(self, wire, *, catalog=None):
+        catalog = catalog or build_phase_b_origin_catalog(
+            self.audit, self.plan["impact_closure"], self.impact,
+        )
+        return admit_evaluation_artifact(
+            wire, origin_catalog=catalog, blind_audit=self.audit,
+            workspace=self.workspace, candidate_id=self.candidate_id,
+            changed_paths=self.changed_paths,
+            planner_impact_closure=self.plan["impact_closure"],
+            implementation_impact_closure=self.impact,
+        )
+
+    def fixture_wire(self, filename):
+        fixture = json.loads((Path(__file__).parent / "fixtures/model_artifact_admission" / filename).read_text(encoding="utf-8"))
+        catalog = build_phase_b_origin_catalog(
+            self.audit, self.plan["impact_closure"], self.impact,
+        )
+        def bind(value):
+            if isinstance(value, str):
+                if value == "@CANDIDATE@":
+                    return self.candidate_id
+                if value.startswith("@ORIGIN-") and value.endswith("@"):
+                    return catalog["origins"][int(value[8:-1])]["origin_ref"]
+                return value
+            if isinstance(value, list):
+                return [bind(item) for item in value]
+            if isinstance(value, dict):
+                return {key: bind(item) for key, item in value.items()}
+            return value
+        return fixture, bind(fixture["wire_artifact"]), catalog
+
     def reject_a(self, message=None, **context):
         with self.assertRaisesRegex(RuntimeError, message or "."):
             self.validate_a(**context)
@@ -152,9 +184,24 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
         self.verdict.update(status="REPLAN_REQUIRED" if group == "blind_contract_dispositions" else "FINDINGS", findings=[finding], reason="The independently inspected candidate has a material impact gap.")
 
     def run_phases(self, *, observer=None, persist=None, impact=None, responses=None, on_raw_report=None, run_name="run"):
-        server = ScriptedEvaluator(self.audit, self.verdict, observer)
+        current_impact = impact or self.impact
+
+        def as_wire(value):
+            if not isinstance(value, dict) or "impact_challenge" not in value:
+                return value
+            rows = [row for group, group_rows in value["impact_challenge"].items()
+                    if group != "coverage_summary" and group != "changed_path_dispositions"
+                    for row in group_rows]
+            if rows and "origin_ref" in rows[0]:
+                return value
+            return phase_b_wire(
+                evaluation=value, blind_audit=self.audit,
+                planner_impact=self.plan["impact_closure"], implementation_impact=current_impact,
+            )
+
+        server = ScriptedEvaluator(self.audit, as_wire(self.verdict), observer)
         if responses is not None:
-            server.responses = responses
+            server.responses = [as_wire(value) for value in responses]
         plane = ControllerPlane(self.root / run_name)
 
         def persist_blind(audit):
@@ -171,8 +218,11 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
             implementation_contract=self.contract, verification_plan=compile_verification_plan(self.contract, project_checks=[]),
             contract_closure={"controller_marker": "CONTRACT_CLOSURE_SECRET"},
             checks_evidence={"controller_marker": "CHECKS_SECRET"}, runtime_evidence={"controller_marker": "RUNTIME_SECRET"},
-            plan=self.plan, implementation_impact_closure=impact or self.impact, revision_binding=self.binding,
+            plan=self.plan, implementation_impact_closure=current_impact, revision_binding=self.binding,
             on_blind_audit=persist or persist_blind, on_phase_complete=guard,
+            on_origin_catalog=lambda catalog: plane.write_json_once(
+                "origin_catalog.json", catalog, visibility=ArtifactVisibility.PRIVATE,
+            ),
             on_raw_report=on_raw_report,
         )
         return server, plane, result
@@ -208,26 +258,214 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
         self.assertEqual(verdict["status"], "PASS")
         self.assertEqual([(phase, attempt) for phase, attempt, _ in raw_records], [("PHASE_A", 0), ("PHASE_A", 1), ("PHASE_B", 0)])
 
-    def test_phase_b_corrects_all_blind_source_revisions_in_one_bounded_turn(self):
-        invalid = copy.deepcopy(self.verdict)
-        changed_fields = []
-        for group in ("not_affected_dispositions", "related_follow_up_dispositions"):
-            for index, row in enumerate(invalid["impact_challenge"][group]):
-                if row["source"] == "BLIND":
-                    row["source_revision"] = "invented-fingerprint"
-                    changed_fields.append(
-                        f"impact_challenge.{group}[{index}].source_revision"
-                    )
-        self.assertTrue(changed_fields)
+    def test_phase_b_corrects_unknown_origin_ref_in_one_bounded_turn(self):
+        corrected = phase_b_wire(
+            evaluation=self.verdict, blind_audit=self.audit,
+            planner_impact=self.plan["impact_closure"], implementation_impact=self.impact,
+        )
+        invalid = copy.deepcopy(corrected)
+        invalid["impact_challenge"]["blind_contract_dispositions"][0]["matches"][0]["origin_ref"] = "ORIGIN-unknown"
+        changed_field = "impact_challenge.blind_contract_dispositions[0].matches[0].origin_ref"
         server, _, (_, verdict) = self.run_phases(
-            responses=[self.audit, invalid, self.verdict],
-            run_name="blind-revision-correction",
+            responses=[self.audit, invalid, corrected],
+            run_name="origin-ref-correction",
         )
         self.assertEqual(verdict["status"], "PASS")
         self.assertEqual(len(server.prompts), 3)
         diagnostic = json.loads(server.prompts[-1].splitlines()[-1])
-        self.assertEqual(set(diagnostic["allowed_fields"]), set(changed_fields))
-        self.assertIn('empty string for source_revision', diagnostic["expected"])
+        self.assertEqual(diagnostic["allowed_fields"], [changed_field])
+        self.assertEqual(diagnostic["code"], "ORIGIN_REF_UNKNOWN")
+
+    def test_phase_b_origin_catalog_and_dynamic_schema_own_identity_metadata(self):
+        catalog = build_phase_b_origin_catalog(
+            self.audit, self.plan["impact_closure"], self.impact,
+        )
+        self.assertEqual(catalog["schema_version"], "phase-b-origin-catalog.v1")
+        self.assertEqual(len({row["origin_ref"] for row in catalog["origins"]}), len(catalog["origins"]))
+        schema = build_evaluator_schema(catalog)
+        validate_strict_output_schema(schema)
+        challenge = schema["properties"]["impact_challenge"]["properties"]
+        contract_matches = challenge["blind_contract_dispositions"]["items"]["properties"]["matches"]["items"]["properties"]
+        consumer_matches = challenge["blind_consumer_dispositions"]["items"]["properties"]["matches"]["items"]["properties"]
+        self.assertEqual(set(contract_matches), {"origin_ref"})
+        self.assertEqual(set(consumer_matches), {"origin_ref"})
+        self.assertTrue(set(contract_matches["origin_ref"]["enum"]).isdisjoint(consumer_matches["origin_ref"]["enum"]))
+        self.assertNotIn("source_revision", json.dumps(schema))
+        self.assertNotIn('"classification"', json.dumps(schema))
+
+    def test_dynamic_schema_exact_cardinality_and_zero_origin_groups(self):
+        catalog = build_phase_b_origin_catalog(
+            self.audit, self.plan["impact_closure"], self.impact,
+        )
+        challenge = build_evaluator_schema(catalog)["properties"]["impact_challenge"]["properties"]
+        expected_wire = phase_b_wire(
+            evaluation=self.verdict, blind_audit=self.audit,
+            planner_impact=self.plan["impact_closure"], implementation_impact=self.impact,
+        )["impact_challenge"]
+        for group in (
+            "blind_contract_dispositions", "blind_consumer_dispositions",
+            "planner_consumer_dispositions", "implementer_consumer_dispositions",
+            "not_affected_dispositions", "related_follow_up_dispositions",
+        ):
+            rows = challenge[group]
+            actual = self.verdict["impact_challenge"][group]
+            self.assertEqual((rows["minItems"], rows["maxItems"]), (len(actual), len(actual)))
+            if actual:
+                self.assertEqual(
+                    set(rows["items"]["properties"]["origin_ref"]["enum"]),
+                    {row["origin_ref"] for row in expected_wire[group]},
+                )
+        self.assertEqual(challenge["implementer_consumer_dispositions"]["maxItems"], 0)
+        self.assertNotIn("enum", challenge["implementer_consumer_dispositions"]["items"]["properties"]["origin_ref"])
+
+    def test_zero_compatible_matches_have_no_wire_slot(self):
+        catalog = build_phase_b_origin_catalog(
+            self.audit, self.plan["impact_closure"], self.impact,
+        )
+        blind_only = dict(catalog, origins=[row for row in catalog["origins"] if row["authority"] == "BLIND"])
+        challenge = build_evaluator_schema(blind_only)["properties"]["impact_challenge"]["properties"]
+        for group in ("blind_contract_dispositions", "blind_consumer_dispositions"):
+            matches = challenge[group]["items"]["properties"]["matches"]
+            self.assertEqual(matches["maxItems"], 0)
+            self.assertNotIn("enum", matches["items"]["properties"]["origin_ref"])
+        full = build_evaluator_schema(catalog)["properties"]["impact_challenge"]["properties"]
+        self.assertEqual(
+            set(full["blind_contract_dispositions"]["items"]["properties"]["matches"]["items"]["properties"]["origin_ref"]["enum"]),
+            {row["origin_ref"] for row in catalog["origins"] if row["authority"] != "BLIND" and row["classification"] == "CHANGED_CONTRACT"},
+        )
+
+    def test_zero_origin_row_is_semantic_not_impossible_local_correction(self):
+        wire = phase_b_wire(
+            evaluation=self.verdict, blind_audit=self.audit,
+            planner_impact=self.plan["impact_closure"], implementation_impact=self.impact,
+        )
+        wire["impact_challenge"]["implementer_consumer_dispositions"] = [{
+            "origin_ref": "ORIGIN-unknown", "disposition": "CONFIRMED",
+            "reason": "Invented row", "evidence_paths": ["reader_a.py"],
+            "evidence": ["Invented evidence"], "finding_ids": [],
+        }]
+        with self.assertRaises(ArtifactContractError) as raised:
+            self.admit_wire(wire)
+        self.assertEqual(raised.exception.code, "ORIGIN_DISPOSITION_CARDINALITY")
+        self.assertIs(raised.exception.failure_kind, ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT)
+        turns = []
+        with self.assertRaises(ArtifactContractError) as raised:
+            self.run_phases(
+                responses=[self.audit, wire], run_name="zero-origin-no-correction",
+                observer=lambda turn, _options: turns.append(turn),
+            )
+        self.assertEqual(raised.exception.code, "ORIGIN_DISPOSITION_CARDINALITY")
+        self.assertEqual(turns, [1, 2])
+
+    def test_exact_origin_ref_resolution_derives_controller_metadata(self):
+        catalog = build_phase_b_origin_catalog(
+            self.audit, self.plan["impact_closure"], self.impact,
+        )
+        wire = phase_b_wire(
+            evaluation=self.verdict, blind_audit=self.audit,
+            planner_impact=self.plan["impact_closure"], implementation_impact=self.impact,
+        )
+        admitted = self.admit_wire(wire, catalog=catalog)
+        wire_row = wire["impact_challenge"]["planner_consumer_dispositions"][0]
+        origin = next(row for row in catalog["origins"] if row["origin_ref"] == wire_row["origin_ref"])
+        row = admitted["impact_challenge"]["planner_consumer_dispositions"][0]
+        self.assertEqual(row["reference"], origin["source_id"])
+        self.assertEqual(row["source_revision"], origin["source_revision"])
+
+    def test_incompatible_handle_is_not_canonicalized_into_positive_coverage(self):
+        catalog = build_phase_b_origin_catalog(
+            self.audit, self.plan["impact_closure"], self.impact,
+        )
+        wire = phase_b_wire(
+            evaluation=self.verdict, blind_audit=self.audit,
+            planner_impact=self.plan["impact_closure"], implementation_impact=self.impact,
+        )
+        contract_handle = next(row["origin_ref"] for row in catalog["origins"]
+                               if row["authority"] != "BLIND" and row["classification"] == "CHANGED_CONTRACT")
+        wire["impact_challenge"]["blind_consumer_dispositions"][0]["matches"][0] = {"origin_ref": contract_handle}
+        with self.assertRaises(ArtifactContractError) as raised:
+            self.admit_wire(wire, catalog=catalog)
+        self.assertEqual(raised.exception.code, "ORIGIN_REF_INCOMPATIBLE")
+
+    def test_tampered_controller_origin_catalog_is_hard_failure(self):
+        catalog = build_phase_b_origin_catalog(
+            self.audit, self.plan["impact_closure"], self.impact,
+        )
+        catalog["origins"][0]["source_revision"] = "0" * 64
+        wire = phase_b_wire(
+            evaluation=self.verdict, blind_audit=self.audit,
+            planner_impact=self.plan["impact_closure"], implementation_impact=self.impact,
+        )
+        with self.assertRaises(ArtifactContractError) as raised:
+            self.admit_wire(wire, catalog=catalog)
+        self.assertEqual(raised.exception.code, "ORIGIN_CATALOG_TAMPERED")
+        self.assertIs(raised.exception.failure_kind, ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE)
+
+    def test_origin_ref_correction_cannot_change_semantic_conclusion(self):
+        corrected = phase_b_wire(
+            evaluation=self.verdict, blind_audit=self.audit,
+            planner_impact=self.plan["impact_closure"], implementation_impact=self.impact,
+        )
+        invalid = copy.deepcopy(corrected)
+        invalid["impact_challenge"]["blind_contract_dispositions"][0]["origin_ref"] = "ORIGIN-unknown"
+        mutated = copy.deepcopy(corrected)
+        mutated["impact_challenge"]["blind_contract_dispositions"][0]["disposition"] = "MATERIAL_GAP"
+        mutated["reason"] = "Changed semantic conclusion"
+        mutated["findings"] = [evaluator_finding("MUTATED")]
+        with self.assertRaisesRegex(RuntimeError, "CHANGED_CLAIMS"):
+            self.run_phases(responses=[self.audit, invalid, mutated], run_name="origin-semantic-mutation")
+
+    def test_captured_qe1_invalid_contract_handle_gets_exact_reference_correction(self):
+        fixture, invalid, catalog = self.fixture_wire("qe1_expiry_1.json")
+        observed = fixture["observed_legacy_shape"]
+        self.assertEqual(observed["disposition"], "MISSING")
+        self.assertEqual(observed["match_authority_classification"], [
+            ["PLANNER", "CHANGED_CONTRACT"], ["IMPLEMENTER", "CHANGED_CONTRACT"],
+        ])
+        bad_row = invalid["impact_challenge"]["blind_consumer_dispositions"][1]
+        self.assertEqual(bad_row["disposition"], observed["disposition"])
+        allowed = build_evaluator_schema(catalog)["properties"]["impact_challenge"]["properties"]["blind_consumer_dispositions"]["items"]["properties"]["matches"]["items"]["properties"]["origin_ref"]["enum"]
+        self.assertTrue(all(match["origin_ref"] not in allowed for match in bad_row["matches"]))
+        partial = copy.deepcopy(invalid)
+        valid_handles = [next(row["origin_ref"] for row in catalog["origins"]
+                              if row["authority"] == authority and row["classification"] == "IN_SCOPE")
+                         for authority in ("PLANNER", "IMPLEMENTER")]
+        partial["impact_challenge"]["blind_consumer_dispositions"][1]["matches"][0]["origin_ref"] = valid_handles[0]
+        corrected = copy.deepcopy(partial)
+        corrected["impact_challenge"]["blind_consumer_dispositions"][1]["matches"][1]["origin_ref"] = valid_handles[1]
+        server, _, (_, verdict) = self.run_phases(
+            responses=[self.audit, invalid, partial, corrected], run_name="captured-qe1",
+        )
+        self.assertEqual(verdict["status"], "FINDINGS")
+        diagnostics = [json.loads(prompt.splitlines()[-1]) for prompt in server.prompts[2:]]
+        self.assertEqual([item["code"] for item in diagnostics], [fixture["expected_route"]] * 2)
+        self.assertEqual([item["allowed_fields"] for item in diagnostics], [
+            ["impact_challenge.blind_consumer_dispositions[1].matches[0].origin_ref"],
+            ["impact_challenge.blind_consumer_dispositions[1].matches[0].origin_ref",
+             "impact_challenge.blind_consumer_dispositions[1].matches[1].origin_ref"],
+        ])
+
+    def test_captured_qs1_unknown_name_gets_handle_correction_and_no_model_revision(self):
+        fixture, invalid, catalog = self.fixture_wire("qs1_suspension_1.json")
+        observed = fixture["observed_legacy_shape"]
+        self.assertEqual(observed["match_fields"], ["reference", "source_revision", "source", "classification"])
+        corrected = copy.deepcopy(invalid)
+        corrected["impact_challenge"]["blind_contract_dispositions"][0]["matches"][0]["origin_ref"] = next(
+            row["origin_ref"] for row in catalog["origins"]
+            if row["authority"] == "PLANNER" and row["classification"] == "CHANGED_CONTRACT"
+        )
+        server, _, (_, verdict) = self.run_phases(
+            responses=[self.audit, invalid, corrected], run_name="captured-qs1",
+        )
+        self.assertEqual(verdict["status"], "FINDINGS")
+        diagnostic = json.loads(server.prompts[-1].splitlines()[-1])
+        self.assertEqual(diagnostic["code"], fixture["expected_route"])
+        self.assertNotIn("source_revision", json.dumps(corrected))
+        admitted = self.admit_wire(corrected)
+        self.assertRegex(
+            admitted["impact_challenge"]["blind_contract_dispositions"][0]["matches"][0]["source_revision"],
+            r"^[0-9a-f]{64}$",
+        )
 
     def test_phase_b_batch_repair_no_progress_and_candidate_write_guards(self):
         invalid = copy.deepcopy(self.verdict)
@@ -612,9 +850,9 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "mutated the candidate"):
                     self.run_phases(observer=mutate, persist=lambda _audit: None)
 
-    def test_strict_v2_v7_output_schemas(self):
+    def test_strict_v2_v8_output_schemas(self):
         self.assertEqual(BLIND_AUDIT_SCHEMA["properties"]["protocol_version"]["enum"], ["blind-audit.v2"])
-        self.assertEqual(EVALUATOR_SCHEMA["properties"]["protocol_version"]["enum"], ["evaluator.v7"])
+        self.assertEqual(EVALUATOR_SCHEMA["properties"]["protocol_version"]["enum"], ["evaluator.v8"])
         validate_strict_output_schema(BLIND_AUDIT_SCHEMA)
         validate_strict_output_schema(EVALUATOR_SCHEMA)
 
@@ -838,7 +1076,15 @@ class EvaluatorAutonomyWorkflowTests(unittest.TestCase):
                     verdict["impact_challenge"]["blind_contract_dispositions"][-1]["matches"] = [
                         {"source": "PLANNER", "classification": "CHANGED_CONTRACT", "reference": planned["changed_contracts"][-1]["source_ref"]["source_id"], "source_revision": planned["changed_contracts"][-1]["source_ref"]["source_revision"]},
                     ]
-                return json.dumps(verdict)
+                planner_claims = copy.deepcopy(planned)
+                for group in ("changed_contracts", "in_scope_consumers",
+                              "not_affected_consumers", "related_out_of_scope"):
+                    for row in planner_claims[group]:
+                        row.pop("source_ref", None)
+                return json.dumps(phase_b_wire(
+                    evaluation=verdict, blind_audit=audit,
+                    planner_impact=planner_claims, implementation_impact=implemented,
+                ))
 
         config = {"projects": {"demo": {"repo": str(source), "base_ref": "HEAD", "result_mode": "keep_worktree", "toolchain": {}}}, "workspace": {"root": str(root / "workspaces")}}
         output = io.StringIO()

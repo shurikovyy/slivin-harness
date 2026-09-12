@@ -5,15 +5,22 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from slivin_harness.protocol import (
-    ArtifactContractError, ArtifactDiagnosticBatch, ensure_exact_keys,
+    ArtifactContractError, ArtifactDiagnosticBatch, ArtifactFailureKind, ensure_exact_keys,
     require_string_list, require_type, safe_repo_relative,
 )
 
 
 def impact_error(code: str, *, field: str, message: str, actual: object) -> None:
+    if code == "UNSAFE_PATH":
+        failure_kind = ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE
+    elif code in {"IMPACT_EVIDENCE_EMPTY", "IMPACT_SYMBOL_GENERIC", "IMPACT_PATH_MISSING"}:
+        failure_kind = ArtifactFailureKind.LOCAL_WIRE_ERROR
+    else:
+        failure_kind = ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT
     raise ArtifactContractError(
         code=code, field=field, message=message,
         expected="Concrete, consistent repository-backed impact closure", actual=actual,
+        failure_kind=failure_kind,
     )
 
 
@@ -105,7 +112,7 @@ def validate_impact_structure(value: object, *, schema: Mapping[str, Any],
                 capture(lambda entry=entry: impact_text(entry, field=location))
             if key in {"paths", "evidence_paths"}:
                 capture(lambda: impact_paths(node, field=location, workspace=workspace))
-            if key == "symbols" and any(any(char.isspace() for char in entry)
+            if key in {"symbols", "evidence_symbols"} and any(any(char.isspace() for char in entry)
                     or not any(char.isalnum() for char in entry) for entry in node):
                 capture(lambda: impact_error("IMPACT_SYMBOL_GENERIC", field=location,
                     message="Symbols require concrete identifiers or documentation anchors", actual=node))

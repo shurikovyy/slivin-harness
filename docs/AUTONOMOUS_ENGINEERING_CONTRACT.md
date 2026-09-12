@@ -121,6 +121,15 @@ evidence. Он проверяет все path-bearing поля: safe repo-relati
 `before` и `after` должны различаться. Consumer names уникальны, классификации
 не пересекаются по имени.
 
+Первичный Planner artifact проходит bounded local-wire admission до отдельной
+capability-feasibility negotiation. Для независимо диагностируемых leaf-ошибок
+`paths`, `symbols`, `evidence`, `evidence_paths` и `evidence_symbols` разрешено не
+более двух same-thread report-only turns с no-progress guard. Исправляются только
+точные allowlisted fields. Diagnosis/root cause, technical contract, task alignment,
+impact classification, required behavior, proof level/capabilities, status и product
+intent остаются неизменными. Semantic conflict не маскируется этим маршрутом;
+последующая capability correction сохраняет собственный отдельный budget и contract.
+
 В `planner.v6` единственный consumer ledger — `impact_closure.in_scope_consumers`.
 Controller непосредственно компилирует его claims и proof, сохраняя immutable
 origin в `impact-sources.v1`. Второй `affected_consumers` в Planner wire запрещён.
@@ -298,7 +307,7 @@ Evaluator independently reconstructs the impact model from the actual candidate
 before seeing either closure. Evaluator PASS requires evidence-backed challenge of
 both prior closures.
 
-В Phase A `evaluator.v7` самостоятельно исследует changed semantic/state contracts,
+В Phase A `evaluator.v8` самостоятельно исследует changed semantic/state contracts,
 shared symbols/API, readers/writers/decision points и sibling consumers. Changed paths
 служат seed для outward sweep, а не границей review. Каждый changed path рассматривается
 ровно один раз, включая deletion. Остальные evidence paths должны быть существующими
@@ -310,10 +319,18 @@ prose-only exception использует shared owner-backed policy из `impac
 normalized Planner impact, implementation impact artifact, Contract и checks/runtime
 evidence. Planner reasoning и raw Implementer report в обеих фазах скрыты.
 
+Перед Phase B Controller строит fingerprinted `phase-b-origin-catalog.v1`. Каждый current
+origin получает exact `origin_ref`, однозначно связанный с authority, classification,
+source ID/revision и current ledger row. Модель возвращает только `origin_ref`; Controller
+детерминированно canonicalize его в current metadata. Модель не может изготовить stale
+revision или переопределить classification. Unknown/incompatible handle допускает bounded
+исправление только exact reference field; fuzzy name/text matching запрещён.
+
 Phase B обязана disposition каждый blind contract и affected consumer, Planner IN_SCOPE,
 Implementer DISCOVERED, все NOT_AFFECTED и RELATED_OUT_OF_SCOPE из трёх ledgers и каждый
 changed path. Blind names не обязаны повторять Planner vocabulary: используются собственные
-IDs и explicit matches к normalized prior names. NOT_AFFECTED требует независимого
+Controller handles и explicit matches к совместимым origins. Contract matches не принимают
+consumer-only handles, consumer matches — contract-only handles. NOT_AFFECTED требует независимого
 подтверждения; согласие Planner и Implementer не является доказательством.
 
 Negative disposition требует соответствующих final material findings с failure mode,

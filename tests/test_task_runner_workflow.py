@@ -260,6 +260,12 @@ timeout_seconds = 30
             blind_callback = kwargs.get("on_blind_audit")
             if blind_callback:
                 blind_callback(audit)
+            origin_callback = kwargs.get("on_origin_catalog")
+            if origin_callback:
+                origin_callback(task_runner.build_phase_b_origin_catalog(
+                    audit, kwargs["plan"]["impact_closure"],
+                    kwargs["implementation_impact_closure"],
+                ))
             callback = kwargs.get("on_phase_complete")
             if callback:
                 callback("PHASE_A")
@@ -596,7 +602,7 @@ timeout_seconds = 30
             (run_root / "harness_build_identity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(build_identity["schema_version"], "harness-build-identity.v1")
-        self.assertEqual(build_identity["version"], "0.8.0a31")
+        self.assertEqual(build_identity["version"], "0.8.0a32")
         if build_identity["source_kind"] == "GIT_CHECKOUT":
             self.assertRegex(build_identity["git_commit"], r"^[0-9a-f]{40}$")
             self.assertIsInstance(build_identity["git_dirty"], bool)

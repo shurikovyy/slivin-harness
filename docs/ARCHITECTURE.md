@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a31 — Phase 7
+# Архитектура Slivin Harness 0.8.0a32 — Phase 7
 
 ## Назначение
 
-`0.8.0a31` требует typed impact closure в `planner.v6` до `READY`, сохраняет
+`0.8.0a32` требует typed impact closure в `planner.v6` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a31
+Harness                     0.8.0a32
 Manifest                    version = 2
 Workflow                    workflow.v7
 Run State                   run-state.v1
@@ -61,7 +61,7 @@ Runtime result              runtime-result.v1
 Runtime evidence            runtime-evidence.v1
 Contract closure            contract-closure.v1
 Blind audit                 blind-audit.v2
-Evaluator                   evaluator.v7
+Evaluator                   evaluator.v8
 Phase 7 controller          phase7-final-gate.v1
 Patch proof                 patch-proof.v1
 Final acceptance            final-acceptance.v3
@@ -231,7 +231,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a31`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a32`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -352,7 +352,7 @@ requirements/source records/checks, инвалидирует downstream evidence
 gates сохраняются в repair specs; exploratory unrelated tests не регистрируются.
 COMPLETE требует NONE, BLOCKED — INFRASTRUCTURE_BLOCKED, NEEDS_USER_DECISION —
 USER_DECISION_REQUIRED. Все несовместимые пары Controller отклоняет.
-Evaluator `evaluator.v7` независимо проверяет эти impact artifacts после blind Phase A.
+Evaluator `evaluator.v8` независимо проверяет эти impact artifacts после blind Phase A.
 `impact-sources.v1` хранит immutable origins отдельно от own-role observations.
 Wire source assessments содержат точные IDs/revisions и explicit dispositions;
 модель не переписывает исходные claims. COMPLETE требует полного покрытия источников.
@@ -390,6 +390,11 @@ Compiled registry drift обновляет verification evidence, owner commands
 изменения candidate/claims; invalid attempts сохраняются, COMPLETE по-прежнему
 требует полный validator и trusted evidence. Детали и native smoke:
 [Phase 4 — runner resolution / report correction](PHASE4_EXECUTION.md).
+Planner использует тот же ownership principle раньше compiler: local leaf wire defects
+исправляются в bounded same-thread route с frozen semantic model, после чего отдельно
+выполняется capability-feasibility correction. Typed taxonomy различает
+`LOCAL_WIRE_ERROR`, `SEMANTIC_MODEL_CONFLICT` и `INTEGRITY_OR_INFRA_FAILURE`; только
+первый класс может попасть в report-only correction.
 
 ## 7. Step 4 — deterministic checks
 
@@ -421,7 +426,7 @@ PROD_OBSERVE
 
 ## 9. Step 6 — Blind Evaluator
 
-`evaluator.v7` работает в две фазы одного fresh thread.
+`evaluator.v8` работает в две фазы одного fresh thread.
 
 ### Phase A
 
@@ -442,12 +447,16 @@ active Contract, Verification Plan, `contract-closure.v1`, deterministic и runt
 проверяет implementation artifact against candidate, Plan/Contract fingerprints, exact
 changed paths и revision binding непосредственно до раскрытия Phase B.
 
-Required `impact_challenge` содержит exact dispositions blind contracts/affected consumers,
-Planner IN_SCOPE, Implementer DISCOVERED, всех NOT_AFFECTED/related rows (включая собственные
-blind rows) и changed paths. Blind IDs сохраняют naming independence; typed matches
-ссылаются на existing prior ledger rows. Для `source=BLIND` обязательный
-`source_revision` равен пустой строке: invented revisions собираются в один
-typed `BLIND_SOURCE_REVISION` batch с правом исправить только точные поля.
+Controller строит immutable fingerprinted `phase-b-origin-catalog.v1`: stable exact
+`origin_ref` связывается с authority, classification, source ID/revision и current row.
+Required model wire `impact_challenge` содержит exact dispositions blind
+contracts/affected consumers, Planner IN_SCOPE, Implementer DISCOVERED, всех
+NOT_AFFECTED/related rows и changed paths, но в origin-bearing rows/matches возвращает
+только `origin_ref`. Dynamic enums разделяют contract и consumer handles; disposition
+arrays имеют exact Controller cardinality, а пустые origin/match groups — `maxItems=0`.
+Controller canonicalize admitted handles в current metadata; fuzzy matching отсутствует, stale
+revision нельзя изготовить по construction. Unknown/incompatible handle может получить
+bounded correction только exact handle field при неизменных disposition/reason/findings.
 Каждый negative disposition требует final
 finding_ids и запрещает PASS. Каждый blind finding retained либо dismissed с evidence.
 Blind changed-contract MATERIAL_GAP и MODEL_CONFLICT требуют только REPLAN_REQUIRED,
@@ -636,7 +645,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a31` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a32` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 Planner/Evaluator используют один `RoleExecutionContext` (`role-execution-context.v1`)
 из `ExecutionBroker.prepare_readonly_role()`. Project root остаётся контекстом repository,

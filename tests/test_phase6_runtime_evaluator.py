@@ -11,6 +11,7 @@ from pathlib import Path
 
 from slivin_harness.control_plane import ControllerPlane
 from slivin_harness.evaluator import (
+    build_phase_b_origin_catalog,
     run_evaluator,
     validate_blind_audit,
     validate_evaluation_artifact,
@@ -40,7 +41,7 @@ from slivin_harness.runtime_projection import (
 from slivin_harness.verification import compile_verification_plan
 from slivin_harness.workflow import RuntimeStatus
 from slivin_harness.workspace import RuntimeProjection, WorkspaceSession
-from test_protocol import implementation_impact_fixture, proof, valid_blind_audit, valid_pass, valid_plan, valid_task_contract, write_plan_evidence
+from test_protocol import implementation_impact_fixture, phase_b_wire, proof, valid_blind_audit, valid_pass, valid_plan, valid_task_contract, write_plan_evidence
 
 
 def git(repo: Path, *args: str) -> str:
@@ -644,9 +645,17 @@ class TwoPhaseEvaluatorTests(unittest.TestCase):
     def test_two_phase_prompt_is_blind_then_contract_aware(self) -> None:
         audit = valid_blind_audit()
         verdict = valid_pass(blind_audit=audit)
-        server = _FakeEvaluatorServer([audit, verdict])
+        catalog = build_phase_b_origin_catalog(
+            audit, self.plan["impact_closure"], self.impact,
+        )
+        server = _FakeEvaluatorServer([audit, phase_b_wire(
+            evaluation=verdict, blind_audit=audit,
+            planner_impact=self.plan["impact_closure"],
+            implementation_impact=self.impact,
+        )])
         phases: list[str] = []
         persisted: list[dict] = []
+        catalogs: list[dict] = []
         contract = self.contract
         verification = {"protocol_version": "verification-plan.v1"}
         closure = {"protocol_version": CONTRACT_CLOSURE_VERSION}
@@ -666,6 +675,7 @@ class TwoPhaseEvaluatorTests(unittest.TestCase):
             runtime_evidence={"status": "RUNTIME_VERIFICATION_SKIPPED"},
             plan=self.plan, implementation_impact_closure=self.impact, revision_binding={},
             on_blind_audit=persisted.append,
+            on_origin_catalog=catalogs.append,
             on_phase_complete=phases.append,
             timeout=30,
         )
@@ -678,6 +688,7 @@ class TwoPhaseEvaluatorTests(unittest.TestCase):
         self.assertIn("IMPLEMENTATION CONTRACT", server.prompts[1])
         self.assertIn("CONTRACT CLOSURE RECORD", server.prompts[1])
         self.assertEqual(persisted, [audit])
+        self.assertEqual(catalogs, [catalog])
         self.assertEqual(phases, ["PHASE_A", "PHASE_B"])
 
     def test_retained_blind_finding_must_survive_final_verdict(self) -> None:

@@ -387,6 +387,68 @@ def valid_pass(*, blind_audit=None, planner_impact=None, implementation_impact=N
     }
 
 
+def phase_b_wire(*, evaluation: dict, blind_audit: dict, planner_impact: dict | None,
+                 implementation_impact: dict) -> dict:
+    """Project a canonical test verdict onto the model-owned evaluator.v8 wire."""
+    from slivin_harness.evaluator import build_phase_b_origin_catalog
+
+    catalog = build_phase_b_origin_catalog(blind_audit, planner_impact, implementation_impact)
+
+    def handle(*, authority: str, classification: str, source_id: str,
+               source_revision: str | None = None) -> str:
+        rows = [row for row in catalog["origins"]
+                if row["authority"] == authority and row["classification"] == classification
+                and row["source_id"] == source_id]
+        if source_revision is not None:
+            rows = [row for row in rows if row["source_revision"] == source_revision]
+        if len(rows) != 1:
+            raise AssertionError((authority, classification, source_id, source_revision))
+        return rows[0]["origin_ref"]
+
+    result = copy.deepcopy(evaluation)
+    wire = {"coverage_summary": evaluation["impact_challenge"]["coverage_summary"]}
+    classifications = {
+        "blind_contract_dispositions": "CHANGED_CONTRACT",
+        "blind_consumer_dispositions": "IN_SCOPE",
+        "planner_consumer_dispositions": "IN_SCOPE",
+        "implementer_consumer_dispositions": "IN_SCOPE",
+        "not_affected_dispositions": "NOT_AFFECTED",
+        "related_follow_up_dispositions": "RELATED_OUT_OF_SCOPE",
+    }
+    for group, rows in evaluation["impact_challenge"].items():
+        if group == "coverage_summary":
+            continue
+        if group == "changed_path_dispositions":
+            wire[group] = copy.deepcopy(rows)
+            continue
+        admitted = []
+        for row in rows:
+            if group.startswith("blind_"):
+                authority, source_id, revision = "BLIND", row["impact_id"], None
+            elif group == "planner_consumer_dispositions":
+                authority, source_id, revision = "PLANNER", row["reference"], row["source_revision"]
+            elif group == "implementer_consumer_dispositions":
+                authority, source_id, revision = "IMPLEMENTER", row["reference"], row["source_revision"]
+            else:
+                authority, source_id = row["source"], row["reference"]
+                revision = None if authority == "BLIND" else row["source_revision"]
+            projected = {key: copy.deepcopy(value) for key, value in row.items()
+                         if key not in {"impact_id", "source", "reference", "source_revision", "matches"}}
+            projected["origin_ref"] = handle(
+                authority=authority, classification=classifications[group],
+                source_id=source_id, source_revision=revision,
+            )
+            if group.startswith("blind_"):
+                projected["matches"] = [{"origin_ref": handle(
+                    authority=match["source"], classification=match["classification"],
+                    source_id=match["reference"], source_revision=match["source_revision"],
+                )} for match in row["matches"]]
+            admitted.append(projected)
+        wire[group] = admitted
+    result["impact_challenge"] = wire
+    return result
+
+
 class ProtocolContractTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="slivin-protocol-")
@@ -480,7 +542,7 @@ class ProtocolContractTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "PASS requires no findings"):
             validate_evaluation_artifact(evaluation, blind_audit=audit, **self.evaluation_context)
 
-    def test_blind_source_revision_is_a_narrowly_correctable_report_field(self) -> None:
+    def test_phase_b_wire_cannot_author_controller_source_revision(self) -> None:
         audit = valid_blind_audit()
         audit["impact_analysis"]["related_out_of_scope"] = [{
             "impact_id": "RELATED-1",
@@ -493,22 +555,21 @@ class ProtocolContractTests(unittest.TestCase):
             "evidence": ["reader.py contains the independent legacy branch."],
         }]
         evaluation = valid_pass(blind_audit=audit)
-        blind_row = next(
-            row
-            for row in evaluation["impact_challenge"]["related_follow_up_dispositions"]
-            if row["source"] == "BLIND"
+        implementation = self.evaluation_context["implementation_impact_closure"]
+        wire = phase_b_wire(
+            evaluation=evaluation, blind_audit=audit,
+            planner_impact=self.evaluation_context["planner_impact_closure"],
+            implementation_impact=implementation,
         )
-        blind_row["source_revision"] = "invented-fingerprint"
-        with self.assertRaises(ArtifactContractError) as context:
-            validate_evaluation_artifact(
-                evaluation, blind_audit=audit, **self.evaluation_context
-            )
-        self.assertEqual(context.exception.code, "BLIND_SOURCE_REVISION")
-        from slivin_harness.report_recovery import correctable_report_field
-        self.assertEqual(
-            correctable_report_field(context.exception),
-            "impact_challenge.related_follow_up_dispositions[0].source_revision",
-        )
+        def keys(value):
+            if isinstance(value, dict):
+                return set(value) | set().union(*(keys(item) for item in value.values()))
+            if isinstance(value, list):
+                return set().union(*(keys(item) for item in value)) if value else set()
+            return set()
+        self.assertTrue({"source", "source_revision", "classification", "reference"}.isdisjoint(
+            keys(wire["impact_challenge"])
+        ))
 
     def test_findings_status_requires_a_finding(self) -> None:
         audit = valid_blind_audit()

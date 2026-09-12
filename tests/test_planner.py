@@ -13,9 +13,13 @@ from slivin_harness.planner import (
     planner_capability_gaps,
     planner_required_capabilities,
     run_planner,
+    validate_plan_artifact,
 )
+from slivin_harness.protocol import ArtifactContractError, ArtifactFailureKind
+from slivin_harness.report_recovery import ReportRecoveryStop
 from slivin_harness.verification import available_capabilities
 from test_protocol import valid_plan, valid_task_contract, write_plan_evidence
+from test_planner_impact_closure import synthetic_task_contract
 
 
 class _FakeCodex:
@@ -80,6 +84,111 @@ class PlannerCapabilityNegotiationTests(unittest.TestCase):
         self.assertIn("Node regression", prompt)
         self.assertIn("entrypoint/config loading in Controller context", prompt)
         self.assertIn("not evidence that the executable is absent", prompt)
+
+    def test_local_symbol_correction_preserves_semantics(self) -> None:
+        invalid, corrected = valid_plan(), valid_plan()
+        invalid["impact_closure"]["in_scope_consumers"][0]["symbols"] = ["public reader"]
+        codex = _FakeCodex([invalid, corrected])
+        result = self._run(codex, ["DOCS_SYNC", "GIT"])
+        self.assertEqual(result, corrected)
+        self.assertEqual(len(codex.turns), 2)
+        self.assertIn("REPORT-ONLY CORRECTION", codex.turns[1]["prompt"])
+        self.assertIn("impact_closure.in_scope_consumers[0].symbols", codex.turns[1]["prompt"])
+        self.assertNotIn("CAPABILITY FEASIBILITY CORRECTION", codex.turns[1]["prompt"])
+
+    def test_local_evidence_path_and_type_errors_are_correctable(self) -> None:
+        variants = (
+            ("empty evidence", lambda plan: plan["impact_closure"]["in_scope_consumers"][0].update(evidence=[])),
+            ("missing path", lambda plan: plan["impact_closure"]["in_scope_consumers"][0].update(paths=["missing.py"])),
+            ("wrong list type", lambda plan: plan["impact_closure"]["in_scope_consumers"][0].update(paths="reader.py")),
+            ("missing local field", lambda plan: plan["impact_closure"]["in_scope_consumers"][0].pop("symbols")),
+        )
+        for label, mutate in variants:
+            with self.subTest(label=label):
+                invalid, corrected = valid_plan(), valid_plan()
+                mutate(invalid)
+                codex = _FakeCodex([invalid, corrected])
+                self.assertEqual(self._run(codex, ["DOCS_SYNC", "GIT"]), corrected)
+                self.assertEqual(len(codex.turns), 2)
+
+    def test_local_correction_no_progress_and_exhaustion_are_bounded(self) -> None:
+        invalid = valid_plan()
+        invalid["impact_closure"]["in_scope_consumers"][0]["symbols"] = ["public reader"]
+        with self.assertRaisesRegex(ReportRecoveryStop, "NO_PROGRESS"):
+            self._run(_FakeCodex([invalid, copy.deepcopy(invalid)]), ["DOCS_SYNC", "GIT"])
+
+        second = valid_plan()
+        second["impact_closure"]["in_scope_consumers"][0]["symbols"] = "read_target"
+        third = valid_plan()
+        third["impact_closure"]["in_scope_consumers"][0]["symbols"] = []
+        with self.assertRaisesRegex(ReportRecoveryStop, "EXHAUSTED"):
+            self._run(_FakeCodex([invalid, second, third]), ["DOCS_SYNC", "GIT"])
+
+    def test_local_correction_rejects_planner_semantic_mutation(self) -> None:
+        invalid, mutated = valid_plan(), valid_plan()
+        invalid["impact_closure"]["in_scope_consumers"][0]["symbols"] = ["public reader"]
+        mutated["diagnosis"]["root_cause"]["claim"] = "A different root cause"
+        with self.assertRaisesRegex(ReportRecoveryStop, "CHANGED_CLAIMS"):
+            self._run(_FakeCodex([invalid, mutated]), ["DOCS_SYNC", "GIT"])
+
+    def test_local_admission_precedes_separate_capability_correction(self) -> None:
+        invalid = _plan_with_capability("PROJECT_PYTHON")
+        invalid["impact_closure"]["in_scope_consumers"][0]["symbols"] = ["public reader"]
+        locally_corrected = _plan_with_capability("PROJECT_PYTHON")
+        feasible = valid_plan()
+        codex = _FakeCodex([invalid, locally_corrected, feasible])
+        self.assertEqual(self._run(codex, ["DOCS_SYNC", "GIT"]), feasible)
+        self.assertEqual(len(codex.turns), 3)
+        self.assertIn("REPORT-ONLY CORRECTION", codex.turns[1]["prompt"])
+        self.assertIn("CAPABILITY FEASIBILITY CORRECTION", codex.turns[2]["prompt"])
+
+    def test_artifact_failure_taxonomy_distinguishes_local_semantic_and_integrity(self) -> None:
+        cases = []
+        local = valid_plan()
+        local["impact_closure"]["in_scope_consumers"][0]["symbols"] = ["public reader"]
+        cases.append((local, ArtifactFailureKind.LOCAL_WIRE_ERROR))
+        semantic = valid_plan()
+        semantic["impact_closure"]["changed_contracts"][0]["after"] = (
+            semantic["impact_closure"]["changed_contracts"][0]["before"]
+        )
+        cases.append((semantic, ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT))
+        integrity = valid_plan()
+        integrity["impact_closure"]["changed_contracts"][0]["evidence_paths"] = ["../outside.py"]
+        cases.append((integrity, ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE))
+        for plan, expected in cases:
+            with self.subTest(expected=expected), self.assertRaises(ArtifactContractError) as raised:
+                validate_plan_artifact(
+                    plan, workspace=self.workspace, task_contract=valid_task_contract(),
+                    owner_allowed_paths=["target.txt"],
+                )
+            self.assertIs(raised.exception.failure_kind, expected)
+
+    def test_captured_qe2_generic_symbol_replays_through_planner_admission(self) -> None:
+        fixture = json.loads((Path(__file__).parent / "fixtures/model_artifact_admission/qe2_expiry_2.json").read_text(encoding="utf-8"))
+        observed = fixture["observed_legacy_shape"]
+        self.assertEqual((observed["failing_group"], observed["failing_row_index"], observed["failing_field"]),
+                         ("not_affected_consumers", 0, "symbols"))
+        invalid = fixture["wire_artifact"]
+        self.assertEqual(invalid["impact_closure"]["not_affected_consumers"][0]["symbols"], observed["invalid_symbols"])
+        corrected = copy.deepcopy(invalid)
+        corrected["impact_closure"]["not_affected_consumers"][0]["symbols"] = [fixture["corrected_symbol"]]
+        for path in ("state.py", "reader_a.py", "reader_b.py", "sibling.py", "metrics.py"):
+            (self.workspace / path).write_text("def title(): return 'synthetic'\n", encoding="utf-8")
+        codex = _FakeCodex([invalid, corrected])
+        result = run_planner(
+            codex, workspace=self.workspace,
+            task_prompt="Expired entries must not be returned.",
+            task_contract=synthetic_task_contract(), preflight={"status": "READY"},
+            owner_allowed_paths=[], manifest_repair_evidence=[],
+            available_verification_capabilities=["DOCS_SYNC", "GIT", "JEST", "NODE"],
+        )
+        self.assertEqual(result, corrected)
+        self.assertEqual(planner_required_capabilities(result), {"JEST", "NODE"})
+        self.assertEqual(len(codex.turns), 2)
+        diagnostic = json.loads(codex.turns[1]["prompt"].splitlines()[-1])
+        self.assertEqual(diagnostic["code"], fixture["expected_route"])
+        self.assertEqual(diagnostic["allowed_fields"], ["impact_closure.not_affected_consumers[0].symbols"])
+        self.assertNotIn("CAPABILITY FEASIBILITY CORRECTION", codex.turns[1]["prompt"])
 
     def test_one_corrective_turn_reuses_thread_and_accepts_feasible_plan(self) -> None:
         first = _plan_with_capability("PROJECT_PYTHON")

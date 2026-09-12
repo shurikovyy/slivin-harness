@@ -93,7 +93,7 @@ class Phase6ExecutableIntegrationTests(unittest.TestCase):
         self.assertTrue(slivin_harness.__version__.startswith("0.8.0a"))
         self.assertTrue(WORKFLOW_VERSION.startswith("workflow.v"))
         self.assertTrue(WORKFLOW_PHASE.startswith("phase"))
-        self.assertEqual(EVALUATOR_PROTOCOL_VERSION, "evaluator.v7")
+        self.assertEqual(EVALUATOR_PROTOCOL_VERSION, "evaluator.v8")
         self.assertEqual(PHASE6_VERSION, "phase6-runtime-evaluator.v1")
         self.assertEqual(RUNTIME_EVIDENCE_VERSION, "runtime-evidence.v1")
         self.assertEqual(CONTRACT_CLOSURE_VERSION, "contract-closure.v1")
@@ -236,6 +236,12 @@ timeout_seconds = 30
             blind_callback = kwargs.get("on_blind_audit")
             if blind_callback:
                 blind_callback(audit)
+            origin_callback = kwargs.get("on_origin_catalog")
+            if origin_callback:
+                origin_callback(task_runner.build_phase_b_origin_catalog(
+                    audit, kwargs["plan"]["impact_closure"],
+                    kwargs["implementation_impact_closure"],
+                ))
             if callback:
                 callback("PHASE_A")
                 callback("PHASE_B")
@@ -495,6 +501,12 @@ timeout_seconds = 30
             callback = kwargs.get("on_blind_audit")
             if callback is not None:
                 callback(audit)
+            origin_callback = kwargs.get("on_origin_catalog")
+            if origin_callback is not None:
+                origin_callback(task_runner.build_phase_b_origin_catalog(
+                    audit, kwargs["plan"]["impact_closure"],
+                    kwargs["implementation_impact_closure"],
+                ))
             phase_callback = kwargs.get("on_phase_complete")
             if phase_callback is not None:
                 phase_callback("PHASE_A")

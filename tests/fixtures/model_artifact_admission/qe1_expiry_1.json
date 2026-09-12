@@ -1,0 +1,280 @@
+{
+  "schema_version": "sanitized-model-artifact-replay.v2",
+  "qualification_case": "expiry-1",
+  "observed_legacy_shape": {
+    "protocol_version": "evaluator.v7",
+    "status": "FINDINGS",
+    "top_level_fields": [
+      "protocol_version",
+      "status",
+      "candidate_id",
+      "summary",
+      "impact_challenge",
+      "blind_finding_dispositions",
+      "findings",
+      "reason"
+    ],
+    "impact_group_counts": {
+      "blind_contract_dispositions": 2,
+      "blind_consumer_dispositions": 4,
+      "planner_consumer_dispositions": 4,
+      "implementer_consumer_dispositions": 4,
+      "not_affected_dispositions": 1,
+      "related_follow_up_dispositions": 6,
+      "changed_path_dispositions": 4
+    },
+    "failing_group": "blind_consumer_dispositions",
+    "failing_row_index": 3,
+    "failing_row_fields": [
+      "impact_id",
+      "reason",
+      "evidence_paths",
+      "evidence",
+      "finding_ids",
+      "disposition",
+      "matches"
+    ],
+    "disposition": "MISSING",
+    "match_fields": [
+      "reference",
+      "source_revision",
+      "source",
+      "classification"
+    ],
+    "match_authority_classification": [
+      [
+        "PLANNER",
+        "CHANGED_CONTRACT"
+      ],
+      [
+        "IMPLEMENTER",
+        "CHANGED_CONTRACT"
+      ]
+    ]
+  },
+  "expected_route": "ORIGIN_REF_INCOMPATIBLE",
+  "wire_artifact": {
+    "protocol_version": "evaluator.v8",
+    "candidate_id": "@CANDIDATE@",
+    "impact_challenge": {
+      "coverage_summary": "Independent contracts, readers, sibling classifications and all changed paths were compared with repository evidence.",
+      "blind_contract_dispositions": [
+        {
+          "disposition": "COVERED",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "state.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": [],
+          "origin_ref": "@ORIGIN-0@",
+          "matches": [
+            {
+              "origin_ref": "@ORIGIN-5@"
+            }
+          ]
+        }
+      ],
+      "blind_consumer_dispositions": [
+        {
+          "disposition": "COVERED_IN_SCOPE",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "reader_a.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": [],
+          "origin_ref": "@ORIGIN-1@",
+          "matches": [
+            {
+              "origin_ref": "@ORIGIN-6@"
+            }
+          ]
+        },
+        {
+          "disposition": "MISSING",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "reader_b.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": [
+            "GAP-1"
+          ],
+          "origin_ref": "@ORIGIN-2@",
+          "matches": [
+            {
+              "origin_ref": "@ORIGIN-5@"
+            },
+            {
+              "origin_ref": "@ORIGIN-5@"
+            }
+          ]
+        }
+      ],
+      "planner_consumer_dispositions": [
+        {
+          "disposition": "CONFIRMED",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "reader_a.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": [],
+          "origin_ref": "@ORIGIN-6@"
+        },
+        {
+          "disposition": "CONFIRMED",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "reader_b.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": [],
+          "origin_ref": "@ORIGIN-7@"
+        }
+      ],
+      "implementer_consumer_dispositions": [],
+      "not_affected_dispositions": [
+        {
+          "disposition": "CONFIRMED_NOT_AFFECTED",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "sibling.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": [],
+          "origin_ref": "@ORIGIN-3@"
+        },
+        {
+          "disposition": "CONFIRMED_NOT_AFFECTED",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "sibling.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": [],
+          "origin_ref": "@ORIGIN-8@"
+        },
+        {
+          "disposition": "CONFIRMED_NOT_AFFECTED",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "sibling.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": [],
+          "origin_ref": "@ORIGIN-13@"
+        }
+      ],
+      "related_follow_up_dispositions": [
+        {
+          "disposition": "CONFIRMED_OUT_OF_SCOPE",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "metrics.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": [],
+          "origin_ref": "@ORIGIN-4@"
+        },
+        {
+          "disposition": "CONFIRMED_OUT_OF_SCOPE",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "metrics.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": [],
+          "origin_ref": "@ORIGIN-9@"
+        },
+        {
+          "disposition": "CONFIRMED_OUT_OF_SCOPE",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "metrics.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": [],
+          "origin_ref": "@ORIGIN-14@"
+        }
+      ],
+      "changed_path_dispositions": [
+        {
+          "path": "reader_a.py",
+          "disposition": "UNDERSTOOD",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "state.py",
+            "reader_a.py",
+            "reader_b.py",
+            "writer.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": []
+        },
+        {
+          "path": "state.py",
+          "disposition": "UNDERSTOOD",
+          "reason": "Independent repository inspection confirms this classification.",
+          "evidence_paths": [
+            "state.py",
+            "reader_a.py",
+            "reader_b.py",
+            "writer.py"
+          ],
+          "evidence": [
+            "The actual consumer and candidate behavior were inspected."
+          ],
+          "finding_ids": []
+        }
+      ]
+    },
+    "status": "FINDINGS",
+    "summary": "The task is satisfied and checks cover the changed contract.",
+    "blind_finding_dispositions": [],
+    "findings": [
+      {
+        "finding_id": "GAP-1",
+        "severity": "MEDIUM",
+        "category": "DOCS",
+        "title": "Regression evidence is incomplete",
+        "evidence": [
+          "The configured test does not execute the production reader."
+        ],
+        "failure_mode": "A false-green test could accept a broken candidate.",
+        "required_action": "Add evidence through the real production path.",
+        "required_proof": {
+          "claim": "The production reader observes the changed value.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": []
+        }
+      }
+    ],
+    "reason": "The independent consumer has an unresolved evidence gap."
+  }
+}

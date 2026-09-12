@@ -1,0 +1,261 @@
+{
+  "schema_version": "sanitized-model-artifact-replay.v2",
+  "qualification_case": "expiry-2",
+  "observed_legacy_shape": {
+    "protocol_version": "planner.v6",
+    "status": "READY",
+    "top_level_fields": [
+      "protocol_version",
+      "status",
+      "summary",
+      "task_contract_alignment",
+      "characterization",
+      "diagnosis",
+      "assumptions",
+      "technical_contract",
+      "impact_closure",
+      "state_model",
+      "risks",
+      "evidence_plan",
+      "documentation",
+      "owner_boundary_assessment",
+      "unknowns"
+    ],
+    "impact_group_counts": {
+      "changed_contracts": 3,
+      "in_scope_consumers": 3,
+      "not_affected_consumers": 2,
+      "related_out_of_scope": 1,
+      "search_evidence": 5
+    },
+    "failing_group": "not_affected_consumers",
+    "failing_row_index": 0,
+    "failing_field": "symbols",
+    "failing_row_fields": [
+      "name",
+      "why_considered",
+      "reason",
+      "paths",
+      "symbols",
+      "evidence"
+    ],
+    "invalid_symbols": ["Resource reads"],
+    "regression_capabilities": ["JEST", "NODE"]
+  },
+  "expected_route": "IMPACT_SYMBOL_GENERIC",
+  "corrected_symbol": "title",
+  "wire_artifact": {
+    "protocol_version": "planner.v6",
+    "status": "READY",
+    "summary": "Validity must include expiration before either reader uses an entry.",
+    "task_contract_alignment": {
+      "status": "ALIGNED",
+      "evidence": [
+        "The user requires expiration handling and fresh-read preservation."
+      ],
+      "reason": ""
+    },
+    "characterization": {
+      "observed_behavior": [
+        "Expired active entries remain readable."
+      ],
+      "existing_contract": [
+        "Only current entries may be returned."
+      ],
+      "evidence": [
+        "state.py is_current checks active alone."
+      ]
+    },
+    "diagnosis": {
+      "kind": "BUG",
+      "root_cause": {
+        "claim": "is_current ignores expires_at.",
+        "evidence": [
+          "state.py checks only active."
+        ],
+        "confidence": "HIGH"
+      },
+      "extension_point": {
+        "claim": "",
+        "evidence": [],
+        "confidence": "LOW"
+      },
+      "design_constraints": [
+        "Keep fresh entries readable."
+      ],
+      "high_level_approach": [
+        "Enforce expiration in the shared validity predicate and verify both readers."
+      ]
+    },
+    "assumptions": [],
+    "technical_contract": {
+      "technical_acceptance": [
+        "Expired entries cannot be returned or reported readable."
+      ],
+      "derived_preservation": [
+        "Active fresh entries remain readable."
+      ]
+    },
+    "impact_closure": {
+      "applicable": true,
+      "changed_contracts": [
+        {
+          "name": "Entry validity",
+          "before": "active alone determines validity.",
+          "after": "active and expires_at determine validity.",
+          "evidence_paths": [
+            "state.py"
+          ],
+          "evidence_symbols": [
+            "is_current",
+            "expires_at"
+          ]
+        }
+      ],
+      "in_scope_consumers": [
+        {
+          "name": "Value reader",
+          "paths": [
+            "reader_a.py"
+          ],
+          "symbols": [
+            "read_value"
+          ],
+          "why_affected": "read_value branches on is_current before returning a value.",
+          "required_behavior": "Expired values are not returned; fresh values are returned.",
+          "evidence": [
+            "reader_a.py imports is_current and uses it in read_value."
+          ],
+          "required_proof": {
+            "claim": "Expired values are not returned; fresh values are returned.",
+            "level": "LOCAL_DETERMINISTIC",
+            "capabilities": []
+          }
+        },
+        {
+          "name": "Availability reader",
+          "paths": [
+            "reader_b.py"
+          ],
+          "symbols": [
+            "can_read"
+          ],
+          "why_affected": "can_read branches on is_current before reporting availability.",
+          "required_behavior": "Expired entries are unavailable; fresh entries are available.",
+          "evidence": [
+            "reader_b.py imports is_current and uses it in can_read."
+          ],
+          "required_proof": {
+            "claim": "Expired entries are unavailable; fresh entries are available.",
+            "level": "LOCAL_DETERMINISTIC",
+            "capabilities": []
+          }
+        }
+      ],
+      "not_affected_consumers": [
+        {
+          "name": "Display title",
+          "paths": [
+            "sibling.py"
+          ],
+          "symbols": [
+            "Resource reads"
+          ],
+          "why_considered": "A sibling presents entry metadata.",
+          "reason": "title returns static text without reading validity or entries.",
+          "evidence": [
+            "sibling.py title has no parameters and returns a literal."
+          ]
+        }
+      ],
+      "related_out_of_scope": [
+        {
+          "name": "Empty count ratio",
+          "paths": [
+            "metrics.py"
+          ],
+          "symbols": [
+            "ratio"
+          ],
+          "relation": "The reporting sibling also processes entry counts.",
+          "reason": "Zero division is independent of expiration and does not affect either reader.",
+          "evidence": [
+            "metrics.py ratio divides by total without a zero guard."
+          ],
+          "suggested_follow_up": "Define and test ratio behavior for an empty count."
+        }
+      ],
+      "search_evidence": [
+        {
+          "target": "is_current and entry validity readers/writers",
+          "method": "Trace predicate imports, entry fields and sibling entry consumers.",
+          "evidence_paths": [
+            "state.py",
+            "reader_a.py",
+            "reader_b.py",
+            "sibling.py",
+            "metrics.py"
+          ],
+          "conclusion": "Both decision points use the predicate; static title and count ratio are independent."
+        }
+      ],
+      "closure_summary": "The shared predicate, both decision points and plausible siblings were inspected and classified; entries are supplied by callers."
+    },
+    "state_model": {
+      "applicable": false,
+      "representations": [],
+      "authority": [],
+      "lifecycle": [],
+      "boundaries": [],
+      "required_proof": {
+        "claim": "No state model is required.",
+        "level": "LOCAL_DETERMINISTIC",
+        "capabilities": []
+      }
+    },
+    "risks": [],
+    "evidence_plan": {
+      "regression": [
+        {
+          "claim": "Both readers reject expired entries.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": ["JEST", "NODE"]
+        }
+      ],
+      "preservation": [
+        {
+          "claim": "Both readers accept active fresh entries.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": []
+        }
+      ],
+      "consumers": [
+        {
+          "claim": "Expired values are not returned; fresh values are returned.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": []
+        },
+        {
+          "claim": "Expired entries are unavailable; fresh entries are available.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": []
+        }
+      ],
+      "boundaries": []
+    },
+    "documentation": {
+      "required": false,
+      "reason": "No documented product contract changes.",
+      "required_proof": {
+        "claim": "No documentation update is required.",
+        "level": "LOCAL_DETERMINISTIC",
+        "capabilities": []
+      }
+    },
+    "owner_boundary_assessment": {
+      "compatible": true,
+      "reason": "No owner file boundary was specified."
+    },
+    "unknowns": []
+  }
+}

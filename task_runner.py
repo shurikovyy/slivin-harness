@@ -39,6 +39,7 @@ from slivin_harness.git_integrity import (
     isolated_git_index_environment,
 )
 from slivin_harness.evaluator import (
+    build_phase_b_origin_catalog,
     run_evaluator,
     validate_blind_audit,
     validate_evaluation_artifact as validate_evaluator_artifact,
@@ -125,6 +126,7 @@ from slivin_harness.test_runners import resolve_javascript_runner, TestRunnerRes
 from slivin_harness.impact import impact_paths
 from slivin_harness.protocol import (
     ArtifactContractError,
+    ArtifactFailureKind,
     EVALUATOR_PROTOCOL_VERSION,
     MANIFEST_VERSION,
     PLANNER_PROTOCOL_VERSION,
@@ -2185,6 +2187,9 @@ def run_implementer_report(codex: CodexAppServer, **kwargs) -> dict:
             public["diagnostic"] = {"code": exc.code, "field": exc.field}
             plane.write_public_json(name + ".json", public)
             artifacts.append(name + ".json")
+            if exc.failure_kind is ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE:
+                observe_terminal("IMPLEMENTER_ARTIFACT_" + exc.failure_kind.value)
+                raise
             try:
                 allowed_fields = correction.next_fields(exc, attempt=attempt)
             except ReportRecoveryStop as terminal:
@@ -3099,6 +3104,10 @@ def main(argv: list[str] | None = None) -> int:
                             replan_context=planner_benchmark_context(benchmark_evidence),
                             on_heartbeat=make_heartbeat("PLAN"),
                             on_thread_started=_thread_recorder(recorder, "planner_1"),
+                            on_raw_report=lambda attempt, raw: recorder.control_plane.write_text(
+                                f"planner_01_{attempt:02d}.raw.json", raw,
+                                visibility=ArtifactVisibility.PRIVATE,
+                            ),
                             timeout=timeout,
                         ),
                     )
@@ -3884,6 +3893,10 @@ def main(argv: list[str] | None = None) -> int:
                             on_heartbeat=make_heartbeat(f"REPLAN #{replan_cycles}"),
                             on_thread_started=_thread_recorder(
                                 recorder, f"planner_replan_{replan_cycles}"
+                            ),
+                            on_raw_report=lambda attempt, raw: recorder.control_plane.write_text(
+                                f"planner_replan_{replan_cycles:02d}_{attempt:02d}.raw.json", raw,
+                                visibility=ArtifactVisibility.PRIVATE,
                             ),
                             timeout=timeout,
                         ),
@@ -4694,6 +4707,7 @@ def main(argv: list[str] | None = None) -> int:
                     revision_binding=evaluator_binding,
                 )
                 blind_artifact = f"blind_audit_{evaluation_index:02d}.json"
+                origin_catalog_artifact = f"phase_b_origin_catalog_{evaluation_index:02d}.json"
                 persisted_blind_audit: dict | None = None
 
                 def evaluator_blind_audit_recorder(audit: dict) -> None:
@@ -4740,6 +4754,9 @@ def main(argv: list[str] | None = None) -> int:
                         on_heartbeat=make_heartbeat(f"EVALUATE #{evaluation_index}"),
                         on_thread_started=_thread_recorder(recorder, f"evaluator_{evaluation_index}"),
                         on_blind_audit=evaluator_blind_audit_recorder,
+                        on_origin_catalog=lambda catalog: recorder.write_once_authoritative_json(
+                            origin_catalog_artifact, catalog,
+                        ),
                         on_phase_complete=evaluator_phase_guard,
                         on_raw_report=lambda phase, attempt, raw: recorder.control_plane.write_text(
                             f"evaluator_{evaluation_index:02d}_{phase}_{attempt:02d}.raw.json", raw,
@@ -4771,6 +4788,7 @@ def main(argv: list[str] | None = None) -> int:
                         reason_code="EVALUATOR_MUTATED_CANDIDATE",
                         artifacts=(
                             blind_artifact,
+                            origin_catalog_artifact,
                             evaluation_artifact,
                             "candidate_identity_current.json",
                         ),
@@ -4789,6 +4807,7 @@ def main(argv: list[str] | None = None) -> int:
                         StageResultCode.EVALUATION_PASS,
                         artifacts=(
                             blind_artifact,
+                            origin_catalog_artifact,
                             evaluation_artifact,
                             active_contract_closure_artifact,
                             active_implementation_impact_artifact,
@@ -4806,6 +4825,7 @@ def main(argv: list[str] | None = None) -> int:
                         reason_code="EVALUATOR_FINDINGS",
                         artifacts=(
                             blind_artifact,
+                            origin_catalog_artifact,
                             evaluation_artifact,
                             "candidate_identity_current.json",
                         ),
@@ -4904,7 +4924,7 @@ def main(argv: list[str] | None = None) -> int:
                         outcome=WorkflowOutcome.REPLAN,
                         result_code=StageResultCode.REPLAN_REQUIRED,
                         reason_code="EVALUATOR_REPLAN_REQUIRED",
-                        artifacts=(evaluation_artifact, "candidate_identity_current.json"),
+                        artifacts=(origin_catalog_artifact, evaluation_artifact, "candidate_identity_current.json"),
                     )
                     report, report_artifact = replan_implementation(evaluation["reason"])
                     report, report_artifact = stabilize_implementer_report(
@@ -4932,7 +4952,7 @@ def main(argv: list[str] | None = None) -> int:
                         outcome=WorkflowOutcome.BLOCKED,
                         result_code=StageResultCode.BLOCKED,
                         reason_code="EVALUATOR_BLOCKED",
-                        artifacts=(evaluation_artifact,),
+                        artifacts=(origin_catalog_artifact, evaluation_artifact),
                     )
                 else:
                     run_state.route_stage(
@@ -4940,7 +4960,7 @@ def main(argv: list[str] | None = None) -> int:
                         outcome=WorkflowOutcome.NEEDS_USER_DECISION,
                         result_code=StageResultCode.NEEDS_USER_DECISION,
                         reason_code="EVALUATOR_NEEDS_USER_DECISION",
-                        artifacts=(evaluation_artifact,),
+                        artifacts=(origin_catalog_artifact, evaluation_artifact),
                     )
                 print("HARNESS_TASK_STOPPED:", evaluation["status"])
                 return 2

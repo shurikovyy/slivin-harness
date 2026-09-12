@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a31
+# Документация Slivin Harness 0.8.0a32
 
-Актуальная версия: **0.8.0a31 — Runner-aware Verification and Report Recovery**.
+Актуальная версия: **0.8.0a32 — Model Artifact Admission and Controller Origins**.
 
 Основные документы:
 
@@ -46,7 +46,7 @@ runtime-result.v1
 runtime-evidence.v1
 contract-closure.v1
 blind-audit.v2
-evaluator.v7
+evaluator.v8
 workflow.v7
 run-state.v1
 candidate.v1

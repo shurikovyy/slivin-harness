@@ -3,12 +3,21 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable
 
 PLANNER_PROTOCOL_VERSION = "planner.v6"
-EVALUATOR_PROTOCOL_VERSION = "evaluator.v7"
+EVALUATOR_PROTOCOL_VERSION = "evaluator.v8"
 MANIFEST_VERSION = 2
+
+
+class ArtifactFailureKind(str, Enum):
+    """Controller routing class for failures at an agent-artifact boundary."""
+
+    LOCAL_WIRE_ERROR = "LOCAL_WIRE_ERROR"
+    SEMANTIC_MODEL_CONFLICT = "SEMANTIC_MODEL_CONFLICT"
+    INTEGRITY_OR_INFRA_FAILURE = "INTEGRITY_OR_INFRA_FAILURE"
 
 
 class ArtifactContractError(RuntimeError):
@@ -22,6 +31,7 @@ class ArtifactContractError(RuntimeError):
         message: str,
         expected: str,
         actual: object | None = None,
+        failure_kind: ArtifactFailureKind = ArtifactFailureKind.LOCAL_WIRE_ERROR,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -29,6 +39,7 @@ class ArtifactContractError(RuntimeError):
         self.message = message
         self.expected = expected
         self.actual = actual
+        self.failure_kind = failure_kind
 
     def feedback(self) -> dict[str, object | None]:
         return {
@@ -37,6 +48,7 @@ class ArtifactContractError(RuntimeError):
             "message": self.message,
             "expected": self.expected,
             "actual": self.actual,
+            "failure_kind": self.failure_kind.value,
         }
 
 
@@ -47,8 +59,16 @@ class ArtifactDiagnosticBatch(ArtifactContractError):
         if not diagnostics:
             raise ValueError("A diagnostic batch cannot be empty")
         first = diagnostics[0]
+        kinds = {item.failure_kind for item in diagnostics}
+        if ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE in kinds:
+            failure_kind = ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE
+        elif ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT in kinds:
+            failure_kind = ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT
+        else:
+            failure_kind = ArtifactFailureKind.LOCAL_WIRE_ERROR
         super().__init__(code=first.code, field=first.field, message=first.message,
-                         expected=first.expected, actual=first.actual)
+                         expected=first.expected, actual=first.actual,
+                         failure_kind=failure_kind)
         self.diagnostics = tuple(diagnostics)
 
     def feedback(self) -> dict[str, object | None]:
@@ -140,5 +160,6 @@ def safe_repo_relative(raw: str, *, field: str = "path") -> str:
             message=f"Unsafe repository-relative path: {raw}",
             expected="A non-empty path inside the task repository",
             actual=raw,
+            failure_kind=ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE,
         )
     return path.as_posix()

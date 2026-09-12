@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a31 — Phase 7
+# Модель качества Slivin Harness 0.8.0a32 — Phase 7
 
 Квалификация сборки требует safety и завершения корректных задач. Единый
 [release gate](SYSTEMIC_RELIABILITY.md) выполняет boundary families, stateful faults,
@@ -180,7 +180,7 @@ PROD_OBSERVE
 
 ### Blind Evaluator
 
-`evaluator.v7` сначала независимо восстанавливает `impact_analysis` по actual candidate,
+`evaluator.v8` сначала независимо восстанавливает `impact_analysis` по actual candidate,
 без обоих impact ledgers и Contract/check framing. `blind-audit.v2` содержит собственные
 IDs, changed contracts, affected/NOT_AFFECTED/related consumers, exact changed-path review,
 search evidence и summary. Controller использует shared safe-path/prose policy и
@@ -190,7 +190,10 @@ Phase B получает normalized Planner impact и текущий `implementa
 после повторной проверки binding, а также Contract, `contract-closure.v1` и deterministic/
 runtime evidence. `impact_challenge` обязан покрыть exact sets blind contracts/consumers,
 Planner IN_SCOPE, Implementer DISCOVERED, NOT_AFFECTED и related rows всех источников,
-changed paths. Names могут различаться: blind IDs связываются с prior names explicit matches.
+changed paths. Controller-owned `phase-b-origin-catalog.v1` назначает exact handles и
+canonical metadata. Model wire выбирает только compatible `origin_ref`; exact row
+cardinality и `maxItems=0` для пустых groups не оставляют impossible local correction.
+Source, classification и revision не дублируются моделью. Names могут различаться без fuzzy matching.
 
 PASS требует positive dispositions и достаточных proofs. Negative disposition требует
 существующий final finding. Blind changed-contract MATERIAL_GAP и MODEL_CONFLICT допустимы
@@ -199,6 +202,11 @@ PASS требует positive dispositions и достаточных proofs. Nega
 а не только локальный helper. Controller доказывает структуру, references и current-candidate
 binding, но не истинность semantic conclusions. После repair нужны новые blind audit и
 challenge в fresh thread. FAST policy и Final Gate остаются прежними.
+
+Локальная wire correction и semantic correction — разные routes. Только точные
+allowlisted leaf fields могут получить bounded correction с frozen claims и no-progress
+guard. `SEMANTIC_MODEL_CONFLICT` сохраняет repair/replan semantics, а tampered catalog,
+stale Controller state и другие `INTEGRITY_OR_INFRA_FAILURE` hard-stop.
 
 ### Final Gate
 
@@ -425,7 +433,7 @@ runtime-result.v1
 runtime-evidence.v1
 contract-closure.v1
 blind-audit.v2
-evaluator.v7
+evaluator.v8
 workflow.v7
 run-state.v1
 candidate.v1

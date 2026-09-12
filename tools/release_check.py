@@ -27,6 +27,11 @@ RELEASE_LOG_TAIL_LINES = 60
 RELEASE_LOG_TAIL_BYTES = 262_144
 RELEASE_LOG_LINE_CHARS = 2_000
 RELEASE_SUMMARY_DIAGNOSTIC_BYTES = 1_048_576
+RELEASE_STAGES = (
+    "self_check", "boundary", "stateful", "mutations", "mixed_runners",
+    "artifact_replay", "native_roles", "real_models",
+)
+MODEL_BACKED_STAGES = frozenset({"native_roles", "real_models"})
 _SECRET_NAME_RE = re.compile(
     r"(?:^|_)(?:TOKEN|PASSWORD|PASSWD|SECRET|API_KEY|PRIVATE_KEY|ACCESS_KEY|CLIENT_SECRET|CREDENTIAL)(?:_|$)",
     re.IGNORECASE,
@@ -133,6 +138,28 @@ def emit_stage_failure_diagnostics(
     print("RELEASE_STAGE_LOG_TAIL_END:", stage_name, flush=True)
 
 
+def execute_mandatory_stage_sequence(stage_names, execute) -> tuple[str, ...]:
+    """Stop before every later stage when one mandatory predecessor fails."""
+    visited = []
+    for name in stage_names:
+        visited.append(name)
+        if not execute(name):
+            break
+    return tuple(visited)
+
+
+def validate_release_stage_order(stage_names) -> None:
+    """Known transcript replay must gate every model-backed qualification stage."""
+    names = tuple(stage_names)
+    if len(names) != len(set(names)) or names.count("artifact_replay") != 1:
+        raise RuntimeError("Release stage order requires one unique artifact_replay stage")
+    replay_index = names.index("artifact_replay")
+    if not MODEL_BACKED_STAGES.issubset(names) or any(
+        names.index(name) <= replay_index for name in MODEL_BACKED_STAGES
+    ):
+        raise RuntimeError("Artifact replay must precede every model-backed release stage")
+
+
 def tools_from_profile(args):
     # Only explicit tool paths and runtime directories are read from the local
     # profile. It is never edited, copied into fixtures or emitted in evidence.
@@ -177,7 +204,8 @@ def main() -> int:
         raise RuntimeError("Native scratch acceptance requires --output outside the Harness checkout")
     identity = detect_harness_build_identity(harness_root=ROOT, version=__version__).to_dict()
     initial = source_manifest(ROOT)
-    names = ("self_check", "boundary", "stateful", "mutations", "mixed_runners", "native_roles", "real_models")
+    names = RELEASE_STAGES
+    validate_release_stage_order(names)
     report = dict(schema_version="release-qualification.v1", status="NOT_QUALIFIED", profile=args.profile,
         started_at=datetime.now(timezone.utc).isoformat(), harness_build=identity, harness_source=initial,
         workflow=workflow_snapshot(harness_version=__version__), diagnostic=args.diagnostic,
@@ -200,12 +228,14 @@ def main() -> int:
             "stateful": ([sys.executable, "tools/release_suite.py", "--stage", "stateful", "--output", str(output / "stateful")], 900),
             "mutations": ([sys.executable, "tools/release_mutations.py", "--output", str(output / "mutations")], 1800),
             "mixed_runners": ([sys.executable, "tools/smoke_trusted_test_runners.py", "--node", str(node), "--jest", str(jest), "--output", str(output / "mixed_runners")], 900),
+            "artifact_replay": ([sys.executable, "tools/replay_model_artifact_transcripts.py", "--output", str(output / "artifact_replay")], 300),
             "native_roles": ([sys.executable, "tools/smoke_readonly_scratch.py", "--node", str(node), "--codex", str(codex), "--runtime-source", str(runtime), "--output", str(output / "native_roles")], 3600),
             "real_models": ([sys.executable, "tools/release_real_models.py", "--node", str(node), "--codex", str(codex), "--runtime-source", str(runtime), "--output", str(output / "real_models")], 28000),
         }
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1",
                    SLIVIN_SMOKE_NODE=str(node), SLIVIN_SMOKE_JEST=str(jest))
-        for name in names:
+        def execute_stage(name: str) -> bool:
+            nonlocal active_stage, failure_diagnostics_emitted
             command, timeout = commands[name]
             started = time.monotonic()
             log_path = output / (name + ".log")
@@ -238,8 +268,10 @@ def main() -> int:
             if stage["status"] != "PASS":
                 emit_stage_failure_diagnostics(name, log_path=log_path, summary_path=summary, environ=env)
                 failure_diagnostics_emitted = True
-                break
+                return False
             active_stage = None
+            return True
+        execute_mandatory_stage_sequence(names, execute_stage)
         report["source_unchanged"] = initial == source_manifest(ROOT)
         # Resolve again as well as hashing: an unchanged shim can select another
         # PATH/local Node or platform package/native payload after the run.

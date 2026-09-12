@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from .protocol import ArtifactContractError, ArtifactDiagnosticBatch
+from .protocol import ArtifactContractError, ArtifactDiagnosticBatch, ArtifactFailureKind
 
 MAX_REPORT_CORRECTIONS = 2
 _LOCAL_FIELD = re.compile(
@@ -17,14 +17,23 @@ _LOCAL_FIELD = re.compile(
     r"changed_path_dispositions)\[\d+\]\."
     r"(?:symbols|evidence|evidence_paths)(?:\[\d+\])?$"
 )
-_BLIND_REVISION_FIELD = re.compile(
-    r"impact_challenge\.(?:not_affected_dispositions|related_follow_up_dispositions)"
-    r"\[\d+\]\.source_revision$"
+_PLANNER_LOCAL_FIELD = re.compile(
+    r"impact_closure\.(?:changed_contracts|in_scope_consumers|not_affected_consumers|"
+    r"related_out_of_scope|search_evidence)\[\d+\]\."
+    r"(?:paths|symbols|evidence|evidence_paths|evidence_symbols)(?:\[\d+\])?$"
+)
+_ORIGIN_REF_FIELD = re.compile(
+    r"impact_challenge\.(?:blind_contract_dispositions|blind_consumer_dispositions|"
+    r"planner_consumer_dispositions|implementer_consumer_dispositions|"
+    r"not_affected_dispositions|related_follow_up_dispositions)\[\d+\]"
+    r"(?:\.matches\[\d+\])?\.origin_ref$"
 )
 
 
 class ReportRecoveryStop(RuntimeError):
     """A typed terminal decision, never a catch-all retry."""
+
+    failure_kind = ArtifactFailureKind.LOCAL_WIRE_ERROR
 
 
 @dataclass
@@ -58,14 +67,16 @@ class ReportCorrectionState:
 
 def correctable_report_field(error: ArtifactContractError) -> str | None:
     # No model, set coverage, classification, proof, capability or integrity errors.
-    if error.code == "BLIND_SOURCE_REVISION" and _BLIND_REVISION_FIELD.fullmatch(error.field):
+    if error.failure_kind is not ArtifactFailureKind.LOCAL_WIRE_ERROR:
+        return None
+    if error.code in {"ORIGIN_REF_UNKNOWN", "ORIGIN_REF_INCOMPATIBLE"} and _ORIGIN_REF_FIELD.fullmatch(error.field):
         return error.field
     if error.code == "MISSING_FIELDS" and isinstance(error.actual, list) and len(error.actual) == 1:
         candidate = error.field + "." + str(error.actual[0])
-        return candidate if _LOCAL_FIELD.fullmatch(candidate) else None
+        return candidate if (_LOCAL_FIELD.fullmatch(candidate) or _PLANNER_LOCAL_FIELD.fullmatch(candidate)) else None
     if error.code not in {"IMPACT_EVIDENCE_EMPTY", "IMPACT_SYMBOL_GENERIC", "TYPE_MISMATCH", "IMPACT_PATH_MISSING"}:
         return None
-    if not _LOCAL_FIELD.fullmatch(error.field):
+    if not (_LOCAL_FIELD.fullmatch(error.field) or _PLANNER_LOCAL_FIELD.fullmatch(error.field)):
         return None
     # Permit replacing this evidence array only. Identity, semantics, other rows
     # and all Contract/discovery/check claims stay byte-for-byte JSON-equivalent.
@@ -120,9 +131,15 @@ def correction_prompt(error: ArtifactContractError, *, fields: list[str], role: 
         "diagnostics": [{"code": item.code, "field": item.field} for item in
                         (error.diagnostics if isinstance(error, ArtifactDiagnosticBatch) else (error,))],
     }
+    role_policy = (
+        "Preserve diagnosis, root cause, technical contract, task alignment, impact classifications, "
+        "required behavior, proof levels/capabilities, status and product intent. "
+        if role.startswith("Planner") else
+        "Do not modify project files, tests, runtime, Git, permissions, Plan, Contract or Verification Plan. "
+    )
     return (
         f"REPORT-ONLY CORRECTION. Return the complete corrected {role} report in this same thread.\n"
-        "Do not modify project files, tests, runtime, Git, permissions, Plan, Contract or Verification Plan. "
+        + role_policy +
         "Do not remove/reorder findings, consumers, obligations or checks; preserve every other field. "
         "Only clarify the identified evidence fields using the existing candidate. For documentation, "
         "real link targets or heading anchors such as README.md#usage are concrete identifiers; "

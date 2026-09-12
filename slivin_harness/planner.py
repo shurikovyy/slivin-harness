@@ -8,13 +8,21 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from slivin_harness.app_server import CodexAppServer
 from slivin_harness.execution import ExecutionRole
+from slivin_harness.impact import validate_impact_structure
 from slivin_harness.protocol import (
     ArtifactContractError,
+    ArtifactFailureKind,
     PLANNER_PROTOCOL_VERSION,
     ensure_exact_keys,
     require_string_list,
     require_type,
     safe_repo_relative,
+)
+from slivin_harness.report_recovery import (
+    MAX_REPORT_CORRECTIONS,
+    ReportCorrectionState,
+    ReportRecoveryStop,
+    correction_prompt,
 )
 from slivin_harness.task_contract import validate_task_contract
 from slivin_harness.verification import (
@@ -421,10 +429,24 @@ def _parse_planner_output(raw: str) -> dict[str, Any]:
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Planner returned invalid JSON structured output.\n" + raw) from exc
+        raise ArtifactContractError(
+            code="REPORT_INVALID_JSON", field="plan",
+            message="Planner returned invalid JSON structured output",
+            expected="A Planner JSON object",
+        ) from exc
     if not isinstance(value, dict):
-        raise RuntimeError("Planner returned a non-object structured output")
+        raise ArtifactContractError(
+            code="TYPE_MISMATCH", field="plan",
+            message="Planner returned a non-object structured output",
+            expected="A Planner JSON object", actual=type(value).__name__,
+        )
     return value
+
+
+def _planner_semantic_error(**kwargs) -> ArtifactContractError:
+    return ArtifactContractError(
+        **kwargs, failure_kind=ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT,
+    )
 
 
 def _validate_claim_block(value: object, *, field: str, required_when_ready: bool = False) -> dict[str, Any]:
@@ -438,13 +460,13 @@ def _validate_claim_block(value: object, *, field: str, required_when_ready: boo
     require_type(value["claim"], str, field=f"{field}.claim")
     require_string_list(value["evidence"], field=f"{field}.evidence")
     if value["confidence"] not in _CONFIDENCE:
-        raise ArtifactContractError(
+        raise _planner_semantic_error(
             code="PLANNER_CONFIDENCE", field=f"{field}.confidence",
             message="Invalid diagnosis confidence", expected="HIGH/MEDIUM/LOW",
             actual=value["confidence"],
         )
     if required_when_ready and (not value["claim"].strip() or not value["evidence"]):
-        raise ArtifactContractError(
+        raise _planner_semantic_error(
             code="PLANNER_DIAGNOSIS_MISSING", field=field,
             message="READY requires diagnosis claim and evidence",
             expected="Non-empty claim and evidence", actual=value,
@@ -453,9 +475,16 @@ def _validate_claim_block(value: object, *, field: str, required_when_ready: boo
 
 
 def _impact_error(code: str, *, field: str, message: str, actual: object) -> None:
+    if code == "UNSAFE_PATH":
+        failure_kind = ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE
+    elif code in {"IMPACT_EVIDENCE_EMPTY", "IMPACT_SYMBOL_GENERIC", "IMPACT_PATH_MISSING"}:
+        failure_kind = ArtifactFailureKind.LOCAL_WIRE_ERROR
+    else:
+        failure_kind = ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT
     raise ArtifactContractError(
         code=code, field=field, message=message,
         expected="Concrete, consistent repository-backed impact closure", actual=actual,
+        failure_kind=failure_kind,
     )
 
 
@@ -497,6 +526,9 @@ def _validate_impact_closure(
 ) -> None:
     closure = plan["impact_closure"]
     field = "impact_closure"
+    validate_impact_structure(
+        closure, schema=IMPACT_CLOSURE_SCHEMA, workspace=workspace, field=field,
+    )
     require_type(closure, dict, field=field)
     keys = set(IMPACT_CLOSURE_SCHEMA["required"])
     ensure_exact_keys(closure, allowed=keys, required=keys, field=field)
@@ -608,13 +640,13 @@ def validate_plan_artifact(
     required = set(PLANNER_SCHEMA["required"])
     ensure_exact_keys(plan, allowed=required, required=required, field="plan")
     if plan["protocol_version"] != PLANNER_PROTOCOL_VERSION:
-        raise ArtifactContractError(
+        raise _planner_semantic_error(
             code="PLANNER_VERSION", field="protocol_version",
             message="Planner protocol version mismatch", expected=PLANNER_PROTOCOL_VERSION,
             actual=plan["protocol_version"],
         )
     if plan["status"] not in set(enum_values(PlannerStatus)):
-        raise ArtifactContractError(
+        raise _planner_semantic_error(
             code="PLANNER_STATUS", field="status", message="Unknown Planner status",
             expected="/".join(enum_values(PlannerStatus)), actual=plan["status"],
         )
@@ -624,7 +656,7 @@ def validate_plan_artifact(
     require_type(alignment, dict, field="task_contract_alignment")
     ensure_exact_keys(alignment, allowed={"status", "evidence", "reason"}, required={"status", "evidence", "reason"}, field="task_contract_alignment")
     if alignment["status"] not in _ALIGNMENT:
-        raise ArtifactContractError(code="TASK_CONTRACT_ALIGNMENT", field="task_contract_alignment.status", message="Invalid alignment status", expected="ALIGNED/INVALID", actual=alignment["status"])
+        raise _planner_semantic_error(code="TASK_CONTRACT_ALIGNMENT", field="task_contract_alignment.status", message="Invalid alignment status", expected="ALIGNED/INVALID", actual=alignment["status"])
     require_string_list(alignment["evidence"], field="task_contract_alignment.evidence")
     require_type(alignment["reason"], str, field="task_contract_alignment.reason")
 
@@ -638,7 +670,7 @@ def validate_plan_artifact(
     require_type(diagnosis, dict, field="diagnosis")
     ensure_exact_keys(diagnosis, allowed={"kind", "root_cause", "extension_point", "design_constraints", "high_level_approach"}, required={"kind", "root_cause", "extension_point", "design_constraints", "high_level_approach"}, field="diagnosis")
     if diagnosis["kind"] not in _DIAGNOSIS_KINDS:
-        raise ArtifactContractError(code="DIAGNOSIS_KIND", field="diagnosis.kind", message="Invalid diagnosis kind", expected="BUG/FEATURE/MIXED", actual=diagnosis["kind"])
+        raise _planner_semantic_error(code="DIAGNOSIS_KIND", field="diagnosis.kind", message="Invalid diagnosis kind", expected="BUG/FEATURE/MIXED", actual=diagnosis["kind"])
     root = _validate_claim_block(diagnosis["root_cause"], field="diagnosis.root_cause", required_when_ready=plan["status"] == PlannerStatus.READY.value and diagnosis["kind"] in {"BUG", "MIXED"})
     extension = _validate_claim_block(diagnosis["extension_point"], field="diagnosis.extension_point", required_when_ready=plan["status"] == PlannerStatus.READY.value and diagnosis["kind"] in {"FEATURE", "MIXED"})
     require_string_list(diagnosis["design_constraints"], field="diagnosis.design_constraints")
@@ -653,9 +685,9 @@ def validate_plan_artifact(
         require_type(item["narrows_compatibility"], bool, field=f"assumptions[{index}].narrows_compatibility")
         require_type(item["compatibility_impact"], str, field=f"assumptions[{index}].compatibility_impact")
         if item["confidence"] not in _CONFIDENCE:
-            raise ArtifactContractError(code="ASSUMPTION_CONFIDENCE", field=f"assumptions[{index}].confidence", message="Invalid assumption confidence", expected="HIGH/MEDIUM/LOW", actual=item["confidence"])
+            raise _planner_semantic_error(code="ASSUMPTION_CONFIDENCE", field=f"assumptions[{index}].confidence", message="Invalid assumption confidence", expected="HIGH/MEDIUM/LOW", actual=item["confidence"])
         if item["narrows_compatibility"] and item["confidence"] != "HIGH":
-            raise ArtifactContractError(code="UNSAFE_COMPATIBILITY_ASSUMPTION", field=f"assumptions[{index}]", message="Compatibility-narrowing assumption requires HIGH confidence", expected="HIGH confidence or non-narrowing assumption", actual=item)
+            raise _planner_semantic_error(code="UNSAFE_COMPATIBILITY_ASSUMPTION", field=f"assumptions[{index}]", message="Compatibility-narrowing assumption requires HIGH confidence", expected="HIGH confidence or non-narrowing assumption", actual=item)
 
     technical = plan["technical_contract"]
     require_type(technical, dict, field="technical_contract")
@@ -671,7 +703,7 @@ def validate_plan_artifact(
         require_string_list(state[field], field=f"state_model.{field}")
     validate_proof_target(state["required_proof"], field="state_model.required_proof")
     if state["applicable"] and not (state["representations"] and state["authority"] and state["lifecycle"]):
-        raise ArtifactContractError(code="STATE_MODEL_INCOMPLETE", field="state_model", message="Applicable State Model requires representations, authority and lifecycle", expected="Non-empty state model", actual=state)
+        raise _planner_semantic_error(code="STATE_MODEL_INCOMPLETE", field="state_model", message="Applicable State Model requires representations, authority and lifecycle", expected="Non-empty state model", actual=state)
 
     require_type(plan["risks"], list, field="risks")
     for index, item in enumerate(plan["risks"]):
@@ -708,7 +740,7 @@ def validate_plan_artifact(
         require_type(item, dict, field=f"unknowns[{index}]")
         ensure_exact_keys(item, allowed={"kind", "claim", "reason"}, required={"kind", "claim", "reason"}, field=f"unknowns[{index}]")
         if item["kind"] not in _UNKNOWN_KINDS:
-            raise ArtifactContractError(code="UNKNOWN_KIND", field=f"unknowns[{index}].kind", message="Invalid unknown kind", expected="/".join(_UNKNOWN_KINDS), actual=item["kind"])
+            raise _planner_semantic_error(code="UNKNOWN_KIND", field=f"unknowns[{index}].kind", message="Invalid unknown kind", expected="/".join(_UNKNOWN_KINDS), actual=item["kind"])
         unknown_kinds.append(item["kind"])
         require_type(item["claim"], str, field=f"unknowns[{index}].claim")
         require_type(item["reason"], str, field=f"unknowns[{index}].reason")
@@ -717,35 +749,35 @@ def validate_plan_artifact(
     _validate_impact_closure(plan, workspace=workspace, owner_allowed_paths=owner_allowed_paths)
     if status == PlannerStatus.TASK_CONTRACT_INVALID.value:
         if alignment["status"] != "INVALID" or not alignment["reason"].strip():
-            raise ArtifactContractError(code="TASK_CONTRACT_INVALID_WITHOUT_EVIDENCE", field="task_contract_alignment", message="TASK_CONTRACT_INVALID requires INVALID alignment and reason", expected="INVALID with reason", actual=alignment)
+            raise _planner_semantic_error(code="TASK_CONTRACT_INVALID_WITHOUT_EVIDENCE", field="task_contract_alignment", message="TASK_CONTRACT_INVALID requires INVALID alignment and reason", expected="INVALID with reason", actual=alignment)
         return
     if alignment["status"] != "ALIGNED":
-        raise ArtifactContractError(code="TASK_CONTRACT_NOT_ALIGNED", field="task_contract_alignment", message="Planner status requires aligned Task Contract", expected="ALIGNED", actual=alignment)
+        raise _planner_semantic_error(code="TASK_CONTRACT_NOT_ALIGNED", field="task_contract_alignment", message="Planner status requires aligned Task Contract", expected="ALIGNED", actual=alignment)
 
     if status == PlannerStatus.READY.value:
         if not characterization["observed_behavior"] or not characterization["existing_contract"] or not characterization["evidence"]:
-            raise ArtifactContractError(code="PLANNER_CHARACTERIZATION_INCOMPLETE", field="characterization", message="READY requires observed behavior, existing contract and evidence", expected="Non-empty characterization", actual=characterization)
+            raise _planner_semantic_error(code="PLANNER_CHARACTERIZATION_INCOMPLETE", field="characterization", message="READY requires observed behavior, existing contract and evidence", expected="Non-empty characterization", actual=characterization)
         relevant_confidences = []
         if diagnosis["kind"] in {"BUG", "MIXED"}:
             relevant_confidences.append(root["confidence"])
         if diagnosis["kind"] in {"FEATURE", "MIXED"}:
             relevant_confidences.append(extension["confidence"])
         if "LOW" in relevant_confidences:
-            raise ArtifactContractError(code="PLANNER_LOW_CONFIDENCE", field="diagnosis", message="READY cannot use LOW diagnosis confidence", expected="HIGH or MEDIUM", actual=relevant_confidences)
+            raise _planner_semantic_error(code="PLANNER_LOW_CONFIDENCE", field="diagnosis", message="READY cannot use LOW diagnosis confidence", expected="HIGH or MEDIUM", actual=relevant_confidences)
         if not technical["technical_acceptance"]:
-            raise ArtifactContractError(code="PLANNER_TECHNICAL_ACCEPTANCE_MISSING", field="technical_contract.technical_acceptance", message="READY requires technical acceptance", expected="Non-empty technical acceptance", actual=[])
+            raise _planner_semantic_error(code="PLANNER_TECHNICAL_ACCEPTANCE_MISSING", field="technical_contract.technical_acceptance", message="READY requires technical acceptance", expected="Non-empty technical acceptance", actual=[])
         if not evidence["regression"]:
-            raise ArtifactContractError(code="PLANNER_EVIDENCE_MISSING", field="evidence_plan.regression", message="READY requires regression/acceptance proof", expected="At least one typed proof", actual=[])
+            raise _planner_semantic_error(code="PLANNER_EVIDENCE_MISSING", field="evidence_plan.regression", message="READY requires regression/acceptance proof", expected="At least one typed proof", actual=[])
         if "BLOCKING" in unknown_kinds or "PRODUCT_SEMANTIC" in unknown_kinds:
-            raise ArtifactContractError(code="PLANNER_READY_WITH_BLOCKING_UNKNOWN", field="unknowns", message="READY cannot retain blocking/product unknowns", expected="Only NON_BLOCKING unknowns", actual=unknown_kinds)
+            raise _planner_semantic_error(code="PLANNER_READY_WITH_BLOCKING_UNKNOWN", field="unknowns", message="READY cannot retain blocking/product unknowns", expected="Only NON_BLOCKING unknowns", actual=unknown_kinds)
         if not boundary["compatible"]:
-            raise ArtifactContractError(code="OWNER_BOUNDARY_CONFLICT", field="owner_boundary_assessment", message="READY cannot conflict with owner boundary", expected="compatible=true", actual=boundary)
+            raise _planner_semantic_error(code="OWNER_BOUNDARY_CONFLICT", field="owner_boundary_assessment", message="READY cannot conflict with owner boundary", expected="compatible=true", actual=boundary)
     elif status == PlannerStatus.BLOCKED.value:
         if "BLOCKING" not in unknown_kinds and boundary["compatible"]:
-            raise ArtifactContractError(code="PLANNER_STOP_WITHOUT_REASON", field="unknowns/owner_boundary_assessment", message="BLOCKED requires blocking unknown or boundary conflict", expected="Blocking reason", actual={"unknowns": unknown_kinds, "boundary": boundary})
+            raise _planner_semantic_error(code="PLANNER_STOP_WITHOUT_REASON", field="unknowns/owner_boundary_assessment", message="BLOCKED requires blocking unknown or boundary conflict", expected="Blocking reason", actual={"unknowns": unknown_kinds, "boundary": boundary})
     elif status == PlannerStatus.NEEDS_USER_DECISION.value:
         if "PRODUCT_SEMANTIC" not in unknown_kinds:
-            raise ArtifactContractError(code="PLANNER_DECISION_WITHOUT_PRODUCT_UNKNOWN", field="unknowns", message="NEEDS_USER_DECISION requires product-semantic unknown", expected="PRODUCT_SEMANTIC", actual=unknown_kinds)
+            raise _planner_semantic_error(code="PLANNER_DECISION_WITHOUT_PRODUCT_UNKNOWN", field="unknowns", message="NEEDS_USER_DECISION requires product-semantic unknown", expected="PRODUCT_SEMANTIC", actual=unknown_kinds)
 
 
 
@@ -764,6 +796,7 @@ def run_planner(
     explicit_skills: list[dict[str, str]] | None = None,
     on_heartbeat: Callable[[dict], None] | None = None,
     on_thread_started: Callable[[dict], None] | None = None,
+    on_raw_report: Callable[[int, str], None] | None = None,
     timeout: float = 900,
 ) -> dict[str, Any]:
     validate_task_contract(task_contract)
@@ -802,26 +835,42 @@ MANIFEST_REPAIR_EVIDENCE:
 
 Исследуй текущий repository независимо и верни planner.v6 artifact.
 """.strip()
-    raw = codex.run_turn(
-        thread_id=thread_id,
-        prompt=prompt,
-        output_schema=PLANNER_SCHEMA,
-        skills=explicit_skills,
-        on_heartbeat=on_heartbeat,
-        timeout=timeout,
-    )
-    plan = _parse_planner_output(raw)
-    validate_plan_artifact(
-        plan, workspace=workspace, task_contract=task_contract,
-        owner_allowed_paths=owner_allowed_paths,
-    )
+    correction = ReportCorrectionState()
+    plan: dict[str, Any] | None = None
+    for attempt in range(MAX_REPORT_CORRECTIONS + 1):
+        raw = codex.run_turn(
+            thread_id=thread_id,
+            prompt=prompt,
+            output_schema=PLANNER_SCHEMA,
+            skills=explicit_skills,
+            on_heartbeat=on_heartbeat,
+            timeout=timeout if not attempt else min(timeout, 300),
+        )
+        if on_raw_report is not None:
+            on_raw_report(attempt, raw)
+        plan = _parse_planner_output(raw)
+        correction.observe(plan)
+        try:
+            validate_plan_artifact(
+                plan, workspace=workspace, task_contract=task_contract,
+                owner_allowed_paths=owner_allowed_paths,
+            )
+            break
+        except ArtifactContractError as error:
+            if error.failure_kind is not ArtifactFailureKind.LOCAL_WIRE_ERROR:
+                raise
+            fields = correction.next_fields(error, attempt=attempt)
+            prompt = correction_prompt(error, fields=fields, role="Planner")
+    else:
+        raise ReportRecoveryStop("REPORT_CORRECTION_EXHAUSTED")
+    assert plan is not None
     unavailable = planner_capability_gaps(
         plan, available=available_verification_capabilities
     )
     if not unavailable:
         return plan
 
-    correction_prompt = f"""
+    capability_prompt = f"""
 CAPABILITY FEASIBILITY CORRECTION
 
 Твой READY plan потребовал недоступные capabilities:
@@ -838,7 +887,7 @@ proof route только из available capabilities. Не заменяй нед
 """.strip()
     corrected_raw = codex.run_turn(
         thread_id=thread_id,
-        prompt=correction_prompt,
+        prompt=capability_prompt,
         output_schema=PLANNER_SCHEMA,
         skills=explicit_skills,
         on_heartbeat=on_heartbeat,

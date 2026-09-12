@@ -58,15 +58,21 @@ Controller компилирует canonical ledger из originals и current evi
 inherited prose и `discovered_obligations` отсутствует в wire. COMPLETE требует
 всех current refs: missing/duplicate/unknown/stale, CHALLENGE и INSUFFICIENT_EVIDENCE
 не становятся подтверждением. PROMOTE сохраняет original outside claim и current
-IN_SCOPE target; `evaluator.v7` требует отдельное подтверждение обоих. `user-follow-up.v2`
+IN_SCOPE target; `evaluator.v8` требует отдельное подтверждение обоих. `user-follow-up.v2`
 разделяет original provenance и current assessment. FAST не утверждает Evaluator PASS.
 
 `implementation-contract.v4` хранит source inventory и историю proof routes;
 `implementation-impact-closure.v2` связан с candidate, plan/Contract и revisions.
 Старые `planner.v5`, `implementer.v5`, `implementation-contract.v3`,
-`implementation-impact-closure.v1`, `evaluator.v6`, `user-follow-up.v1` несовместимы:
+`implementation-impact-closure.v1`, `evaluator.v6`, `evaluator.v7`, `user-follow-up.v1` несовместимы:
 допустимо историческое чтение, но не admission, автоматический upgrade или receipt
 reuse/resume. `workflow.v7` содержит current boundary map; старые snapshots исторические.
+
+Planner initial artifact проходит bounded local-wire admission до отдельной capability
+negotiation. Evaluator Phase B использует Controller-built `phase-b-origin-catalog.v1`:
+model wire содержит exact `origin_ref`, а authority/classification/source ID/revision
+canonicalize из current state. Unknown/incompatible handle исправляется только как exact
+reference; semantic conflicts и integrity/catalog failures не становятся retries.
 
 ## Recovery и checkpoints
 
@@ -124,8 +130,11 @@ test IDs четырёх семейств каждой границы. AST про
 исполнения каждого required case ID. Missing/NOT_RUN/FAIL не заменяется соседним тестом.
 RuntimeExecutor и Controller contract closure входят в B16.
 
-Обязательны все семь stages: self-check, boundary families, stateful/fault injection,
-mutations, mixed Node/Jest, native role sandbox, real-model FULL tasks. Mutation gate
+Обязательны все восемь stages: self-check, boundary families, stateful/fault injection,
+mutations, mixed Node/Jest, deterministic artifact transcript replay, native role sandbox,
+real-model FULL tasks. Transcript gate воспроизводит sanitized QE1/QS1/QE2 failures через
+production admission paths и обязан PASS до любых model-backed turns; он доказывает только
+закрытие известных boundary regressions и не заменяет три FULL cases. Mutation gate
 требует unmutated PASS, затем конкретный typed failure и исполнение mutated target
 на disposable source copy. Infrastructure ERROR не считается обнаружением дефекта.
 

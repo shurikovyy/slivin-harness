@@ -206,9 +206,11 @@ local errors in populated post-patch `symbols`, `evidence` or `evidence_paths`, 
 returns all independently diagnosable safe field/code errors in one batch and permits
 at most two corrective turns in the same thread. A malformed parent blocks only its
 children. Mixed local/semantic diagnostics cannot become a cosmetic correction.
-Evaluator rows with `source=BLIND` use independent `impact_id` values and an empty
-`source_revision`. Non-empty invented revisions are returned together as one typed
-`BLIND_SOURCE_REVISION` batch and may change only those exact report fields.
+Planner performs equivalent bounded local admission before its separate capability
+negotiation; semantic model and proof requirements remain frozen. Evaluator Phase B
+uses Controller-owned `origin_ref` handles, so model wire contains no classification or
+source revision. Unknown/incompatible handles may change only their exact reference field;
+Controller catalog tamper and semantic conclusion changes are not correction candidates.
 Only identified evidence arrays can change. Findings, order, names, classification,
 behavior, proof, discoveries, registered checks and all other report fields are frozen.
 Concrete documentation link targets/heading anchors are valid identifiers; empty arrays

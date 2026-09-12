@@ -126,17 +126,18 @@
         "planner.v6",
         "impact-sources.v1"
       ],
-      "ownership": "Planner owns technical hypotheses; Controller owns owner boundaries, capabilities and source identity.",
+      "ownership": "Planner owns technical hypotheses and semantic claims; Controller owns owner boundaries, capabilities, source identity and bounded local-wire admission.",
       "preconditions": "Validated task contract, current repository and fresh capability evidence; read-only project and scoped scratch.",
       "postconditions": "READY has complete impact closure; all IN_SCOPE consumers compile exactly once; prior claims are not product truth.",
       "evidence_dependencies": "Repository paths/symbols/search evidence, current candidate guard, task fingerprint and tool evidence.",
       "allowed_outcomes": [
         "READY",
+        "LOCAL_REPORT_CORRECTION",
         "REPLAN_OR_BLOCKED_DIAGNOSIS",
         "CAPABILITY_CORRECTION",
         "INVALID_STOP"
       ],
-      "recovery_contract": "One capability correction may revise proof route, retaining owner authority; no infinite infeasible READY loop.",
+      "recovery_contract": "Before capability negotiation, up to two no-progress-protected local-wire corrections may change only exact evidence leaf fields while all semantic claims stay frozen. A later separate capability correction may revise only the proof route; no infinite loop.",
       "checkpoint_contract": "Admitted Planner artifact precedes Controller source inventory and Contract; rejected model stays separate.",
       "families": {
         "input": {
@@ -168,6 +169,9 @@
         "recovery": {
           "expectation": "Feasible correction progresses; repeated infeasible READY stops before compiler.",
           "unittest_ids": [
+            "test_planner.PlannerCapabilityNegotiationTests.test_local_symbol_correction_preserves_semantics",
+            "test_planner.PlannerCapabilityNegotiationTests.test_local_correction_rejects_planner_semantic_mutation",
+            "test_planner.PlannerCapabilityNegotiationTests.test_local_correction_no_progress_and_exhaustion_are_bounded",
             "test_planner.PlannerCapabilityNegotiationTests.test_one_corrective_turn_reuses_thread_and_accepts_feasible_plan",
             "test_planner.PlannerCapabilityNegotiationTests.test_second_infeasible_ready_plan_is_controlled",
             "test_planner.PlannerCapabilityNegotiationTests.test_corrective_blocked_plan_is_preserved"
@@ -554,7 +558,7 @@
       "boundary_id": "B10",
       "schemas": [
         "blind-audit.v2",
-        "evaluator.v7"
+        "evaluator.v8"
       ],
       "ownership": "Evaluator A independently owns blind discovery; Controller owns immutable A persistence and B disclosure timing.",
       "preconditions": "Fresh readonly evaluator sees raw task/current candidate, no Planner/Implementer/green-check claims.",
@@ -610,14 +614,15 @@
     {
       "boundary_id": "B11",
       "schemas": [
-        "evaluator.v7",
+        "evaluator.v8",
+        "phase-b-origin-catalog.v1",
         "implementation-impact-closure.v2",
         "impact-sources.v1"
       ],
-      "ownership": "Evaluator owns independent dispositions; Controller owns origins/reference freshness and allowable status routing.",
+      "ownership": "Evaluator owns semantic dispositions, reasoning and new findings; Controller owns the origin catalog, origin identity/classification/revision expansion, reference freshness and allowable status routing.",
       "preconditions": "Immutable A is persisted; current implementation/Contract/verification/source artifacts revalidated before B.",
-      "postconditions": "Every authoritative origin and changed path gets one valid disposition; negative findings retained; PROMOTED_IN_SCOPE requires admitted target and independent confirmation.",
-      "evidence_dependencies": "Current source IDs/revisions, persisted promotions, A IDs, candidate/definition binding and final finding IDs.",
+      "postconditions": "Every authoritative origin_ref and changed path gets one valid disposition; dynamic disposition arrays have exact Controller cardinality and zero-origin/match arrays have maxItems=0; Controller-derived metadata cannot be overridden; negative findings are retained; PROMOTED_IN_SCOPE requires an admitted target and independent confirmation.",
+      "evidence_dependencies": "Current fingerprinted origin catalog, persisted promotions, A IDs, candidate/definition binding and final finding IDs.",
       "allowed_outcomes": [
         "PASS",
         "FINDINGS_REPAIR",
@@ -625,12 +630,16 @@
         "BLOCKED",
         "INVALID_STOP"
       ],
-      "recovery_contract": "B findings are admitted once, expand/repair candidate then require fresh A/B; B local correction cannot change classifications.",
+      "recovery_contract": "Unknown/incompatible origin_ref may receive bounded exact-field correction only when a valid replacement exists, with disposition/reason/findings frozen. Impossible zero-origin rows are semantic conflicts, never no-progress local correction. Semantic findings use repair/replan and require fresh A/B; integrity/catalog failures hard-stop.",
       "checkpoint_contract": "Persist A before B; validated B/current origin is stored before expansion; obsolete evaluations cannot mint current handoff.",
       "families": {
         "input": {
           "expectation": "Unknown matches/findings and missing/duplicate dispositions cannot be accepted.",
           "unittest_ids": [
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_origin_catalog_and_dynamic_schema_own_identity_metadata",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_dynamic_schema_exact_cardinality_and_zero_origin_groups",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_zero_compatible_matches_have_no_wire_slot",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_tampered_controller_origin_catalog_is_hard_failure",
             "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_every_phase_b_input_set_requires_exact_unique_dispositions",
             "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_material_finding_reference_cannot_be_invented",
             "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_positive_consumer_match_must_reference_actual_in_scope"
@@ -661,12 +670,16 @@
             "test_evaluator_impact_challenge.EvaluatorAutonomyWorkflowTests.test_independent_contract_gaps_use_fresh_semantic_replan",
             "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_promoted_origins_require_current_target_and_independent_confirmation",
             "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_batch_repair_no_progress_and_candidate_write_guards",
-            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_corrects_all_blind_source_revisions_in_one_bounded_turn"
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_corrects_unknown_origin_ref_in_one_bounded_turn",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_zero_origin_row_is_semantic_not_impossible_local_correction",
+            "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_origin_ref_correction_cannot_change_semantic_conclusion"
           ],
           "required": true
         }
       },
       "entrypoints": [
+        "slivin_harness.evaluator.build_phase_b_origin_catalog",
+        "slivin_harness.evaluator.admit_evaluation_artifact",
         "slivin_harness.evaluator.validate_evaluation_artifact"
       ],
       "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
@@ -1118,7 +1131,7 @@
       "schemas": [
         "impact-sources.v1",
         "implementer.v6",
-        "evaluator.v7"
+        "evaluator.v8"
       ],
       "ownership": "Controller owns stable source IDs/revisions and admission history; author claims remain immutable; role owns explicit assessments/observations.",
       "preconditions": "Validated current inventory/source namespace and typed observations/current evaluator artifacts.",

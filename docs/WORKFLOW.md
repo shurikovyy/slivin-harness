@@ -2,7 +2,7 @@
 
 > Этот файл генерируется из `slivin_harness/workflow.py`. Не редактируйте таблицы вручную; запустите `./py tools/render_workflow_docs.py`.
 
-- Harness: **0.8.0a31**
+- Harness: **0.8.0a32**
 - Workflow schema: **workflow.v7**
 - Реализуемая фаза: **phase7-final-gate-delivery-benchmark**
 
@@ -121,7 +121,7 @@ machine-readable workflow и versioned Run State
 + LIVE_LOCAL / TEST_EXTERNAL / PROD_OBSERVE runtime scenario executor
 + fresh readback / cleanup / read-only result contracts
 + candidate, source and runtime-only-file immutability guards
-+ two-phase BLIND EVALUATOR evaluator.v7
++ two-phase BLIND EVALUATOR evaluator.v8
 + immutable blind-audit.v2 before Contract/check framing
 + Controller evidence audit without Planner/Implementer prose
 + Final Gate quality reconciliation bound to one candidate/revision vector

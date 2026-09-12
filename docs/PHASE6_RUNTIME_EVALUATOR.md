@@ -268,6 +268,7 @@ Verification Plan
 Contract Closure Record
 Planner normalized impact_closure
 Controller-normalized implementation-impact-closure.v2
+Controller phase-b-origin-catalog.v1
 deterministic Controller evidence
 runtime PASS/SKIPPED evidence
 ```
@@ -276,21 +277,25 @@ runtime PASS/SKIPPED evidence
 Plan/Contract fingerprints, exact changed paths и revision binding. Stale artifact не
 попадает в Phase B. Full Planner reasoning и raw Implementer report не раскрываются.
 
-`evaluator.v7` содержит mandatory `candidate_id` и `impact_challenge`:
+`evaluator.v8` содержит mandatory `candidate_id` и `impact_challenge`:
 
 | Dispositions | Authoritative exact set | Positive result for PASS |
 | --- | --- | --- |
-| blind_contract_dispositions | Каждый blind changed contract impact_id | COVERED |
-| blind_consumer_dispositions | Каждый blind affected consumer impact_id | COVERED_IN_SCOPE |
-| planner_consumer_dispositions | Каждый Planner IN_SCOPE source ID/revision | CONFIRMED |
-| implementer_consumer_dispositions | Каждый current IN_SCOPE source ID/revision | CONFIRMED |
-| not_affected_dispositions | BLIND IDs + PLANNER/IMPLEMENTER source ID/revision | CONFIRMED_NOT_AFFECTED |
-| related_follow_up_dispositions | BLIND IDs + PLANNER/IMPLEMENTER source ID/revision | CONFIRMED_OUT_OF_SCOPE либо PROMOTED_IN_SCOPE |
+| blind_contract_dispositions | Каждый blind changed-contract `origin_ref` | COVERED |
+| blind_consumer_dispositions | Каждый blind affected-consumer `origin_ref` | COVERED_IN_SCOPE |
+| planner_consumer_dispositions | Каждый Planner IN_SCOPE `origin_ref` | CONFIRMED |
+| implementer_consumer_dispositions | Каждый Implementer DISCOVERED IN_SCOPE `origin_ref` | CONFIRMED |
+| not_affected_dispositions | Каждый BLIND/PLANNER/IMPLEMENTER NOT_AFFECTED `origin_ref` | CONFIRMED_NOT_AFFECTED |
+| related_follow_up_dispositions | Каждый BLIND/PLANNER/IMPLEMENTER RELATED_OUT_OF_SCOPE `origin_ref` | CONFIRMED_OUT_OF_SCOPE либо PROMOTED_IN_SCOPE |
 | changed_path_dispositions | Каждый actual changed path | UNDERSTOOD |
 
 Все rows требуют reason, existing evidence_paths, evidence и finding_ids. Blind dispositions
-дополнительно содержат `matches` с source/classification/reference/source_revision существующих prior rows;
-COVERED_IN_SCOPE требует actual IN_SCOPE match. COVERED contract допускает независимое
+дополнительно содержат `matches` только с exact compatible `origin_ref`; contract handles
+нельзя использовать для consumer match и наоборот. Controller строит fingerprinted catalog
+из current ledgers, а после admission детерминированно добавляет authority, classification,
+source ID/revision и current row. Модель не повторяет эту metadata и не может изготовить
+stale revision. Unknown/incompatible handle допускает bounded correction только exact
+reference field; fuzzy matching names/text запрещён. COVERED_IN_SCOPE требует actual IN_SCOPE match. COVERED contract допускает независимое
 repository evidence без совпадения имени. Exact sets запрещают missing/extra/duplicate rows.
 `coverage_summary` обязателен и не заменяет structured challenge.
 `PROMOTED_IN_SCOPE` требует сохранённого Controller перехода, текущего target в IN_SCOPE

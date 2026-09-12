@@ -1,4 +1,4 @@
-# Практическая работа с Slivin Harness 0.8.0a31
+# Практическая работа с Slivin Harness 0.8.0a32
 
 ## Установка и self-check
 
@@ -11,8 +11,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемый финал:
 
 ```text
-0.8.0a31
-DOCS_SYNC_PASS harness=0.8.0a31 ...
+0.8.0a32
+DOCS_SYNC_PASS harness=0.8.0a32 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -51,9 +51,9 @@ repair-попытки не помогли, run останавливается к
    → historical semantic baseline gate (если configured)
    → User Task Contract
 
-1. fresh Planner v5
-2. Implementation Contract v3 + Verification Plan v1
-3. Implementer v5 + Contract/check expansion + SELF VERIFY
+1. fresh Planner v6 + bounded local artifact admission
+2. Implementation Contract v4 + Verification Plan v1
+3. Implementer v6 + Contract/check expansion + SELF VERIFY
 4. independent Controller deterministic checks
 5. Runtime Verification when the active proof requires it
 6A. fresh blind evaluator discovery
@@ -258,11 +258,16 @@ Verification Plan
 Contract Closure Record
 deterministic evidence
 runtime PASS/SKIPPED evidence
+Controller phase-b-origin-catalog.v1
 ```
 
 Every blind finding must be `RETAINED` or `DISMISSED_WITH_EVIDENCE`. Findings use only
 `HIGH`/`MEDIUM` severity and the compact categories `DEFECT`, `CONSUMER`, `RISK`, `EVIDENCE`
 and `DOCS`.
+
+Origin-bearing Phase B rows use only exact `origin_ref` handles from the dynamic schema.
+Controller derives authority, classification and current source revision; local handle
+correction cannot alter the disposition, reason or findings.
 
 ## Authoritative artifacts
 
@@ -283,6 +288,7 @@ contract_closure_*.json
 runtime_scenarios.json
 runtime_verification_*.json
 blind_audit_*.json
+phase_b_origin_catalog_*.json
 evaluation_*.json
 check_registry.json
 self_verify_receipt_current.json

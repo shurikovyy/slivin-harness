@@ -266,6 +266,9 @@ timeout_seconds = 30
             impact["affected_consumers"] = [dict(impact_id=f"CONSUMER-{index}", name=f"Independent reader {index}", paths=row["paths"], symbols=row["symbols"], relation=row["why_affected"], required_behavior=row["required_behavior"], evidence=row["evidence"]) for index, row in enumerate(model["in_scope_consumers"], 1)]
             impact["search_evidence"][0]["evidence_paths"] = ["shared_state.py", "reader_a.py", "reader_b.py"]
             kwargs["on_blind_audit"](audit)
+            kwargs["on_origin_catalog"](task_runner.build_phase_b_origin_catalog(
+                audit, model, kwargs["implementation_impact_closure"],
+            ))
             kwargs["on_phase_complete"]("PHASE_A")
             kwargs["on_phase_complete"]("PHASE_B")
             return audit, valid_pass(blind_audit=audit, planner_impact=model, implementation_impact=kwargs["implementation_impact_closure"])

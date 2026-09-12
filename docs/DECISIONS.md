@@ -63,6 +63,7 @@
 | [D-026](#d-026) | Bounded report-only evidence correction | IMPLEMENTED в 0.8.0a30 |
 | [D-027](#d-027) | Immutable origins, recovery с progress и обязательная квалификация сборки | IMPLEMENTED в 0.8.0a31; qualification определяется отдельным release record |
 | [D-028](#d-028) | Owner check inputs и production toolchain остаются властью Controller | IMPLEMENTED; qualification конкретного SHA ещё требуется |
+| [D-029](#d-029) | Model wire ссылается на Controller origins, local correction отделена от semantics | IMPLEMENTED в 0.8.0a32; qualification конкретного SHA ещё требуется |
 
 <a id="d-001"></a>
 
@@ -840,6 +841,9 @@ counterexample, сохранением positive и adversarial cases, обнов
 
 ## D-028. Owner check inputs и production toolchain остаются властью Controller
 
+> Phase-B blind-revision correction из этой записи заменена Controller-owned origin
+> catalog в D-029; owner check/toolchain решения D-028 остаются действующими.
+
 **Статус:** ACCEPTED. **Реализация:** IMPLEMENTED; qualification конкретного SHA
 определяется отдельным `qualification.json`.
 **Дата регистрации:** 2026-09-10. **Связанные решения:** D-008, D-013, D-014,
@@ -896,6 +900,79 @@ SHA остаётся обязательной и не подменяется э�
 **Пересмотр.** Расширять список замороженных inputs только для Controller-known
 acceptance definitions. Новые correction fields требуют отдельного typed
 counterexample, узкого allowlist и проверки сохранности candidate/claims.
+
+<a id="d-029"></a>
+
+## D-029. Model artifact admission использует Controller origins и typed failure ownership
+
+**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в `0.8.0a32`; real-model
+qualification нового SHA не выполнялась и определяется отдельным `qualification.json`.
+**Дата регистрации:** 2026-09-12. **Связанные решения:** D-002, D-019, D-026,
+D-027, D-028.
+
+**Проблема и проверенные основания.** Обязательная qualification сборки `2742aad`
+дошла до role artifacts после PASS пяти authoritative Controller checks в QE1 и QS1,
+но остановила корректные candidates из-за model-authored classification/revision,
+которые уже однозначно следовали из current Controller records. QE2 остановился до
+Implementer на локально неверном Planner symbol, потому что initial Planner artifact
+не имел общего bounded admission. Это три сохранённых counterexample: QE1
+`20260911-151830-5b371bc8`, QS1 `20260911-155350-321a99ce`, QE2
+`20260911-163221-c816da9c`.
+
+**Решение.** Перед Evaluator Phase B Controller строит fingerprinted
+`phase-b-origin-catalog.v1`. Stable exact `origin_ref` связывает authority,
+classification, source ID/revision и current ledger row. Model wire выбирает только
+handle из dynamic compatible enum; disposition arrays имеют exact Controller cardinality,
+а пустые origin/match groups — `maxItems=0`. Controller после admission canonicalize
+current metadata. Blind origins используют те же handles. Unknown/incompatible handle может
+получить bounded correction только exact reference field при неизменных disposition,
+reason и findings. Stale revision нельзя передать по wire.
+
+Initial Planner проходит bounded local-wire correction до отдельной capability
+negotiation. Allowlist ограничен независимо диагностируемыми evidence/path/symbol leaf
+fields; diagnosis, technical model, impact classifications, required behavior, proof,
+status и owner intent заморожены. Общая taxonomy разделяет `LOCAL_WIRE_ERROR`,
+`SEMANTIC_MODEL_CONFLICT` и `INTEGRITY_OR_INFRA_FAILURE`; только первый класс допускает
+report-only correction. Из трёх sanitized artifacts создан обязательный deterministic
+transcript replay stage перед всеми model-backed stages: `native_roles` и `real_models`.
+При нулевых допустимых origins невозможная строка fail closed как semantic conflict,
+не запрашивая безрезультатную local correction.
+
+**Почему.** Identity, classification и revision являются функцией current authoritative
+Controller state, а не semantic claim модели. Их повторное авторство расширяло invalid
+state space без независимого evidence. Handle сохраняет модельное решение о disposition,
+reasoning и новых findings, одновременно исключая fabricated stale metadata. Раздельные
+local и semantic routes исправляют форму отчёта, не превращая protocol retry в product
+repair или обучение конкретному qualification answer.
+
+**Отвергнутые варианты.** REJECTED: merely allowlist два текущих текста `RuntimeError` —
+это оставляет тот же ownership defect в новых validator paths; увеличить retry count —
+invalid state и semantic mutation сохраняются; fuzzy matching model names/text — результат
+становится недетерминированным; доверять stale `source_revision`, присланному моделью —
+нарушается freshness; удалить validation — допускаются missing/duplicate/wrong-authority
+dispositions; ослабить Phase-B independence — зелёные prior claims подменяют audit;
+обучить prompts трём qualification answers — это leakage и не закрывает системный класс.
+
+**Последствия и цена.** `evaluator.v8` несовместим с прежним Phase-B wire; canonical
+admitted artifact сохраняет downstream semantics. Dynamic schema и catalog fingerprint
+добавляют bounded Controller work и private artifact. Planner может сделать не более двух
+local corrections, затем по-прежнему bounded capability correction. Сохраняются blind
+Phase A, скрытие Planner reasoning/Implementer prose, exact disposition completeness,
+negative-finding rules, candidate/Git/runtime guards, owner checks, reconstruction,
+fixed prompts/tasks/count/order трёх FULL cases и отсутствие hidden/reference leakage.
+
+**Реализация / evidence.** `evaluator.py`, `planner.py`, `protocol.py`,
+`report_recovery.py`, `source_records.py`, `task_runner.py`, B03/B11 contracts и
+`tools/replay_model_artifact_transcripts.py`. Sanitized QE1/QS1/QE2 fixtures проходят
+production admission entrypoints; negative tests проверяют unknown/wrong-type handles,
+semantic mutation, duplicate/missing dispositions, catalog tamper и correction budgets.
+Deterministic PASS доказывает только закрытие известных artifact-boundary regressions,
+не model quality и не `RELEASE_QUALIFIED`.
+
+**Пересмотр.** Новые model-owned metadata разрешать только если Controller не может
+однозначно вывести их из authoritative state и model claim действительно несёт новую
+semantics. Расширение local allowlist требует concrete counterexample, exact leaf ownership,
+frozen semantic siblings, no-progress/budget tests и повторную qualification нового SHA.
 
 ## Шаблон новой записи
 

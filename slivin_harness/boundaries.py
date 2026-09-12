@@ -25,7 +25,11 @@ BOUNDARIES = {
     "B08": ("Current assertions and receipt", ("task_runner.run_checks", "task_runner.verify_self_verification_stamp")),
     "B09": ("Technical model reset", ("task_runner.main.replan_implementation", "slivin_harness.phase7.reset_workspace_for_semantic_replan")),
     "B10": ("Independent blind audit and ordered disclosure", ("slivin_harness.evaluator.run_evaluator", "slivin_harness.evaluator.validate_blind_audit")),
-    "B11": ("Evaluator source dispositions", ("slivin_harness.evaluator.validate_evaluation_artifact",)),
+    "B11": ("Evaluator source dispositions", (
+        "slivin_harness.evaluator.build_phase_b_origin_catalog",
+        "slivin_harness.evaluator.admit_evaluation_artifact",
+        "slivin_harness.evaluator.validate_evaluation_artifact",
+    )),
     "B12": ("Complete current follow-up handoff", ("slivin_harness.handoff.build_user_follow_up_report",)),
     "B13": ("Reconstructed assertions and hidden classification", ("slivin_harness.reconstructed_verification.run_authoritative_reconstructed_verification", "slivin_harness.phase7.classify_heldout_results")),
     "B14": ("Final acceptance and transactional delivery", ("slivin_harness.phase7.build_final_acceptance", "slivin_harness.phase7.deliver_candidate_transaction")),

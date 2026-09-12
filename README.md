@@ -1,4 +1,4 @@
-# Slivin Harness 0.8.0a31 — Phase 7
+# Slivin Harness 0.8.0a32 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
@@ -17,7 +17,7 @@ dependencies и Git controls остаются read-only, а каждый fresh t
 [native cached-Jest smoke](docs/WINDOWS_SETUP.md#native-scoped-scratch-acceptance),
 отдельно от Controller probes и product correctness.
 
-`0.8.0a31` quality-core требует typed Planner Impact Closure до `READY` в `planner.v6`
+`0.8.0a32` quality-core требует typed Planner Impact Closure до `READY` в `planner.v6`
 и post-patch Implementer Impact Closure до `COMPLETE` в `implementer.v6`.
 Implementer проверяет Planner model по реальному diff, пересматривает consumers,
 добавляет discoveries через Controller expansion и рассматривает каждый changed path.
@@ -37,13 +37,20 @@ Strict recovery собирает независимые evidence errors в од�
 Квалификация сборки запускается одной командой на чистом commit:
 `py.exe -3 tools/release_check.py --profile windows-local`.
 Она требует всех обязательных уровней, включая настоящие Node/Jest, native role sandbox
-и три фиксированных real-model FULL прогона до безопасной выдачи результата.
+и три фиксированных real-model FULL прогона до безопасной выдачи результата. Обязательный
+deterministic transcript replay воспроизводит три sanitized artifact-boundary failure
+fixtures до `native_roles` и `real_models`; его PASS не заменяет model qualification.
 Состав, миграция протоколов и пределы доказанного описаны в
 [SYSTEMIC_RELIABILITY.md](docs/SYSTEMIC_RELIABILITY.md).
-`evaluator.v7` независимо восстанавливает impact model по actual candidate до раскрытия
+`evaluator.v8` независимо восстанавливает impact model по actual candidate до раскрытия
 обоих ledgers. Controller immutable-сохраняет `blind-audit.v2`, затем требует evidence-backed
 `impact_challenge` всех contracts/consumers/classifications и changed paths. Согласованные
 ledgers и зелёные tests сами по себе не разрешают Evaluator PASS.
+Phase B выбирает только exact Controller-owned `origin_ref` из dynamic schema с точной
+cardinality dispositions и нулевым `maxItems` для пустых origin/match groups; authority,
+classification и source revision выводятся Controller из current catalog, а не повторяются
+моделью. Planner до capability negotiation получает отдельную bounded correction только
+для allowlisted local evidence fields при неизменной semantic model.
 Blind changed-contract `MATERIAL_GAP` и `MODEL_CONFLICT` допустимы только с
 `REPLAN_REQUIRED`: semantic reset запускает fresh Planner и Implementer. Final material
 finding и concrete reason обязательны.
@@ -80,7 +87,7 @@ CONTROLLER DETERMINISTIC CHECKS
         ↓
 RUNTIME / EXTERNAL VERIFICATION (условно)
         ↓
-TWO-PHASE BLIND EVALUATOR evaluator.v7
+TWO-PHASE BLIND EVALUATOR evaluator.v8
         ↓
 FINAL GATE phase7-final-gate.v1
         ↓
@@ -143,7 +150,7 @@ source resolution и обязательный recorded sanitize/rebind. Reconstr
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a31`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a32`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
@@ -397,7 +404,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a31 ...
+DOCS_SYNC_PASS harness=0.8.0a32 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -411,7 +418,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a31` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a32` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

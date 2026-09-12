@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `0.8.0a32` uses a Controller-owned Phase-B origin catalog and handle-only
+  `evaluator.v8` model wire. Authority, classification, source ID and current
+  revision are derived at admission; exact cardinality and compatible handle
+  enums prevent zero-origin rows and cross-type matches.
+- Planner artifacts receive bounded same-thread local report correction before
+  separate capability negotiation. Typed artifact failure ownership keeps
+  semantic conflicts on repair/replan and integrity failures hard-stopped.
+- Sanitized deterministic QE1/QS1/QE2 artifact counterexamples replay before
+  every model-backed release stage. This cheap gate does not replace the three
+  mandatory real-model FULL cases and does not imply `RELEASE_QUALIFIED`.
 - Native scoped-role acceptance uses separate Controller-specified exact `ReadAllText`
   commands for root and nested repository instructions. Successful command/cwd/exit
   evidence remains authoritative when `aggregatedOutput` is null; echo, wrong path/cwd

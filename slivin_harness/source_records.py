@@ -11,7 +11,7 @@ import copy
 import re
 from typing import Any, Mapping
 
-from .protocol import ArtifactContractError, ensure_exact_keys, stable_fingerprint
+from .protocol import ArtifactContractError, ArtifactFailureKind, ensure_exact_keys, stable_fingerprint
 
 SOURCE_INVENTORY_VERSION = "impact-sources.v1"
 SOURCE_GROUPS = ("changed_contracts", "in_scope_consumers", "not_affected_consumers",
@@ -23,9 +23,16 @@ SOURCE_REF_SCHEMA = {
 }
 
 
-def source_error(code: str, message: str, actual: object = None) -> None:
+def source_error(code: str, message: str, actual: object = None, *,
+                 failure_kind: ArtifactFailureKind = ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT) -> None:
     raise ArtifactContractError(code=code, field="source_assessments", message=message,
-                                expected="Every current origin explicitly assessed by exact reference", actual=actual)
+                                expected="Every current origin explicitly assessed by exact reference", actual=actual,
+                                failure_kind=failure_kind)
+
+
+def _inventory_error(code: str, message: str, actual: object = None) -> None:
+    source_error(code, message, actual,
+                 failure_kind=ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE)
 
 
 def _record(*, source_id: str, author: str, group: str, claim: Mapping[str, Any],
@@ -53,42 +60,44 @@ def source_ref(record: Mapping[str, Any]) -> dict[str, str]:
 
 def validate_source_inventory(inventory: object) -> None:
     if not isinstance(inventory, dict):
-        source_error("SOURCE_INVENTORY_INVALID", "Source inventory must be a Controller object")
-    ensure_exact_keys(inventory, allowed={"schema_version", "namespace", "records", "transitions"},
-                      required={"schema_version", "namespace", "records", "transitions"}, field="source_inventory")
+        _inventory_error("SOURCE_INVENTORY_INVALID", "Source inventory must be a Controller object")
+    inventory_keys = {"schema_version", "namespace", "records", "transitions"}
+    if set(inventory) != inventory_keys:
+        _inventory_error("SOURCE_INVENTORY_FIELDS", "Source inventory fields are invalid", sorted(inventory))
     if inventory["schema_version"] != SOURCE_INVENTORY_VERSION or not isinstance(inventory["records"], list):
-        source_error("SOURCE_INVENTORY_INVALID", "Unsupported inventory schema or malformed records")
+        _inventory_error("SOURCE_INVENTORY_INVALID", "Unsupported inventory schema or malformed records")
     ids = set()
     for record in inventory["records"]:
         if not isinstance(record, dict):
-            source_error("SOURCE_INVENTORY_INVALID", "Malformed source record")
+            _inventory_error("SOURCE_INVENTORY_INVALID", "Malformed source record")
         keys = {"source_id", "source_revision", "author", "group", "source_artifact", "claim"}
-        ensure_exact_keys(record, allowed=keys, required=keys, field="source_inventory.records")
+        if set(record) != keys:
+            _inventory_error("SOURCE_RECORD_FIELDS", "Source record fields are invalid", sorted(record))
         if record["group"] not in SOURCE_GROUPS or record["author"] not in {"PLANNER", "IMPLEMENTER", "EVALUATOR"}:
-            source_error("SOURCE_INVENTORY_INVALID", "Invalid source ownership")
+            _inventory_error("SOURCE_INVENTORY_INVALID", "Invalid source ownership")
         if not isinstance(record["source_id"], str) or record["source_id"] in ids:
-            source_error("SOURCE_ID_DUPLICATE", "Source IDs must be unique")
+            _inventory_error("SOURCE_ID_DUPLICATE", "Source IDs must be unique")
         ids.add(record["source_id"])
         if record["source_revision"] != stable_fingerprint(
                 {key: value for key, value in record.items() if key != "source_revision"}, length=64):
-            source_error("SOURCE_REVISION_STALE", "Source record has changed")
+            _inventory_error("SOURCE_REVISION_STALE", "Source record has changed")
     if not isinstance(inventory["namespace"], str) or not re.fullmatch(r"[0-9a-f]{24}", inventory["namespace"]):
-        source_error("SOURCE_INVENTORY_INVALID", "Invalid Controller source namespace")
+        _inventory_error("SOURCE_INVENTORY_INVALID", "Invalid Controller source namespace")
     if not isinstance(inventory["transitions"], list):
-        source_error("SOURCE_INVENTORY_INVALID", "Invalid source transitions")
+        _inventory_error("SOURCE_INVENTORY_INVALID", "Invalid source transitions")
     records = {record["source_id"]: record for record in inventory["records"]}
     promoted = set()
     for event in inventory["transitions"]:
         if not isinstance(event, dict) or set(event) != {"source_ref", "target_ref", "disposition", "observation", "evidence"}:
-            source_error("SOURCE_TRANSITION_INVALID", "Malformed source transition")
+            _inventory_error("SOURCE_TRANSITION_INVALID", "Malformed source transition")
         source, target = event["source_ref"], event["target_ref"]
         if not isinstance(source, dict) or not isinstance(target, dict):
-            source_error("SOURCE_TRANSITION_INVALID", "Malformed transition references")
+            _inventory_error("SOURCE_TRANSITION_INVALID", "Malformed transition references")
         left, right = records.get(source.get("source_id")), records.get(target.get("source_id"))
         if (left is None or right is None or source != source_ref(left) or target != source_ref(right)
                 or event["disposition"] != "PROMOTE" or left["group"] not in {"not_affected_consumers", "related_out_of_scope"}
                 or right["group"] != "in_scope_consumers" or left["source_id"] in promoted):
-            source_error("SOURCE_TRANSITION_INVALID", "Promotion must retain valid unique source and target references")
+            _inventory_error("SOURCE_TRANSITION_INVALID", "Promotion must retain valid unique source and target references")
         promoted.add(left["source_id"])
 
 

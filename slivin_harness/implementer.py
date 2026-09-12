@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from slivin_harness.protocol import ArtifactContractError, ensure_exact_keys, plan_fingerprint, require_string_list, require_type, safe_repo_relative, stable_fingerprint
+from slivin_harness.protocol import ArtifactContractError, ArtifactFailureKind, ensure_exact_keys, plan_fingerprint, require_string_list, require_type, safe_repo_relative, stable_fingerprint
 from slivin_harness.impact import impact_error, impact_paths, impact_text, safe_impact_path, validate_owner_prose_boundary, validate_impact_structure
 from slivin_harness.task_contract import validate_task_contract
 from slivin_harness.verification import (
@@ -33,6 +33,22 @@ IMPLEMENTATION_IMPACT_CLOSURE_VERSION = "implementation-impact-closure.v2"
 IMPLEMENTATION_CONTRACT_VERSION = "implementation-contract.v4"
 CONTRACT_ITEM_TYPES = {"acceptance", "preservation", "state", "consumer", "risk", "documentation"}
 CONTRACT_ITEM_SOURCES = {"USER", "PLANNER", "USER+PLANNER", "DISCOVERED"}
+
+
+def _implementation_contract_failure(code: str, field: str, message: str, actual: object = None) -> None:
+    raise ArtifactContractError(
+        code=code, field=field, message=message,
+        expected="An intact Controller-compiled Implementation Contract", actual=actual,
+        failure_kind=ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE,
+    )
+
+
+def _implementer_semantic_failure(code: str, field: str, message: str, actual: object = None) -> None:
+    raise ArtifactContractError(
+        code=code, field=field, message=message,
+        expected="A semantically consistent Implementer report", actual=actual,
+        failure_kind=ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT,
+    )
 
 
 def _impact_rows(*, text: Sequence[str], lists: Sequence[str] = (), proof: bool = False, enums: Mapping[str, Sequence[str]] | None = None) -> dict:
@@ -363,12 +379,14 @@ def validate_implementation_contract(contract: Mapping[str, Any]) -> None:
             actual=contract["protocol_version"],
         )
     if not isinstance(contract["items"], list) or not contract["items"]:
-        raise RuntimeError("Implementation Contract requires at least one item")
+        _implementation_contract_failure("CONTRACT_ITEMS_MISSING", "implementation_contract.items",
+                                         "Implementation Contract requires at least one item", contract["items"])
     validate_source_inventory(contract["source_inventory"])
     ids: set[str] = set()
     for index, item in enumerate(contract["items"]):
         if not isinstance(item, dict):
-            raise RuntimeError(f"Implementation Contract item {index} must be an object")
+            _implementation_contract_failure("CONTRACT_ITEM_TYPE", f"implementation_contract.items[{index}]",
+                                             f"Implementation Contract item {index} must be an object", item)
         ensure_exact_keys(
             item,
             allowed={"id", "type", "source", "requirement", "required_proof", "allow_not_affected"},
@@ -377,31 +395,37 @@ def validate_implementation_contract(contract: Mapping[str, Any]) -> None:
         )
         item_id = str(item["id"])
         if not item_id or item_id in ids:
-            raise RuntimeError(f"Implementation Contract item ids must be non-empty and unique: {item_id!r}")
+            _implementation_contract_failure("CONTRACT_ITEM_ID", f"implementation_contract.items[{index}].id",
+                                             f"Implementation Contract item ids must be non-empty and unique: {item_id!r}", item_id)
         ids.add(item_id)
         if item["type"] not in CONTRACT_ITEM_TYPES:
-            raise RuntimeError(f"Unknown Implementation Contract item type: {item['type']}")
+            _implementation_contract_failure("CONTRACT_ITEM_KIND", f"implementation_contract.items[{index}].type",
+                                             f"Unknown Implementation Contract item type: {item['type']}", item["type"])
         if item["source"] not in CONTRACT_ITEM_SOURCES:
-            raise RuntimeError(f"Unknown Implementation Contract source: {item['source']}")
+            _implementation_contract_failure("CONTRACT_ITEM_SOURCE", f"implementation_contract.items[{index}].source",
+                                             f"Unknown Implementation Contract source: {item['source']}", item["source"])
         if not isinstance(item["requirement"], str) or not item["requirement"].strip():
-            raise RuntimeError(f"Implementation Contract item {item_id} requires requirement text")
+            _implementation_contract_failure("CONTRACT_REQUIREMENT_EMPTY", f"implementation_contract.items[{index}].requirement",
+                                             f"Implementation Contract item {item_id} requires requirement text", item["requirement"])
         validate_merged_required_proof(
             item["required_proof"],
             field=f"implementation_contract.items[{index}].required_proof",
         )
         if item["allow_not_affected"] is not (item["type"] == "consumer"):
-            raise RuntimeError(
-                f"Only consumer items may allow NOT_AFFECTED: {item_id}"
-            )
+            _implementation_contract_failure("CONTRACT_NOT_AFFECTED_POLICY", f"implementation_contract.items[{index}].allow_not_affected",
+                                             f"Only consumer items may allow NOT_AFFECTED: {item_id}", item["allow_not_affected"])
     from .proof_routes import effective_proofs
     effective_proofs(contract)
     if not any(item["type"] == "acceptance" for item in contract["items"]):
-        raise RuntimeError("Implementation Contract must contain acceptance")
+        _implementation_contract_failure("CONTRACT_ACCEPTANCE_MISSING", "implementation_contract.items",
+                                         "Implementation Contract must contain acceptance")
     if not isinstance(contract["warnings"], list) or not all(isinstance(item, str) for item in contract["warnings"]):
-        raise RuntimeError("Implementation Contract warnings must be strings")
+        _implementation_contract_failure("CONTRACT_WARNINGS_TYPE", "implementation_contract.warnings",
+                                         "Implementation Contract warnings must be strings", contract["warnings"])
     expected = stable_fingerprint({key: value for key, value in contract.items() if key != "fingerprint"})
     if contract["fingerprint"] != expected:
-        raise RuntimeError("Implementation Contract fingerprint mismatch")
+        _implementation_contract_failure("CONTRACT_FINGERPRINT", "implementation_contract.fingerprint",
+                                         "Implementation Contract fingerprint mismatch", contract["fingerprint"])
 
 
 def compact_plan_context(plan: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -426,6 +450,14 @@ def _same_impact_text(left: str, right: str) -> bool:
 
 def _impact_mismatch(code: str, message: str, actual: object) -> None:
     impact_error(code, field="post_patch_impact", message=message, actual=actual)
+
+
+def _impact_artifact_failure(code: str, message: str, actual: object) -> None:
+    raise ArtifactContractError(
+        code=code, field="implementation_impact_closure", message=message,
+        expected="Current immutable Controller-normalized impact artifact", actual=actual,
+        failure_kind=ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE,
+    )
 
 
 def materialize_post_patch_impact(report: Mapping[str, Any], *, contract: Mapping[str, Any],
@@ -629,10 +661,11 @@ def validate_implementation_impact_closure(
     contract: Mapping[str, Any], changed_paths: Sequence[str], revision_binding: Mapping[str, Any] | None = None,
 ) -> None:
     keys = {"schema_version", "status", "candidate_id", "plan_fingerprint", "implementation_contract_fingerprint", "changed_paths", "post_patch_impact", "source_inventory", "source_assessments", "revision_binding", "fingerprint"}
-    ensure_exact_keys(dict(artifact), allowed=keys, required=keys, field="implementation_impact_closure")
+    if set(artifact) != keys:
+        _impact_artifact_failure("POST_PATCH_ARTIFACT_FIELDS", "Impact artifact fields are invalid", sorted(artifact))
     expected = stable_fingerprint({key: value for key, value in artifact.items() if key != "fingerprint"}, length=64)
     if artifact["fingerprint"] != expected:
-        _impact_mismatch("POST_PATCH_ARTIFACT_FINGERPRINT", "Impact artifact fingerprint mismatch", artifact["fingerprint"])
+        _impact_artifact_failure("POST_PATCH_ARTIFACT_FINGERPRINT", "Impact artifact fingerprint mismatch", artifact["fingerprint"])
     if (
         artifact["schema_version"] != IMPLEMENTATION_IMPACT_CLOSURE_VERSION or artifact["status"] != "PASS"
         or artifact["candidate_id"] != candidate_id
@@ -642,7 +675,7 @@ def validate_implementation_impact_closure(
         or artifact["changed_paths"] != sorted(safe_impact_path(path, field="changed_paths") for path in changed_paths)
         or artifact["revision_binding"] != dict(revision_binding or {})
     ):
-        _impact_mismatch("POST_PATCH_ARTIFACT_STALE", "Impact artifact does not bind the current candidate/plan/contract/revisions", artifact)
+        _impact_artifact_failure("POST_PATCH_ARTIFACT_STALE", "Impact artifact does not bind the current candidate/plan/contract/revisions", artifact)
     replay = copy.deepcopy(artifact["post_patch_impact"])
     for group in SOURCE_GROUPS:
         replay[group] = []
@@ -651,7 +684,7 @@ def validate_implementation_impact_closure(
         {"status": "COMPLETE", "post_patch_impact": replay}, contract=contract, plan=plan, require_expanded=True,
     )
     if reconstructed != artifact["post_patch_impact"]:
-        _impact_mismatch("POST_PATCH_SOURCE_COVERAGE", "Canonical impact differs from immutable origins and explicit assessments", None)
+        _impact_artifact_failure("POST_PATCH_SOURCE_COVERAGE", "Canonical impact differs from immutable origins and explicit assessments", None)
 
 
 def validate_implementation_report(
@@ -676,22 +709,30 @@ def validate_implementation_report(
     ensure_exact_keys(report, allowed=IMPLEMENTER_REPORT_SCHEMA["properties"],
                       required=IMPLEMENTER_REPORT_SCHEMA["required"], field="report")
     if report.get("protocol_version") != IMPLEMENTER_PROTOCOL_VERSION:
-        raise RuntimeError(f"Implementer protocol mismatch: {report.get('protocol_version')!r}")
+        raise ArtifactContractError(
+            code="IMPLEMENTER_VERSION", field="protocol_version",
+            message=f"Implementer protocol mismatch: {report.get('protocol_version')!r}",
+            expected=IMPLEMENTER_PROTOCOL_VERSION, actual=report.get("protocol_version"),
+        )
 
     status_value = report.get("status")
     if status_value not in set(enum_values(ImplementerStatus)):
-        raise RuntimeError(
-            "Implementer status must be COMPLETE, REPLAN_REQUIRED, BLOCKED, or "
-            "NEEDS_USER_DECISION"
+        _implementer_semantic_failure(
+            "IMPLEMENTER_STATUS", "status",
+            "Implementer status must be COMPLETE, REPLAN_REQUIRED, BLOCKED, or NEEDS_USER_DECISION",
+            status_value,
         )
     if report.get("terminal_reason_kind") not in IMPLEMENTER_TERMINAL_REASONS[status_value]:
-        raise RuntimeError(
-            f"{status_value} requires terminal_reason_kind in "
-            f"{IMPLEMENTER_TERMINAL_REASONS[status_value]!r}"
+        _implementer_semantic_failure(
+            "IMPLEMENTER_TERMINAL_REASON", "terminal_reason_kind",
+            f"{status_value} requires terminal_reason_kind in {IMPLEMENTER_TERMINAL_REASONS[status_value]!r}",
+            report.get("terminal_reason_kind"),
         )
     summary = report.get("summary")
     if not isinstance(summary, str) or not summary.strip():
-        raise RuntimeError("Implementer summary must be a non-empty string")
+        raise ArtifactContractError(code="IMPLEMENTER_SUMMARY_EMPTY", field="summary",
+            message="Implementer summary must be a non-empty string",
+            expected="A non-empty summary", actual=summary)
     require_type(report.get("post_patch_impact"), dict, field="post_patch_impact")
 
     # Validate paths regardless of terminal status; report data must not escape
@@ -706,12 +747,14 @@ def validate_implementation_report(
             # These fields are the allowlisted feedback carried to fresh Planner.
             # A generic blocker/ledger row cannot substitute for the proof diagnosis.
             if not isinstance(report.get("reason"), str) or not report["reason"].strip():
-                raise RuntimeError("PROOF_MODEL_DIVERGENCE requires a concrete reason")
+                _implementer_semantic_failure("PROOF_DIVERGENCE_REASON", "reason",
+                                              "PROOF_MODEL_DIVERGENCE requires a concrete reason")
             evidence = report.get("evidence")
             if not isinstance(evidence, list) or not evidence or any(
                 not isinstance(item, str) or not item.strip() for item in evidence
             ):
-                raise RuntimeError("PROOF_MODEL_DIVERGENCE requires concrete evidence")
+                _implementer_semantic_failure("PROOF_DIVERGENCE_EVIDENCE", "evidence",
+                                              "PROOF_MODEL_DIVERGENCE requires concrete evidence", evidence)
         blockers = report.get("blockers", [])
         reason = report.get("reason")
         if not isinstance(reason, str) or not reason.strip():
@@ -731,25 +774,37 @@ def validate_implementation_report(
                 derived.extend(str(item).strip() for item in blockers if str(item).strip())
             evidence = derived
         if not reason:
-            raise RuntimeError(f"{status_value} requires a concrete reason")
+            _implementer_semantic_failure("IMPLEMENTER_REASON_MISSING", "reason",
+                                          f"{status_value} requires a concrete reason")
         if not evidence:
-            raise RuntimeError(f"{status_value} requires concrete evidence")
+            _implementer_semantic_failure("IMPLEMENTER_EVIDENCE_MISSING", "evidence",
+                                          f"{status_value} requires concrete evidence", evidence)
         validate_post_patch_impact(
             report, workspace=workspace, changed_paths=changed_paths, plan=plan, contract=contract,
             owner_allowed_paths=owner_allowed_paths,
         )
         return
 
-    from .phase4 import validate_implementer_report as validate_phase4_report
+    from .phase4 import Phase4ContractError, validate_implementer_report as validate_phase4_report
 
-    validate_phase4_report(
-        report,
-        active_contract_items=contract["items"],
-        require_receipt=False,
-    )
+    try:
+        validate_phase4_report(
+            report,
+            active_contract_items=contract["items"],
+            require_receipt=False,
+        )
+    except Phase4ContractError as error:
+        raise ArtifactContractError(
+            code="IMPLEMENTER_REPORT_SEMANTIC_CONFLICT", field="report",
+            message=str(error), expected="A report consistent with every active Contract item",
+            failure_kind=ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT,
+        ) from error
     if not self_verification_ok:
-        raise RuntimeError(
-            "Implementer COMPLETE requires trusted self-verification PASS on the current candidate"
+        raise ArtifactContractError(
+            code="IMPLEMENTER_TRUSTED_VERIFICATION_MISSING", field="self_verification",
+            message="Implementer COMPLETE requires trusted self-verification PASS on the current candidate",
+            expected="Controller-confirmed self-verification PASS",
+            failure_kind=ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE,
         )
     validate_post_patch_impact(
         report, workspace=workspace, changed_paths=changed_paths, plan=plan, contract=contract,

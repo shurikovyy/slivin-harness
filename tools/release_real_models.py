@@ -221,7 +221,7 @@ def validate_stage_payloads(*, run: Path, acceptance: dict, handoff: dict, candi
         report = one('implementer','implementer.v6')
         impact = one('implementer','implementation-impact-closure.v2')
         audit = one('evaluator','blind-audit.v2')
-        evaluation = one('evaluator','evaluator.v7')
+        evaluation = one('evaluator','evaluator.v8')
         closure = one('evaluator','contract-closure.v1')
         runtime = one('runtime_verification','runtime-evidence.v1')
         if (task['status'] != 'READY' or plan['status'] != 'READY' or tool_evidence['status'] != 'PASS'
@@ -335,7 +335,7 @@ def stage_payload_fault_controls(*, run: Path, acceptance: dict, handoff: dict,
     checks_path = checks_paths[0]
     runtime_path = one_path('runtime_verification', 'runtime-evidence.v1')
     capability_path = one_path('implementation_contract', 'capability-gate.v1')
-    evaluation_path = one_path('evaluator', 'evaluator.v7')
+    evaluation_path = one_path('evaluator', 'evaluator.v8')
     audit_path = one_path('evaluator', 'blind-audit.v2')
     before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in payloads}
     original_read = Path.read_text

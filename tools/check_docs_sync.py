@@ -120,11 +120,11 @@ def _check_one_h1(path: Path) -> None:
 
 
 def main() -> int:
-    _assert(__version__ == "0.8.0a31", f"Unexpected Harness version: {__version__}")
+    _assert(__version__ == "0.8.0a32", f"Unexpected Harness version: {__version__}")
     _assert(MANIFEST_VERSION == 2, f"Unexpected manifest version: {MANIFEST_VERSION}")
     _assert(PLANNER_PROTOCOL_VERSION == "planner.v6", PLANNER_PROTOCOL_VERSION)
     _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v4", IMPLEMENTATION_CONTRACT_VERSION)
-    _assert(EVALUATOR_PROTOCOL_VERSION == "evaluator.v7", EVALUATOR_PROTOCOL_VERSION)
+    _assert(EVALUATOR_PROTOCOL_VERSION == "evaluator.v8", EVALUATOR_PROTOCOL_VERSION)
     _assert(IMPLEMENTER_PROTOCOL_VERSION == "implementer.v6", IMPLEMENTER_PROTOCOL_VERSION)
     _assert(WORKFLOW_VERSION == "workflow.v7", WORKFLOW_VERSION)
     _assert(RUN_STATE_VERSION == "run-state.v1", RUN_STATE_VERSION)
@@ -214,14 +214,14 @@ def main() -> int:
         for path in [ROOT / "README.md", docs_dir / "ARCHITECTURE.md", docs_dir / "QUALITY_MODEL.md"]
     )
     for marker in (
-        "0.8.0a31",
+        "0.8.0a32",
         "version = 2",
         "task-contract.v1",
         "planner.v6",
         "implementer.v6",
         "implementation-contract.v4",
         "verification-plan.v1",
-        "evaluator.v7",
+        "evaluator.v8",
         WORKFLOW_VERSION,
         RUN_STATE_VERSION,
         CANDIDATE_IDENTITY_VERSION,

@@ -14,7 +14,7 @@ from slivin_harness.implementer import (
 )
 from slivin_harness.phase5 import expand_contract_and_verification_plan
 from slivin_harness.impact import validate_owner_prose_boundary
-from slivin_harness.protocol import ArtifactContractError, plan_fingerprint
+from slivin_harness.protocol import ArtifactContractError, ArtifactFailureKind, plan_fingerprint
 from slivin_harness.run_state import build_candidate_identity
 from slivin_harness.task_contract import build_task_contract
 from slivin_harness.verification import compile_verification_plan
@@ -288,8 +288,9 @@ class ImplementerImpactClosureTests(unittest.TestCase):
     def test_tampered_artifact_fingerprint_is_rejected(self):
         artifact, context = self.artifact()
         artifact["post_patch_impact"]["closure_summary"] = "Forged."
-        with self.assertRaisesRegex(ArtifactContractError, "fingerprint mismatch"):
+        with self.assertRaisesRegex(ArtifactContractError, "fingerprint mismatch") as raised:
             validate_implementation_impact_closure(artifact, **context)
+        self.assertIs(raised.exception.failure_kind, ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE)
 
     def test_repair_changes_candidate_and_invalidates_old_closure(self):
         old, context = self.artifact()
