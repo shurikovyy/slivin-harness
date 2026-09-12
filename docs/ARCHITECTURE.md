@@ -663,6 +663,14 @@ repository AGENTS.md. В synthetic native acceptance Controller задаёт о�
 `ReadAllText` commands для root и nested instructions; успешный `commandExecution` с
 project cwd и `exitCode=0` является authority независимо от наличия marker в
 `aggregatedOutput`. Echo/другая команда с текстом `AGENTS.md` evidence не создаёт.
+Также synthetic sandbox probe исполняет immutable `sandbox_probe.cjs` с точными
+Controller-selected project/scratch/sibling/private/peer аргументами. Script сам
+проверяет cwd, TEMP/TMP/os.tmpdir, scratch write/read, полный набор protected
+operations и только EPERM/EACCES для каждого отказа; нарушение даёт non-zero exit.
+Authority приёмки — один exact `commandExecution` с project cwd и `exitCode=0`.
+`PROBE_RESULT` в `aggregatedOutput` дополняет diagnostics, но не требуется для PASS;
+отсутствующие per-operation details не восстанавливаются из exit code. Child-process
+observation остаётся diagnostic и не входит в sandbox acceptance contract.
 Reported instruction sources из `.harness_tmp` отклоняются, чтобы stale temporary
 instructions не попадали в fresh роль. Initial/replan Planner и fresh Evaluator получают
 пустые отдельные roots. Перед очисткой semantic reset архивирует старые scoped

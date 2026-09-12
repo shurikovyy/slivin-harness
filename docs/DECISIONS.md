@@ -468,6 +468,14 @@ project cwd и `exitCode=0`; marker в `aggregatedOutput` только допо�
 не обязателен. Echo или другая команда, содержащая имя/marker instruction file,
 не принимается. Это уточняет Controller evidence D-013 и не меняет permission,
 Jest/cache или invariance boundaries решения.
+То же command-evidence authority действует для synthetic sandbox canary: immutable
+`sandbox_probe.cjs` получает Controller-selected project/scratch/sibling/private/peer,
+сам валидирует cwd, TEMP/TMP/os.tmpdir, обе positive и все 20 negative operations,
+включая EPERM/EACCES reason, и завершает non-zero при нарушении. Controller принимает
+ровно один exact probe command с project cwd и `exitCode=0`; `PROBE_RESULT` —
+необязательная диагностика. Отсутствие stdout не превращает успешный self-validating
+probe в FAIL и не даёт права придумывать per-operation details. Это уточнение
+существующего D-013/D-018, а не расширение sandbox или child-process contract.
 Локальные пакеты `slivin-scoped-scratch-391996c9b6/mechanism-*` и
 `production-native-*` содержат запрос, reported profile, command/exit/output и invariance.
 Исходный `slivin-planner-sandbox-smoke-3dbfda4104` не изменялся.

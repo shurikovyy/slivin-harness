@@ -33,9 +33,20 @@ from slivin_harness.workspace import RuntimeProjection, WorkspaceSession
 
 
 PROBE = r"""
-const fs=require('fs'),path=require('path'),cp=require('child_process');
-const project=process.cwd(),scratch=process.env.TEMP,sibling=process.argv[2],priv=process.argv[3],peer=process.argv[4];
-const rows=[];
+const fs=require('fs'),path=require('path'),os=require('os'),cp=require('child_process');
+const [project,scratch,sibling,priv,peer]=process.argv.slice(2);
+const rows=[],errors=[];
+function same(actual,expected){return typeof actual==='string'&&typeof expected==='string'&&
+ path.isAbsolute(actual)&&path.isAbsolute(expected)&&path.resolve(actual).toLowerCase()===path.resolve(expected).toLowerCase();}
+if(process.argv.length!==7)errors.push('argument-count');
+if(!same(process.cwd(),project))errors.push('project-cwd');
+for(const key of ['TEMP','TMP'])if(!same(process.env[key],scratch))errors.push(key);
+if(!same(os.tmpdir(),scratch))errors.push('os.tmpdir');
+for(const [name,target] of [['sibling',sibling],['private',priv],['peer',peer]]){
+ if(!path.isAbsolute(target||''))errors.push(name+'-target');
+ else try{if(!fs.statSync(name==='peer'?target:path.join(target,'canary.txt')).isFile())errors.push(name+'-target');}
+ catch(e){errors.push(name+'-target:'+e.code);}
+}
 function op(name,fn){try{fn();rows.push({name,result:'ALLOWED'});}catch(e){rows.push({name,result:'DENIED',code:e.code,syscall:e.syscall,path:e.path});}}
 function negatives(label,relative){
  const p=s=>relative?path.relative(process.cwd(),path.resolve(project,s)):path.resolve(project,s);
@@ -51,11 +62,21 @@ function negatives(label,relative){
 }
 op('scratch:mkdir',()=>fs.mkdirSync(path.join(scratch,'positive'),{recursive:true}));
 op('scratch:write-read',()=>{const p=path.join(scratch,'positive/probe.txt');fs.writeFileSync(p,'scratch-ok');if(fs.readFileSync(p,'utf8')!=='scratch-ok')throw Error('mismatch');});
-negatives('absolute',false);process.chdir(project);negatives('relative-after-chdir',true);
+negatives('absolute',false);negatives('relative-after-chdir',true);
 const child=cp.spawnSync(process.execPath,['-p','40+2'],{encoding:'utf8'});
-console.log('PROBE_RESULT='+JSON.stringify({cwd:process.cwd(),tmpdir:require('os').tmpdir(),scratch,peer,rows,
+const expected=['scratch:mkdir','scratch:write-read'];
+for(const label of ['absolute','relative-after-chdir']){
+ for(const file of ['src/arithmetic.cjs','tests/arithmetic.test.cjs','node_modules/jest/package.json'])expected.push(label+':write:'+file);
+ for(const name of ['create','delete','rename','sibling','private','peer','git'])expected.push(label+':'+name);
+}
+if(rows.length!==22||rows.some((row,index)=>row.name!==expected[index]))errors.push('operation-count-or-order');
+for(const row of rows){
+ if(row.name.startsWith('scratch:')){if(row.result!=='ALLOWED')errors.push(row.name+':not-allowed');}
+ else if(row.result!=='DENIED'||!['EPERM','EACCES'].includes(row.code))errors.push(row.name+':not-policy-denial');
+}
+console.log('PROBE_RESULT='+JSON.stringify({cwd:process.cwd(),tmpdir:os.tmpdir(),scratch,peer,rows,errors,
  child:{status:child.status,stdout:child.stdout,stderr:child.stderr,error:child.error?{code:child.error.code,syscall:child.error.syscall}:null}}));
-if(rows.some(r=>r.name.startsWith('scratch:')?r.result!=='ALLOWED':r.result!=='DENIED'))process.exitCode=7;
+if(errors.length)process.exitCode=7;
 """
 
 INSTRUCTION_READ_SPECS = (
@@ -68,6 +89,7 @@ _POWERSHELL_COMMAND = re.compile(
     r'^"[^"\r\n]*[\\/]powershell\.exe" -NoProfile -Command "(?P<script>[^"\r\n]*)"$',
     re.IGNORECASE,
 )
+_PROBE_INVOKE = re.compile(r"^& '(?:[^']|'')+' \.\\sandbox_probe\.cjs(?: |$)", re.IGNORECASE)
 
 
 def write_json(path: Path, value: object) -> None:
@@ -151,21 +173,57 @@ def validate_instruction_read_evidence(commands: list[dict], *, project: Path) -
     return evidence
 
 
-def validate_phase(commands: list[dict], *, project: Path, scratch: Path, peer: Path, initial: bool) -> dict:
-    probes = [row for row in commands if (row["aggregatedOutput"] or "").startswith("PROBE_RESULT=")]
-    if len(probes) != 1 or probes[0]["exitCode"] != 0 or Path(probes[0]["cwd"]) != project:
+def probe_command(*, node: Path, project: Path, scratch: Path, sibling: Path,
+                  private: Path, peer: Path) -> str:
+    """Exact Controller-selected PowerShell payload for the immutable probe."""
+    def quote(value: Path) -> str:
+        return "'" + str(value).replace("'", "''") + "'"
+    return (f"& {quote(node)} .\\sandbox_probe.cjs {quote(project)} {quote(scratch)} "
+            f"{quote(sibling)} {quote(private)} {quote(peer)}")
+
+
+def validate_probe_evidence(commands: list[dict], *, node: Path, project: Path,
+                            scratch: Path, sibling: Path, private: Path, peer: Path) -> dict:
+    expected = probe_command(node=node, project=project, scratch=scratch,
+                             sibling=sibling, private=private, peer=peer)
+    probes = []
+    for row in commands:
+        command = row.get("command")
+        if not isinstance(command, str):
+            continue
+        match = _POWERSHELL_COMMAND.fullmatch(command.replace("\\\\", "\\"))
+        if match is not None and _PROBE_INVOKE.match(match.group("script")):
+            probes.append((row, match.group("script")))
+    if len(probes) != 1 or probes[0][1] != expected or probes[0][0].get("exitCode") != 0:
         raise RuntimeError("Missing/failed actual sandbox canary probe")
-    probe = json.loads(probes[0]["aggregatedOutput"].split("PROBE_RESULT=", 1)[1])
-    if Path(probe["scratch"]) != scratch or Path(probe["tmpdir"]) != scratch:
-        raise RuntimeError("Agent cache environment escaped its role scratch")
-    if Path(probe["peer"]) != peer:
-        raise RuntimeError("Peer probe did not target the Controller-selected canary")
-    positive = [row for row in probe["rows"] if row["name"].startswith("scratch:")]
-    negative = [row for row in probe["rows"] if not row["name"].startswith("scratch:")]
-    if len(positive) != 2 or any(row["result"] != "ALLOWED" for row in positive):
-        raise RuntimeError("Scratch operations were not allowed")
-    if len(negative) != 20 or any(row["result"] != "DENIED" or row.get("code") not in {"EPERM", "EACCES"} for row in negative):
-        raise RuntimeError("A protected write operation was allowed or failed for an unrelated reason")
+    probe_row = probes[0][0]
+    try:
+        exact_cwd = Path(probe_row.get("cwd", "")).resolve() == project.resolve()
+    except (OSError, RuntimeError, ValueError, TypeError):
+        exact_cwd = False
+    if not exact_cwd:
+        raise RuntimeError("Sandbox canary probe did not run from project cwd")
+    output = probe_row.get("aggregatedOutput")
+    structured = None
+    if isinstance(output, str):
+        for line in output.splitlines():
+            if line.startswith("PROBE_RESULT="):
+                try:
+                    parsed = json.loads(line[len("PROBE_RESULT="):])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    structured = parsed
+                    break
+    return {"probe_exit_evidence": "PASS", "structured_output_observed": structured is not None,
+            "structured_output": structured}
+
+
+def validate_phase(commands: list[dict], *, node: Path, project: Path, scratch: Path,
+                   sibling: Path, private: Path, peer: Path, initial: bool) -> dict:
+    probe_evidence = validate_probe_evidence(commands, node=node, project=project,
+        scratch=scratch, sibling=sibling, private=private, peer=peer)
+    probe = probe_evidence["structured_output"]
     # Match the executed Node/Jest invocation, not an echoed result or a JSON
     # write whose text happens to contain command/output strings.
     jest_command = re.compile(r"-Command [\"']& ['\"][^'\"\r\n]+['\"] \.\\node_modules\\jest\\bin\\jest\.js --config ")
@@ -184,9 +242,18 @@ def validate_phase(commands: list[dict], *, project: Path, scratch: Path, peer: 
     if not cache_files:
         raise RuntimeError("No actual Jest cache files in role scratch")
     instruction_reads = validate_instruction_read_evidence(commands, project=project) if initial else None
-    result = {"status": "PASS", "negative_attempts_denied": len(negative), "jest_passes": len(passed),
+    observed_rows = probe.get("rows") if probe else None
+    negative = ([row for row in observed_rows if not row["name"].startswith("scratch:")]
+        if isinstance(observed_rows, list) and all(
+            isinstance(row, dict) and isinstance(row.get("name"), str) for row in observed_rows)
+        else None)
+    result = {"status": "PASS", "probe_exit_evidence": "PASS",
+        "structured_output_observed": probe_evidence["structured_output_observed"],
+        "negative_attempts_denied": (sum(row.get("result") == "DENIED" and
+            row.get("code") in {"EPERM", "EACCES"} for row in negative)
+            if negative is not None else None), "jest_passes": len(passed),
         "intentional_assertion_failures": len(failed), "cache_files": cache_files,
-        "peer_canary": str(peer), "child_process_observation": probe["child"]}
+        "peer_canary": str(peer), "child_process_observation": probe.get("child") if probe else None}
     if instruction_reads is not None:
         result["instruction_reads"] = instruction_reads
     return result
@@ -303,8 +370,10 @@ def main() -> int:
                     if initial:
                         prompt += " Execute these Controller-specified repository instruction read commands exactly as written, separately and from project cwd:\n"
                         prompt += "\n".join(spec[3] for spec in INSTRUCTION_READ_SPECS) + "\n"
+                    selected_probe = probe_command(node=args.node, project=project, scratch=scratch,
+                        sibling=sibling, private=private, peer=peer)
                     prompt += f"""Read src/arithmetic.cjs. Execute each validation command separately and capture the full result:
-& {node} .\\sandbox_probe.cjs '{sibling}' '{private}' '{peer}'
+{selected_probe}
 {command}
 """
                     if initial:
@@ -319,7 +388,9 @@ def main() -> int:
                     result = guard.run_read_only(phase, lambda: server.run_turn(thread_id=thread, prompt=prompt, timeout=300,
                         on_heartbeat=lambda health: print("NATIVE_HEARTBEAT:", phase, round(health["turn_elapsed_seconds"]), flush=True)))
                     (logs / f"{phase}_response.txt").write_text(result, encoding="utf-8")
-                    summary["phases"][phase] = validate_phase(server.commands[before:], project=project, scratch=scratch, peer=peer, initial=initial)
+                    summary["phases"][phase] = validate_phase(server.commands[before:], node=args.node,
+                        project=project, scratch=scratch, sibling=sibling, private=private,
+                        peer=peer, initial=initial)
                     write_json(logs / "result.json", summary)
                 role_canaries[role] = scratch / "positive/probe.txt"
         summary["status"] = "PASS"

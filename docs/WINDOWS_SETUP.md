@@ -229,6 +229,12 @@ Evaluator instructions. It never installs packages or changes ACL/config/sandbox
 It records actual command/cwd/exit/output, thread policy, versions, cached cold/warm and
 fresh-role Jest passes, an executed intentional assertion failure, scratch write/read,
 and denied absolute/relative project/test/dependency/Git/private/peer/neighbor operations.
+The immutable probe checks its own expected project cwd, role scratch environment,
+Controller-selected targets, operation counts and EPERM/EACCES denial reasons before
+returning exit code 0. Acceptance requires the exact Controller command, project cwd
+and one successful execution; App Server `aggregatedOutput` may be absent. When it is
+absent, `result.json` records exit evidence but leaves per-operation and child-process
+diagnostics unavailable rather than reconstructing them.
 Peer checks also target the granted scratch of another active role in both directions;
 an ungranted sibling directory alone does not prove per-thread isolation.
 Continuations check the same policy; fresh Planner follows scratch cleanup. Existing
