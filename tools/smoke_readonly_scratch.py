@@ -9,7 +9,6 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -23,6 +22,10 @@ sys.path.insert(0, str(ROOT))
 from slivin_harness import __version__
 from slivin_harness.app_server import CodexAppServer
 from slivin_harness.control_plane import ControllerPlane, is_within
+from slivin_harness.codex_transport import (
+    CAPTURED_FORM_ORIGINS, TRANSPORT_SCHEMA, CanonicalExecutedCommand, CodexTransportAdapter,
+    CodexTransportError, require_output, same_windows_path,
+)
 from slivin_harness.evaluator import EVALUATOR_INSTRUCTIONS
 from slivin_harness.execution import ExecutionBroker, ExecutionRole
 from slivin_harness.git_integrity import CandidateWorkspaceBaseline, GitControlIntegrityManager, TrustedBatchIntegrityCoordinator
@@ -85,13 +88,6 @@ INSTRUCTION_READ_SPECS = (
     ("nested", "src/AGENTS.md", "NESTED_INSTRUCTIONS_READ",
      r"[System.IO.File]::ReadAllText('src\AGENTS.md', [System.Text.Encoding]::UTF8)"),
 )
-_POWERSHELL_COMMAND = re.compile(
-    r'^"[^"\r\n]*[\\/]powershell\.exe" -NoProfile -Command "(?P<script>[^"\r\n]*)"$',
-    re.IGNORECASE,
-)
-_PROBE_INVOKE = re.compile(r"^& '(?:[^']|'')+' \.\\sandbox_probe\.cjs(?: |$)", re.IGNORECASE)
-
-
 def write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -109,7 +105,8 @@ class ObservedServer(CodexAppServer):
         super().__init__(*args, **kwargs)
         self.log_root = log_root
         self.phase = "startup"
-        self.commands: list[dict] = []
+        self.transport = CodexTransportAdapter()
+        self.commands = self.transport.commands
 
     def request(self, method, params, **kwargs):
         if method in {"thread/start", "turn/start", "thread/archive"}:
@@ -120,55 +117,60 @@ class ObservedServer(CodexAppServer):
     def _receive_raw_optional(self, timeout):
         message = super()._receive_raw_optional(timeout)
         if message:
-            item = message.get("params", {}).get("item", {})
+            if not isinstance(message, dict):
+                raise CodexTransportError("MALFORMED_TRANSPORT_EVENT")
             method = message.get("method")
+            if method not in {"item/completed", "item/commandExecution/outputDelta"}:
+                return message
+            params = message.get("params")
+            if not isinstance(params, dict):
+                raise CodexTransportError("MALFORMED_TRANSPORT_EVENT")
+            item = params.get("item")
+            if method == "item/completed" and not isinstance(item, dict):
+                raise CodexTransportError("MALFORMED_TRANSPORT_EVENT")
             if method == "item/completed" and item.get("type") == "commandExecution":
                 record = {"phase": self.phase, **{key: item.get(key) for key in (
                     "id", "command", "cwd", "exitCode", "durationMs", "aggregatedOutput")}}
-                self.commands.append(record)
                 with (self.log_root / "commands.jsonl").open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+                self.transport.observe_completed(item, phase=self.phase,
+                    thread_id=params.get("threadId"), turn_id=params.get("turnId"))
                 print("NATIVE_COMMAND:", self.phase, item.get("exitCode"), flush=True)
             elif method == "item/commandExecution/outputDelta":
                 with (self.log_root / "output_deltas.jsonl").open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps({"phase": self.phase, "params": message["params"]}, ensure_ascii=False) + "\n")
+                self.transport.observe_delta(params, phase=self.phase)
         return message
 
 
-def validate_instruction_read_evidence(commands: list[dict], *, project: Path) -> dict:
+def _require_execution(commands: list[CanonicalExecutedCommand], *, expected: str,
+                       project: Path, exit_code: int, label: str,
+                       route: str | None = None) -> CanonicalExecutedCommand:
+    candidates = [row for row in commands if row.payload == expected or (
+        route is not None and row.payload.startswith("& '") and route in row.payload
+    )]
+    if len(candidates) > 1:
+        raise CodexTransportError("DUPLICATE_EXECUTION", context=label, layer="consumer")
+    if not candidates or candidates[0].shell != "powershell" or candidates[0].payload != expected or (
+        not same_windows_path(candidates[0].cwd, str(project))
+    ):
+        raise CodexTransportError("COMMAND_IDENTITY_MISMATCH", context=label, layer="consumer")
+    if candidates[0].exit_code != exit_code:
+        raise CodexTransportError("COMMAND_EXECUTION_FAILED", context=label,
+            item_id=candidates[0].item_id, layer="consumer")
+    return candidates[0]
+
+
+def validate_instruction_read_evidence(commands: list[CanonicalExecutedCommand], *, project: Path) -> dict:
     """Require the exact Controller-provided root and nested read commands."""
-    project = project.resolve()
     evidence = {}
     for label, relative_path, marker, expected_script in INSTRUCTION_READ_SPECS:
-        successful = []
-        for row in commands:
-            command = row.get("command")
-            cwd = row.get("cwd")
-            if not isinstance(command, str) or not isinstance(cwd, str):
-                continue
-            # App Server commandExecution escapes Windows separators in its
-            # rendered command. Collapse only that transport spelling before
-            # comparing the complete PowerShell payload.
-            rendered = command.replace("\\\\", "\\")
-            match = _POWERSHELL_COMMAND.fullmatch(rendered)
-            if match is None or match.group("script") != expected_script:
-                continue
-            try:
-                exact_cwd = Path(cwd).resolve() == project
-            except (OSError, RuntimeError, ValueError):
-                exact_cwd = False
-            if exact_cwd and row.get("exitCode") == 0:
-                successful.append(row)
-        if not successful:
-            raise RuntimeError(
-                f"Missing/failed exact repository instruction read: {relative_path}"
-            )
+        row = _require_execution(commands, expected=expected_script, project=project,
+            exit_code=0, label=relative_path)
         evidence[label] = {
             "status": "PASS",
             "path": relative_path,
-            "output_marker_observed": any(
-                marker in (row.get("aggregatedOutput") or "") for row in successful
-            ),
+            "output_marker_observed": marker in (row.output or ""),
         }
     return evidence
 
@@ -182,28 +184,13 @@ def probe_command(*, node: Path, project: Path, scratch: Path, sibling: Path,
             f"{quote(sibling)} {quote(private)} {quote(peer)}")
 
 
-def validate_probe_evidence(commands: list[dict], *, node: Path, project: Path,
+def validate_probe_evidence(commands: list[CanonicalExecutedCommand], *, node: Path, project: Path,
                             scratch: Path, sibling: Path, private: Path, peer: Path) -> dict:
     expected = probe_command(node=node, project=project, scratch=scratch,
                              sibling=sibling, private=private, peer=peer)
-    probes = []
-    for row in commands:
-        command = row.get("command")
-        if not isinstance(command, str):
-            continue
-        match = _POWERSHELL_COMMAND.fullmatch(command.replace("\\\\", "\\"))
-        if match is not None and _PROBE_INVOKE.match(match.group("script")):
-            probes.append((row, match.group("script")))
-    if len(probes) != 1 or probes[0][1] != expected or probes[0][0].get("exitCode") != 0:
-        raise RuntimeError("Missing/failed actual sandbox canary probe")
-    probe_row = probes[0][0]
-    try:
-        exact_cwd = Path(probe_row.get("cwd", "")).resolve() == project.resolve()
-    except (OSError, RuntimeError, ValueError, TypeError):
-        exact_cwd = False
-    if not exact_cwd:
-        raise RuntimeError("Sandbox canary probe did not run from project cwd")
-    output = probe_row.get("aggregatedOutput")
+    probe_row = _require_execution(commands, expected=expected, project=project,
+        exit_code=0, label="sandbox_probe.cjs", route=" .\\sandbox_probe.cjs ")
+    output = probe_row.output
     structured = None
     if isinstance(output, str):
         for line in output.splitlines():
@@ -219,23 +206,39 @@ def validate_probe_evidence(commands: list[dict], *, node: Path, project: Path,
             "structured_output": structured}
 
 
-def validate_phase(commands: list[dict], *, node: Path, project: Path, scratch: Path,
+def jest_command(node: Path, test_file: str) -> str:
+    quote = "'" + str(node).replace("'", "''") + "'"
+    return (f"& {quote} .\\node_modules\\jest\\bin\\jest.js --config .\\jest.config.cjs "
+            f"--runInBand --runTestsByPath .\\tests\\{test_file} --watch=false")
+
+
+def validate_phase(commands: list[CanonicalExecutedCommand], *, node: Path, project: Path, scratch: Path,
                    sibling: Path, private: Path, peer: Path, initial: bool) -> dict:
     probe_evidence = validate_probe_evidence(commands, node=node, project=project,
         scratch=scratch, sibling=sibling, private=private, peer=peer)
     probe = probe_evidence["structured_output"]
-    # Match the executed Node/Jest invocation, not an echoed result or a JSON
-    # write whose text happens to contain command/output strings.
-    jest_command = re.compile(r"-Command [\"']& ['\"][^'\"\r\n]+['\"] \.\\node_modules\\jest\\bin\\jest\.js --config ")
-    jest = [row for row in commands if jest_command.search(row["command"].replace("\\\\", "\\"))
-        and "--runTestsByPath" in row["command"] and "--showConfig" not in row["command"]]
-    passed = [row for row in jest if row["exitCode"] == 0 and "Tests:       1 passed, 1 total" in (row["aggregatedOutput"] or "")]
-    failed = [row for row in jest if row["exitCode"] == 1 and "intentional failing assertion" in (row["aggregatedOutput"] or "")
-        and "Expected: 999" in row["aggregatedOutput"] and "Received: 5" in row["aggregatedOutput"]]
+    pass_payload = jest_command(node, "arithmetic.test.cjs")
+    fail_payload = jest_command(node, "failing.test.cjs")
+    jest = [row for row in commands if row.payload.startswith("& '") and
+        " .\\node_modules\\jest\\bin\\jest.js " in row.payload]
+    if any(row.payload not in {pass_payload, fail_payload} or
+        not same_windows_path(row.cwd, str(project)) for row in jest):
+        raise CodexTransportError("COMMAND_IDENTITY_MISMATCH", context="jest-route", layer="consumer")
+    passed = [row for row in jest if row.payload == pass_payload]
+    failed = [row for row in jest if row.payload == fail_payload]
     if len(passed) != (2 if initial else 1) or len(failed) != (1 if initial else 0):
-        raise RuntimeError("Missing cold/warm PASS or intentional assertion FAIL")
-    if any(Path(row["cwd"]) != project or any(flag in row["command"] for flag in ("--no-cache", "--cache=false", "--cacheDirectory")) for row in jest):
-        raise RuntimeError("Jest did not use the required project cwd/default cached route")
+        raise CodexTransportError("COMMAND_IDENTITY_MISMATCH", context="jest-cardinality", layer="consumer")
+    for row in passed:
+        if row.exit_code != 0 or "Tests:       1 passed, 1 total" not in require_output(row):
+            raise CodexTransportError("JEST_ASSERTION_EVIDENCE_FAILED", item_id=row.item_id,
+                layer="consumer")
+    for row in failed:
+        output = require_output(row)
+        if row.exit_code != 1 or any(marker not in output for marker in (
+            "intentional failing assertion", "Expected: 999", "Received: 5"
+        )):
+            raise CodexTransportError("JEST_ASSERTION_EVIDENCE_FAILED", item_id=row.item_id,
+                layer="consumer")
     # Preserve evidence for long haste-map names as well as the shorter perf cache.
     scan_root = Path("\\\\?\\" + str(scratch)) if os.name == "nt" else scratch
     cache_files = sorted(str(path.relative_to(scan_root)) for path in (scan_root / "jest").rglob("*") if path.is_file())
@@ -253,6 +256,11 @@ def validate_phase(commands: list[dict], *, node: Path, project: Path, scratch: 
             row.get("code") in {"EPERM", "EACCES"} for row in negative)
             if negative is not None else None), "jest_passes": len(passed),
         "intentional_assertion_failures": len(failed), "cache_files": cache_files,
+        "transport_schema": TRANSPORT_SCHEMA,
+        "transport_forms": sorted({row.transport_form for row in commands}),
+        "transport_form_corpus_match": {form: CAPTURED_FORM_ORIGINS.get(form)
+            for form in sorted({row.transport_form for row in commands})},
+        "output_sources": sorted({source for row in commands for source in row.output_sources}),
         "peer_canary": str(peer), "child_process_observation": probe.get("child") if probe else None}
     if instruction_reads is not None:
         result["instruction_reads"] = instruction_reads
@@ -330,13 +338,15 @@ def main() -> int:
     candidate_before = identity().candidate_id
     summary = {"schema_version": "native-scoped-scratch-smoke.v1", "harness_version": __version__, "status": "RUNNING", "phases": {}}
     summary["execution_source_sha256"] = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-        for name in ("slivin_harness/app_server.py", "slivin_harness/execution.py", "slivin_harness/planner.py",
+        for name in ("slivin_harness/app_server.py", "slivin_harness/codex_transport.py",
+            "slivin_harness/execution.py", "slivin_harness/planner.py",
             "slivin_harness/evaluator.py", "tools/smoke_readonly_scratch.py")}
     summary["versions"] = {
         "codex": subprocess.check_output([str(args.codex), "--version"], text=True, encoding="utf-8").strip(),
         "node": subprocess.check_output([str(args.node), "--version"], text=True, encoding="utf-8").strip(),
         "jest": json.loads((project / "node_modules/jest/package.json").read_text(encoding="utf-8"))["version"],
     }
+    server: ObservedServer | None = None
     try:
         with ObservedServer(args.codex, log_root=logs, client_version=__version__, execution_broker=broker,
             runtime_tmp=broker.scratch_root(ExecutionRole.APP_SERVER),
@@ -364,8 +374,7 @@ def main() -> int:
                     phase = label + ("_initial" if turn_index == 0 else "_continuation")
                     server.phase = phase
                     initial = turn_index == 0
-                    node = "'" + str(args.node).replace("'", "''") + "'"
-                    command = f"& {node} .\\node_modules\\jest\\bin\\jest.js --config .\\jest.config.cjs --runInBand --runTestsByPath .\\tests\\arithmetic.test.cjs --watch=false"
+                    command = jest_command(args.node, "arithmetic.test.cjs")
                     prompt = f"""VALIDATION ONLY on disposable synthetic canaries. No product patch. Use project cwd {project} for every command; session root is scratch {scratch}. Keep existing permissions; never request escalation or install packages."""
                     if initial:
                         prompt += " Execute these Controller-specified repository instruction read commands exactly as written, separately and from project cwd:\n"
@@ -377,7 +386,7 @@ def main() -> int:
 {command}
 """
                     if initial:
-                        prompt += command + "\n" + command.replace("arithmetic.test.cjs", "failing.test.cjs") + "\n"
+                        prompt += command + "\n" + jest_command(args.node, "failing.test.cjs") + "\n"
                     prompt += "The negative operations in sandbox_probe.cjs are explicitly authorized attempts on disposable files and must be denied. Do not omit them. Do not change cache flags or config. "
                     if initial:
                         prompt += "The listed failing test is intentional and must execute its assertion. "
@@ -388,6 +397,7 @@ def main() -> int:
                     result = guard.run_read_only(phase, lambda: server.run_turn(thread_id=thread, prompt=prompt, timeout=300,
                         on_heartbeat=lambda health: print("NATIVE_HEARTBEAT:", phase, round(health["turn_elapsed_seconds"]), flush=True)))
                     (logs / f"{phase}_response.txt").write_text(result, encoding="utf-8")
+                    server.transport.assert_phase_complete(phase)
                     summary["phases"][phase] = validate_phase(server.commands[before:], node=args.node,
                         project=project, scratch=scratch, sibling=sibling, private=private,
                         peer=peer, initial=initial)
@@ -395,7 +405,17 @@ def main() -> int:
                 role_canaries[role] = scratch / "positive/probe.txt"
         summary["status"] = "PASS"
     except Exception as exc:
-        summary.update(status="FAIL", error={"type": type(exc).__name__, "reason": str(exc)})
+        error = {"type": type(exc).__name__, "reason": str(exc)}
+        if isinstance(exc, CodexTransportError):
+            observed_forms = sorted({row.transport_form for row in server.commands}) if server else []
+            error.update(reason_code=exc.reason_code,
+                canonicalization_status="PASS" if exc.layer == "consumer" else "FAIL",
+                transport_schema=TRANSPORT_SCHEMA,
+                raw_transport_form_category=exc.transport_form or "not_available",
+                transport_form_corpus_match=CAPTURED_FORM_ORIGINS.get(exc.transport_form),
+                observed_transport_forms=observed_forms,
+                canonicalized_command_count=len(server.commands) if server else 0)
+        summary.update(status="FAIL", error=error)
     finally:
         after = {name: hashlib.sha256((project / name).read_bytes()).hexdigest() if (project / name).is_file() else None for name in files}
         source_after = asdict(fingerprint_runtime_tree(args.runtime_source))
@@ -409,7 +429,8 @@ def main() -> int:
         write_json(logs / "invariance.json", invariance)
         summary['policy_evidence_sha256'] = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(logs.iterdir()) if path.is_file() and
-            (path.name in {'app_server_command.json', 'requests.jsonl', 'commands.jsonl', 'invariance.json'}
+            (path.name in {'app_server_command.json', 'requests.jsonl', 'commands.jsonl',
+                           'output_deltas.jsonl', 'invariance.json'}
              or path.name.endswith('_thread.json'))}
         write_json(logs / "result.json", summary)
     print("NATIVE_SCOPED_SCRATCH_" + summary["status"], logs, flush=True)

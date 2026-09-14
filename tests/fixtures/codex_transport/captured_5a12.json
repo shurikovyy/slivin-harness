@@ -1,0 +1,98 @@
+{
+  "fixture_id": "captured-5a12-planner-initial",
+  "fixture_origin": "captured_real",
+  "source_run_id": "shr-q-5a12a511f1",
+  "source_projection": ["native_roles/diagnostics/commands.jsonl", "native_roles/diagnostics/output_deltas.jsonl"],
+  "sanitization": "Only synthetic role commands retained; home, project, scratch and canary paths rebound. Jest text reduced to actual assertion lines; probe output reduced to actual operation names/results/codes.",
+  "expected_admission": "PASS",
+  "phase": "planner_initial_initial",
+  "completed": [
+    {
+      "id": "exec-82a4d282-1126-4e42-8221-b459379211ff",
+      "type": "commandExecution",
+      "command": "\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"[System.IO.File]::ReadAllText('AGENTS.md', [System.Text.Encoding]::UTF8)\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 0,
+      "durationMs": 436,
+      "aggregatedOutput": "Repository marker: ROOT_INSTRUCTIONS_READ. Read src/AGENTS.md before src/arithmetic.cjs.\r\n\r\n"
+    },
+    {
+      "id": "exec-da0c5ed2-9175-41c0-b163-f146ec61b5f7",
+      "type": "commandExecution",
+      "command": "\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"[System.IO.File]::ReadAllText('src\\\\AGENTS.md', [System.Text.Encoding]::UTF8)\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 0,
+      "durationMs": 4,
+      "aggregatedOutput": null
+    },
+    {
+      "id": "exec-2497a866-39a9-410c-8fc2-8022b5ca7f3e",
+      "type": "commandExecution",
+      "command": "\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"& '{{NODE}}' .\\\\sandbox_probe.cjs '{{PROJECT}}' '{{SCRATCH}}' '{{SIBLING}}' '{{PRIVATE}}' '{{PEER}}'\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 0,
+      "durationMs": 42,
+      "aggregatedOutput": "{{PROBE_OUTPUT}}"
+    },
+    {
+      "id": "exec-5b8d93fe-6402-4004-8290-b836e98e75da",
+      "type": "commandExecution",
+      "command": "\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"& '{{NODE}}' .\\\\node_modules\\\\jest\\\\bin\\\\jest.js --config .\\\\jest.config.cjs --runInBand --runTestsByPath .\\\\tests\\\\arithmetic.test.cjs --watch=false\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 0,
+      "durationMs": 546,
+      "aggregatedOutput": "Tests:       1 passed, 1 total\r\n"
+    },
+    {
+      "id": "exec-33019ede-c8c2-45fb-a9d4-ba18e0121d83",
+      "type": "commandExecution",
+      "command": "\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"& '{{NODE}}' .\\\\node_modules\\\\jest\\\\bin\\\\jest.js --config .\\\\jest.config.cjs --runInBand --runTestsByPath .\\\\tests\\\\arithmetic.test.cjs --watch=false\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 0,
+      "aggregatedOutput": "Tests:       1 passed, 1 total\r\n"
+    },
+    {
+      "id": "exec-b914382b-dc2c-4b0d-a5bc-10ac12895431",
+      "type": "commandExecution",
+      "command": "\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"& '{{NODE}}' .\\\\node_modules\\\\jest\\\\bin\\\\jest.js --config .\\\\jest.config.cjs --runInBand --runTestsByPath .\\\\tests\\\\failing.test.cjs --watch=false\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 1,
+      "durationMs": 540,
+      "aggregatedOutput": "intentional failing assertion\r\nExpected: 999\r\nReceived: 5\r\nTests:       1 failed, 1 total\r\n"
+    }
+  ],
+  "deltas": [
+    {
+      "threadId": "synthetic-planner-thread",
+      "turnId": "synthetic-planner-turn",
+      "itemId": "exec-82a4d282-1126-4e42-8221-b459379211ff",
+      "delta": "Repository marker: ROOT_INSTRUCTIONS_READ. Read src/AGENTS.md before src/arithmetic.cjs.\r\n"
+    },
+    {
+      "threadId": "synthetic-planner-thread",
+      "turnId": "synthetic-planner-turn",
+      "itemId": "exec-82a4d282-1126-4e42-8221-b459379211ff",
+      "delta": "\r\n"
+    }
+  ],
+  "probe_output_rows": [
+    ["scratch:mkdir", "ALLOWED", null], ["scratch:write-read", "ALLOWED", null],
+    ["absolute:write:src/arithmetic.cjs", "DENIED", "EPERM"],
+    ["absolute:write:tests/arithmetic.test.cjs", "DENIED", "EPERM"],
+    ["absolute:write:node_modules/jest/package.json", "DENIED", "EPERM"],
+    ["absolute:create", "DENIED", "EPERM"], ["absolute:delete", "DENIED", "EPERM"],
+    ["absolute:rename", "DENIED", "EPERM"], ["absolute:sibling", "DENIED", "EPERM"],
+    ["absolute:private", "DENIED", "EPERM"], ["absolute:peer", "DENIED", "EPERM"],
+    ["absolute:git", "DENIED", "EPERM"],
+    ["relative-after-chdir:write:src/arithmetic.cjs", "DENIED", "EPERM"],
+    ["relative-after-chdir:write:tests/arithmetic.test.cjs", "DENIED", "EPERM"],
+    ["relative-after-chdir:write:node_modules/jest/package.json", "DENIED", "EPERM"],
+    ["relative-after-chdir:create", "DENIED", "EPERM"],
+    ["relative-after-chdir:delete", "DENIED", "EPERM"],
+    ["relative-after-chdir:rename", "DENIED", "EPERM"],
+    ["relative-after-chdir:sibling", "DENIED", "EPERM"],
+    ["relative-after-chdir:private", "DENIED", "EPERM"],
+    ["relative-after-chdir:peer", "DENIED", "EPERM"],
+    ["relative-after-chdir:git", "DENIED", "EPERM"]
+  ]
+}

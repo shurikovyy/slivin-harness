@@ -1,0 +1,15 @@
+{
+  "fixture_id": "synthetic-adversarial-envelopes",
+  "fixture_origin": "synthetic_negative",
+  "source_run_id": null,
+  "base_fixture_id": "captured-5a12-planner-initial",
+  "expected_admission": "FAIL_CLOSED",
+  "mutations": [
+    {"id": "wrong_executable", "replace": ["powershell.exe", "pwsh.exe"], "reason_code": "UNSUPPORTED_ENVELOPE"},
+    {"id": "arbitrary_flag", "replace": [" -Command ", " -ExecutionPolicy Bypass -Command "], "reason_code": "UNSUPPORTED_ENVELOPE"},
+    {"id": "encoded_command", "replace": [" -Command ", " -EncodedCommand "], "reason_code": "UNSUPPORTED_ENVELOPE"},
+    {"id": "prefix", "prefix": "echo ", "reason_code": "UNSUPPORTED_ENVELOPE"},
+    {"id": "suffix", "suffix": " ; echo done", "reason_code": "UNSUPPORTED_ENVELOPE"},
+    {"id": "malformed_quote", "truncate": 1, "reason_code": "UNSUPPORTED_ENVELOPE"}
+  ]
+}

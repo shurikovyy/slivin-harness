@@ -38,6 +38,10 @@ BOUNDARIES = {
     "B17": ("Durable checkpoint and terminal observation", ("slivin_harness.checkpoint.save_report_checkpoint", "task_runner.observe_terminal_report_candidate")),
     "B18": ("Proof-only revision without product reset", ("task_runner.main.revise_proof_route", "slivin_harness.proof_routes.apply_proof_review")),
     "B19": ("Immutable source admission", ("slivin_harness.source_records.register_observations", "slivin_harness.source_records.register_evaluator_findings", "slivin_harness.source_records.resolve_assessments")),
+    "B20": ("Codex command transport admission", (
+        "slivin_harness.codex_transport.CodexTransportAdapter.observe_delta",
+        "slivin_harness.codex_transport.CodexTransportAdapter.observe_completed",
+    )),
 }
 _observers = contextvars.ContextVar("harness_boundary_observers", default=())
 

@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 import shutil
 import subprocess
 import unittest
 import uuid
+
+from slivin_harness.codex_transport import CanonicalExecutedCommand, CodexTransportError, windows_path_key
 
 from tools.smoke_readonly_scratch import (
     INSTRUCTION_READ_SPECS,
@@ -18,25 +21,27 @@ from tools.smoke_readonly_scratch import (
 )
 
 
+def canonical_row(script: str, cwd: Path, *, exit_code: int = 0,
+                  output: str | None = None) -> CanonicalExecutedCommand:
+    return CanonicalExecutedCommand(item_id="exec-" + uuid.uuid4().hex,
+        phase="synthetic", shell="powershell",
+        shell_executable=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        payload=script, cwd=windows_path_key(str(cwd)), exit_code=exit_code,
+        output=output, output_observed=output is not None,
+        output_sources=("aggregated",) if output is not None else (),
+        completion_state="completed", transport_form="powershell-command",
+        aggregated_output_field="present" if output is not None else "null")
+
+
 class InstructionReadEvidenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.project = (Path.cwd() / ".synthetic-instruction-project").resolve()
 
     def command(self, script: str, *, cwd: Path | None = None,
-                exit_code: int = 0, output: str | None = None) -> dict:
-        escaped_script = script.replace("\\", "\\\\")
-        rendered = (
-            r'"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" '
-            f'-NoProfile -Command "{escaped_script}"'
-        )
-        return {
-            "command": rendered,
-            "cwd": str(cwd or self.project),
-            "exitCode": exit_code,
-            "aggregatedOutput": output,
-        }
+                exit_code: int = 0, output: str | None = None) -> CanonicalExecutedCommand:
+        return canonical_row(script, cwd or self.project, exit_code=exit_code, output=output)
 
-    def valid_commands(self, *, output: str | None = None) -> list[dict]:
+    def valid_commands(self, *, output: str | None = None) -> list[CanonicalExecutedCommand]:
         return [self.command(script, output=output) for _, _, _, script in INSTRUCTION_READ_SPECS]
 
     def test_successful_exact_reads_do_not_require_aggregated_output(self) -> None:
@@ -50,8 +55,8 @@ class InstructionReadEvidenceTests(unittest.TestCase):
 
     def test_marker_is_additional_evidence_only(self) -> None:
         commands = self.valid_commands()
-        commands[0]["aggregatedOutput"] = "ROOT_INSTRUCTIONS_READ"
-        commands[1]["aggregatedOutput"] = "NESTED_INSTRUCTIONS_READ"
+        commands[0] = replace(commands[0], output="ROOT_INSTRUCTIONS_READ", output_observed=True)
+        commands[1] = replace(commands[1], output="NESTED_INSTRUCTIONS_READ", output_observed=True)
         evidence = validate_instruction_read_evidence(commands, project=self.project)
         self.assertTrue(all(row["output_marker_observed"] for row in evidence.values()))
 
@@ -59,7 +64,7 @@ class InstructionReadEvidenceTests(unittest.TestCase):
             "Write-Output 'ROOT_INSTRUCTIONS_READ NESTED_INSTRUCTIONS_READ AGENTS.md'",
             output="ROOT_INSTRUCTIONS_READ NESTED_INSTRUCTIONS_READ",
         )
-        with self.assertRaisesRegex(RuntimeError, "AGENTS.md"):
+        with self.assertRaisesRegex(CodexTransportError, "COMMAND_IDENTITY_MISMATCH"):
             validate_instruction_read_evidence([echoed], project=self.project)
 
     def test_missing_wrong_path_wrong_cwd_and_nonzero_reads_fail(self) -> None:
@@ -75,15 +80,15 @@ class InstructionReadEvidenceTests(unittest.TestCase):
         cases["wrong_path"] = (wrong_path, "src/AGENTS.md")
 
         wrong_cwd = self.valid_commands()
-        wrong_cwd[1]["cwd"] = str(self.project.parent)
+        wrong_cwd[1] = replace(wrong_cwd[1], cwd=windows_path_key(str(self.project.parent)))
         cases["wrong_cwd"] = (wrong_cwd, "src/AGENTS.md")
 
         nonzero = self.valid_commands()
-        nonzero[1]["exitCode"] = 1
+        nonzero[1] = replace(nonzero[1], exit_code=1)
         cases["nonzero"] = (nonzero, "src/AGENTS.md")
 
-        for name, (commands, expected_path) in cases.items():
-            with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, expected_path):
+        for name, (commands, _expected_path) in cases.items():
+            with self.subTest(name=name), self.assertRaises(CodexTransportError):
                 validate_instruction_read_evidence(commands, project=self.project)
 
 
@@ -105,27 +110,19 @@ class SandboxProbeEvidenceTests(unittest.TestCase):
         (self.scratch / "jest").mkdir()
         (self.scratch / "jest" / "cache").write_text("cached", encoding="utf-8")
 
-    @staticmethod
-    def wrapper(script: str) -> str:
-        return (r'"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" '
-                f'-NoProfile -Command "{script.replace(chr(92), chr(92) * 2)}"')
-
     def probe_row(self, *, script: str | None = None, cwd: Path | None = None,
-                  exit_code: int = 0, output: str | None = None) -> dict:
+                  exit_code: int = 0, output: str | None = None) -> CanonicalExecutedCommand:
         script = script if script is not None else probe_command(node=self.node,
             project=self.project, scratch=self.scratch, sibling=self.sibling,
             private=self.private, peer=self.peer)
-        return {"command": self.wrapper(script), "cwd": str(cwd or self.project),
-                "exitCode": exit_code, "aggregatedOutput": output}
+        return canonical_row(script, cwd or self.project, exit_code=exit_code, output=output)
 
-    def jest_row(self) -> dict:
-        script = (f"& '{self.node}' .\\node_modules\\jest\\bin\\jest.js --config "
-                  ".\\jest.config.cjs --runInBand --runTestsByPath "
-                  ".\\tests\\arithmetic.test.cjs --watch=false")
-        return {"command": self.wrapper(script), "cwd": str(self.project),
-                "exitCode": 0, "aggregatedOutput": "Tests:       1 passed, 1 total"}
+    def jest_row(self) -> CanonicalExecutedCommand:
+        from tools.smoke_readonly_scratch import jest_command
+        return canonical_row(jest_command(self.node, "arithmetic.test.cjs"), self.project,
+            output="Tests:       1 passed, 1 total")
 
-    def phase(self, probe: dict, *additional: dict) -> dict:
+    def phase(self, probe: CanonicalExecutedCommand, *additional: CanonicalExecutedCommand) -> dict:
         return validate_phase([probe, *additional, self.jest_row()], node=self.node,
             project=self.project, scratch=self.scratch, sibling=self.sibling,
             private=self.private, peer=self.peer, initial=False)
@@ -157,7 +154,7 @@ class SandboxProbeEvidenceTests(unittest.TestCase):
     def test_nonzero_and_wrong_cwd_fail(self) -> None:
         for name, row in (("nonzero", self.probe_row(exit_code=7)),
                           ("wrong_cwd", self.probe_row(cwd=self.scratch))):
-            with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, "probe|cwd"):
+            with self.subTest(name=name), self.assertRaises(CodexTransportError):
                 self.phase(row)
 
     def test_altered_controller_arguments_fail(self) -> None:
@@ -166,7 +163,7 @@ class SandboxProbeEvidenceTests(unittest.TestCase):
                 ("project", "scratch", "sibling", "private", "peer")}
             args[field] = args[field].parent / (args[field].name + "-wrong")
             script = probe_command(node=self.node, **args)
-            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, "probe"):
+            with self.subTest(field=field), self.assertRaisesRegex(CodexTransportError, "COMMAND_IDENTITY_MISMATCH"):
                 self.phase(self.probe_row(script=script))
 
     def test_echo_and_other_node_command_do_not_count(self) -> None:
@@ -174,16 +171,16 @@ class SandboxProbeEvidenceTests(unittest.TestCase):
             sibling=self.sibling, private=self.private, peer=self.peer)
         for script in (f"Write-Output '{exact}'",
                        f"& '{self.node}' .\\other_probe.cjs '{self.project}'"):
-            with self.subTest(script=script), self.assertRaisesRegex(RuntimeError, "probe"):
+            with self.subTest(script=script), self.assertRaisesRegex(CodexTransportError, "COMMAND_IDENTITY_MISMATCH"):
                 self.phase(self.probe_row(script=script, output="PROBE_RESULT={}"))
 
     def test_duplicate_qualifying_probe_commands_fail(self) -> None:
         first = self.probe_row()
-        with self.assertRaisesRegex(RuntimeError, "probe"):
+        with self.assertRaisesRegex(CodexTransportError, "DUPLICATE_EXECUTION"):
             self.phase(first, self.probe_row())
         altered = probe_command(node=self.node, project=self.project, scratch=self.scratch,
             sibling=self.sibling, private=self.private, peer=self.peer.parent / "wrong.txt")
-        with self.assertRaisesRegex(RuntimeError, "probe"):
+        with self.assertRaisesRegex(CodexTransportError, "DUPLICATE_EXECUTION"):
             self.phase(first, self.probe_row(script=altered))
 
 

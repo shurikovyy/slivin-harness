@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a32
+# Документация Slivin Harness 0.8.0a33
 
-Актуальная версия: **0.8.0a32 — Model Artifact Admission and Controller Origins**.
+Актуальная версия: **0.8.0a33 — Codex Transport Stabilization**.
 
 Основные документы:
 

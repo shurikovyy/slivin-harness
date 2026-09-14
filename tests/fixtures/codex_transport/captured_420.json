@@ -1,0 +1,48 @@
+{
+  "fixture_id": "native-evaluator-pwsh-command-420",
+  "fixture_origin": "captured_real",
+  "source_run_id": "shr-q-42026aa1d8",
+  "source_projection": ["native_roles/diagnostics/commands.jsonl"],
+  "phase": "evaluator_initial",
+  "expected_admission": "PASS_ADAPTER_ONLY",
+  "output_sanitization": "Jest aggregate output reduced to observed assertion lines; instruction output preserved.",
+  "completed": [
+    {
+      "phase": "evaluator_initial",
+      "type": "commandExecution",
+      "id": "exec-520e8958-a253-4726-8747-0b403cf68a44",
+      "command": "\"{{PWSH}}\" -Command \"Get-Content -LiteralPath .\\\\AGENTS.md -Encoding UTF8\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 0,
+      "aggregatedOutput": "Repository marker: ROOT_INSTRUCTIONS_READ. Read src/AGENTS.md before src/arithmetic.cjs.\r\n"
+    },
+    {
+      "phase": "evaluator_initial",
+      "type": "commandExecution",
+      "id": "exec-a550266b-760b-4583-b4df-bb96aaa776cc",
+      "command": "\"{{PWSH}}\" -Command \"Get-Content -LiteralPath .\\\\src\\\\AGENTS.md -Encoding UTF8\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 0,
+      "aggregatedOutput": "Nested repository marker: NESTED_INSTRUCTIONS_READ. Preserve source semantics.\r\n"
+    },
+    {
+      "phase": "evaluator_initial",
+      "type": "commandExecution",
+      "id": "exec-2a5167cf-95df-4da1-8373-de03ac8fa9d8",
+      "command": "\"{{PWSH}}\" -Command \"& '{{NODE}}' .\\\\node_modules\\\\jest\\\\bin\\\\jest.js --config .\\\\jest.config.cjs --runInBand --runTestsByPath .\\\\tests\\\\arithmetic.test.cjs --watch=false\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 0,
+      "aggregatedOutput": "PASS tests/arithmetic.test.cjs\r\n  √ real cached assertion (1 ms)\r\n"
+    },
+    {
+      "phase": "evaluator_initial",
+      "type": "commandExecution",
+      "id": "exec-2b1394e5-a4c5-4073-b577-b9f54034419a",
+      "command": "\"{{PWSH}}\" -Command \"& '{{NODE}}' .\\\\node_modules\\\\jest\\\\bin\\\\jest.js --config .\\\\jest.config.cjs --runInBand --runTestsByPath .\\\\tests\\\\failing.test.cjs --watch=false\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 1,
+      "aggregatedOutput": "FAIL tests/failing.test.cjs\r\n  × intentional failing assertion (2 ms)\r\n"
+    }
+  ],
+  "deltas": []
+}

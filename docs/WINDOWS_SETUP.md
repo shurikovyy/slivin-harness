@@ -235,6 +235,10 @@ returning exit code 0. Acceptance requires the exact Controller command, project
 and one successful execution; App Server `aggregatedOutput` may be absent. When it is
 absent, `result.json` records exit evidence but leaves per-operation and child-process
 diagnostics unavailable rather than reconstructing them.
+`CodexTransportAdapter` admits raw command/delta events once. Native consumers
+match exact canonical payload/cwd/exit records, not PowerShell wrapper text.
+Captured `-Command` and `-NoProfile -Command` forms replay deterministically before
+this opt-in native stage; unknown envelopes remain typed failures.
 Peer checks also target the granted scratch of another active role in both directions;
 an ungranted sibling directory alone does not prove per-thread isolation.
 Continuations check the same policy; fresh Planner follows scratch cleanup. Existing

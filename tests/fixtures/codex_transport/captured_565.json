@@ -1,0 +1,55 @@
+{
+  "fixture_id": "captured-565-legacy-and-null",
+  "fixture_origin": "captured_real",
+  "source_run_id": "shr-q-5654234e36",
+  "source_projection": ["native_roles/diagnostics/commands.jsonl", "native_roles/diagnostics/output_deltas.jsonl"],
+  "sanitization": "Only synthetic role command items retained; paths rebound. The null probe item predates Controller expected-argument expansion and is adapter-only evidence.",
+  "expected_admission": "PASS_ADAPTER_ONLY",
+  "completed": [
+    {
+      "phase": "planner_initial_initial",
+      "id": "exec-5bb20ba2-9770-49f5-8c60-d3387e6b5748",
+      "type": "commandExecution",
+      "command": "\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -NoProfile -Command \"[System.IO.File]::ReadAllText('AGENTS.md', [System.Text.Encoding]::UTF8)\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 0,
+      "durationMs": 48,
+      "aggregatedOutput": "Repository marker: ROOT_INSTRUCTIONS_READ. Read src/AGENTS.md before src/arithmetic.cjs.\r\n\r\n"
+    },
+    {
+      "phase": "planner_initial_initial",
+      "id": "exec-93311170-39ea-4c9d-953a-f27cc2701dcc",
+      "type": "commandExecution",
+      "command": "\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -NoProfile -Command \"[System.IO.File]::ReadAllText('src\\\\AGENTS.md', [System.Text.Encoding]::UTF8)\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 0,
+      "aggregatedOutput": "Nested repository marker: NESTED_INSTRUCTIONS_READ. Preserve source semantics.\r\n\r\n"
+    },
+    {
+      "phase": "planner_fresh_after_cleanup_initial",
+      "id": "exec-64bc93cb-1b0c-47df-bbec-4eb7e6ffaf8e",
+      "type": "commandExecution",
+      "command": "\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -NoProfile -Command \"& '{{NODE}}' .\\\\sandbox_probe.cjs '{{SIBLING}}' '{{PRIVATE}}' '{{PEER}}'\"",
+      "cwd": "{{PROJECT}}",
+      "exitCode": 0,
+      "durationMs": 22,
+      "aggregatedOutput": null
+    }
+  ],
+  "deltas": [
+    {
+      "phase": "planner_initial_initial",
+      "threadId": "synthetic-planner-thread",
+      "turnId": "synthetic-planner-turn",
+      "itemId": "exec-5bb20ba2-9770-49f5-8c60-d3387e6b5748",
+      "delta": "Repository marker: ROOT_INSTRUCTIONS_READ. Read src/AGENTS.md before src/arithmetic.cjs.\r\n"
+    },
+    {
+      "phase": "planner_initial_initial",
+      "threadId": "synthetic-planner-thread",
+      "turnId": "synthetic-planner-turn",
+      "itemId": "exec-5bb20ba2-9770-49f5-8c60-d3387e6b5748",
+      "delta": "\r\n"
+    }
+  ]
+}

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `0.8.0a33` introduces a Controller-owned Codex command transport adapter.
+  Captured `-Command` and `-NoProfile -Command` envelopes canonicalize once;
+  AGENTS, self-validating sandbox probe and Jest assertions consume exact
+  canonical command/output evidence. Missing output remains unavailable, while
+  item-bound deltas retain provenance and conflicts fail typed.
+- Sanitized real transport projections from `shr-q-5654234e36`,
+  `shr-q-5a12a511f1` and a legacy Evaluator `pwsh.exe -Command` example from
+  `shr-q-42026aa1d8` plus separately labeled synthetic negatives replay in a
+  mandatory `transport_replay` stage before any model-backed stage, alongside
+  the existing artifact replay. This does not imply `RELEASE_QUALIFIED`.
 - `0.8.0a32` uses a Controller-owned Phase-B origin catalog and handle-only
   `evaluator.v8` model wire. Authority, classification, source ID and current
   revision are derived at admission; exact cardinality and compatible handle

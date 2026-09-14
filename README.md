@@ -1,4 +1,4 @@
-# Slivin Harness 0.8.0a32 — Phase 7
+# Slivin Harness 0.8.0a33 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
@@ -17,7 +17,7 @@ dependencies и Git controls остаются read-only, а каждый fresh t
 [native cached-Jest smoke](docs/WINDOWS_SETUP.md#native-scoped-scratch-acceptance),
 отдельно от Controller probes и product correctness.
 
-`0.8.0a32` quality-core требует typed Planner Impact Closure до `READY` в `planner.v6`
+`0.8.0a33` quality-core требует typed Planner Impact Closure до `READY` в `planner.v6`
 и post-patch Implementer Impact Closure до `COMPLETE` в `implementer.v6`.
 Implementer проверяет Planner model по реальному diff, пересматривает consumers,
 добавляет discoveries через Controller expansion и рассматривает каждый changed path.
@@ -38,8 +38,9 @@ Strict recovery собирает независимые evidence errors в од�
 `py.exe -3 tools/release_check.py --profile windows-local`.
 Она требует всех обязательных уровней, включая настоящие Node/Jest, native role sandbox
 и три фиксированных real-model FULL прогона до безопасной выдачи результата. Обязательный
-deterministic transcript replay воспроизводит три sanitized artifact-boundary failure
-fixtures до `native_roles` и `real_models`; его PASS не заменяет model qualification.
+deterministic replay воспроизводит три sanitized artifact-boundary failures и
+captured Codex transport failures до `native_roles` и `real_models`; эти PASS не
+заменяют model qualification.
 Состав, миграция протоколов и пределы доказанного описаны в
 [SYSTEMIC_RELIABILITY.md](docs/SYSTEMIC_RELIABILITY.md).
 `evaluator.v8` независимо восстанавливает impact model по actual candidate до раскрытия
@@ -150,7 +151,7 @@ source resolution и обязательный recorded sanitize/rebind. Reconstr
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a32`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a33`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
@@ -404,7 +405,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a32 ...
+DOCS_SYNC_PASS harness=0.8.0a33 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -418,7 +419,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a32` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a33` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

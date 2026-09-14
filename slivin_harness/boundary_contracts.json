@@ -1188,6 +1188,44 @@
         "slivin_harness.source_records.resolve_assessments"
       ],
       "verification_limit": "Finite in-process tests and named shared guards; no arbitrary process crash/resume, universal sandbox or universal discovery completeness claim. Native assertions/role sandbox and fixed real-model FULL runs are separate mandatory stages."
+    },
+    {
+      "boundary_id": "B20",
+      "schemas": ["codex-executed-command.v1"],
+      "ownership": "Controller adapter owns raw Codex event normalization, item identity and output provenance; consumers own exact semantic payload expectations.",
+      "preconditions": "Observed commandExecution completion and optional itemId-bound outputDelta events from one role phase.",
+      "postconditions": "Only supported exact PowerShell envelopes publish canonical completed commands; unsupported or conflicting transport fails typed before native evidence admission.",
+      "evidence_dependencies": "Raw item id, ordered output deltas, completed command/cwd/exit/output and Controller-selected shell path.",
+      "allowed_outcomes": ["CANONICAL_COMMAND", "TYPED_TRANSPORT_STOP"],
+      "recovery_contract": "Transport incompatibility is diagnosed, never converted to model report correction or a weaker native proof.",
+      "checkpoint_contract": "Raw command and delta diagnostics remain outside Git; canonical status and typed reason are recorded in native result.",
+      "families": {
+        "input": {
+          "expectation": "Malformed and unsupported envelopes, executable paths and completion fields fail closed.",
+          "unittest_ids": ["test_codex_transport.CodexTransportTests.test_malformed_envelope_and_completion_fail_typed"],
+          "required": true
+        },
+        "output": {
+          "expectation": "Captured -Command and supported -NoProfile forms admit exact payload and item-bound output provenance.",
+          "unittest_ids": ["test_codex_transport.CodexTransportTests.test_captured_command_and_noprofile_forms", "test_codex_transport.CodexTransportTests.test_captured_420_evaluator_pwsh_adapter_only", "test_codex_transport.CodexTransportTests.test_default_pwsh_admission_requires_controller_selected_installed_path", "test_codex_transport.CodexTransportTests.test_delta_aggregation_and_null"],
+          "required": true
+        },
+        "freshness": {
+          "expectation": "Cwd and item/turn/phase identity cannot be substituted by equivalent-looking text or another command's delta.",
+          "unittest_ids": ["test_codex_transport.CodexTransportTests.test_wrong_identity_and_cwd_fail_closed"],
+          "required": true
+        },
+        "recovery": {
+          "expectation": "Duplicate completion, conflicting output and late/orphan delta fail typed; no guessed output is produced.",
+          "unittest_ids": ["test_codex_transport.CodexTransportTests.test_duplicate_and_late_delta_fail"],
+          "required": true
+        }
+      },
+      "entrypoints": [
+        "slivin_harness.codex_transport.CodexTransportAdapter.observe_delta",
+        "slivin_harness.codex_transport.CodexTransportAdapter.observe_completed"
+      ],
+      "verification_limit": "Finite captured/synthetic transport fixtures prove known representation compatibility only; native sandbox and real-model qualification remain mandatory."
     }
   ]
 }

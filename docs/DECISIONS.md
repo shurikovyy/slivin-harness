@@ -64,6 +64,7 @@
 | [D-027](#d-027) | Immutable origins, recovery с progress и обязательная квалификация сборки | IMPLEMENTED в 0.8.0a31; qualification определяется отдельным release record |
 | [D-028](#d-028) | Owner check inputs и production toolchain остаются властью Controller | IMPLEMENTED; qualification конкретного SHA ещё требуется |
 | [D-029](#d-029) | Model wire ссылается на Controller origins, local correction отделена от semantics | IMPLEMENTED в 0.8.0a32; qualification конкретного SHA ещё требуется |
+| [D-030](#d-030) | Controller canonicalizes Codex command transport до evidence consumers | IMPLEMENTED в 0.8.0a33; native/full qualification конкретного SHA ещё требуется |
 
 <a id="d-001"></a>
 
@@ -981,6 +982,64 @@ Deterministic PASS доказывает только закрытие извес
 однозначно вывести их из authoritative state и model claim действительно несёт новую
 semantics. Расширение local allowlist требует concrete counterexample, exact leaf ownership,
 frozen semantic siblings, no-progress/budget tests и повторную qualification нового SHA.
+
+<a id="d-030"></a>
+
+## D-030. Raw Codex transport не является evidence contract для consumers
+
+**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в `0.8.0a33`; native и full
+qualification этого SHA ещё не выполнялись. **Дата регистрации:** 2026-09-14.
+**Связанные решения:** D-013, D-018, D-020, D-021, D-027, D-029.
+
+**Проблема и проверенные основания.** Сохранённые native failures
+`shr-q-5654234e36` и `shr-q-5a12a511f1` содержат успешные exact sandbox
+probe executions, но consumer-specific parser ожидал `-NoProfile -Command`.
+Реальный App Server в следующем run выдал `-Command`. В обоих runs успешный
+`commandExecution` иногда имел `aggregatedOutput=null`; `outputDelta` при наличии
+имеет itemId/threadId/turnId и совпадал с aggregate для того же item. Это
+representation/transport defect, а не изменение sandbox policy или product.
+Отдельный retained Evaluator `shr-q-42026aa1d8` также доказал форму bundled
+`pwsh.exe -Command`; её допустимость ограничена точным установленным
+Controller-selected runtime executable.
+
+**Решение и rationale.** Единственный Controller-owned
+`CodexTransportAdapter` принимает явно подтверждённые PowerShell envelopes,
+проверяет shell executable, декодирует только App Server doubled-backslash
+rendering и публикует `codex-executed-command.v1` с exact semantic payload,
+canonical Windows cwd, item/phase identity, exit, completion и output provenance.
+Delta связывается только по exact itemId и последовательности событий; aggregate
+и delta при совместном наличии должны совпасть. Неподтверждённый envelope,
+malformed event, orphan/late delta и conflicting output дают typed failure.
+AGENTS/probe/Jest consumers знают только canonical record и собственные exact
+semantic expectations. Probe self-validation D-018 и обязательный Jest assertion
+output остаются неизменными.
+
+Captured real projections из трёх runs и отдельно маркированные synthetic
+negative mutations являются обязательным `transport_replay` перед
+`native_roles`/`real_models` вместе с прежним `artifact_replay`. Каждый fixture
+пишет origin, run ID, expected/actual admission, adapter schema и SHA256.
+Synthetic helpers доказывают отрицательную механику, но не являются evidence
+реальной совместимости. Отсутствующий output не фабрикуется; если assertion
+потребляет текст, он требует observed output. ItemId-bound delta без sequence
+number сохраняется в порядке доставки; идентичные legitimate chunks нельзя
+отличить от дубля без aggregate, поэтому это явное оставшееся ограничение.
+
+**Отвергнутые варианты.** REJECTED: просто добавить `-Command` в три regex —
+следующая форма снова остановит qualification; искать expected substring в raw
+команде — echo/injection станет evidence; принимать произвольные flags/shell
+или alias без Controller proof — fail-open; доверять отсутствующему output для
+Jest — потеря assertion proof; дедуплицировать delta по тексту — legitimate
+повторы изменят output; заменить native role smoke replay'ем — synthetic
+transport не доказывает OS sandbox; менять model prompts или product semantics —
+не относится к transport defect.
+
+**Последствия, границы, проверка.** Добавлены adapter, B20 executable contract,
+corpus и cheap replay stage; роль/permission, candidate/Git/runtime guards,
+AGENTS reads, immutable probe, Jest/cache, owner receipts, origin catalog,
+reconstruction и три fixed FULL cases сохранены. Adapter не используется для
+containment decisions. Неизвестные transport forms остаются typed hard stop до
+нового captured counterexample и replay. Deterministic PASS не означает
+`RELEASE_QUALIFIED`.
 
 ## Шаблон новой записи
 
