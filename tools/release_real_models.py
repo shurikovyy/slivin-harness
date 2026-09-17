@@ -19,6 +19,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from slivin_harness.entrypoint_boot import emit_entrypoint_boot_if_requested
 from slivin_harness.runtime_projection import fingerprint_runtime_tree
 from slivin_harness.control_plane import safe_artifact_name
 from slivin_harness.run_state import build_candidate_identity
@@ -481,4 +482,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if emit_entrypoint_boot_if_requested(sys.argv[1:], source_file=__file__):
+        raise SystemExit(0)
     raise SystemExit(main())

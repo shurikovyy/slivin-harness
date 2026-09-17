@@ -1251,8 +1251,8 @@
           "native-role-command-admission.v1",
           "native-sandbox-probe-config.v1"
         ],
-        "ownership": "Controller owns the immutable validation entrypoint, exact role environment configuration, peer selection and correction budget; the role owns only whether it executes the requested command.",
-        "preconditions": "Canonical commands belong to one native role phase and the Controller has bound exact project, scratch, sibling, private and current peer identities to that role thread.",
+        "ownership": "Controller owns the source-relative canonical B21 identity, immutable validation entrypoint, exact role environment configuration, peer selection and correction budget; the role owns only whether it executes the requested command.",
+        "preconditions": "Package-owned B21 resolves identically during import and exact smoke script boot; canonical commands belong to one native role phase and the Controller has bound exact project, scratch, sibling, private and current peer identities to that role thread.",
         "postconditions": "Exact self-validating probe and assertion evidence is admitted, or one same-thread correction records and replaces only correctable validation-command identity drift; policy, assertion-semantic, transport and integrity failures remain hard stops.",
         "evidence_dependencies": "Canonical command identity/cwd/exit, Controller probe-config digest and thread binding, immutable launcher/script, assertion evidence and read-only invariance guards.",
         "allowed_outcomes": [
@@ -1264,8 +1264,10 @@
         "checkpoint_contract": "Original drift, correction attempt/item and Controller-selected peer remain in native result evidence; recovery never erases the first mismatch.",
         "families": {
           "input": {
-            "expectation": "The model command is a short path-free immutable entrypoint and exact Controller config/digest binds the current peer.",
+            "expectation": "B21 has one import/script-invariant package identity; the model command is a short path-free immutable entrypoint and exact Controller config/digest binds the current peer.",
             "unittest_ids": [
+              "test_boundary_identity.BoundaryIdentityAndBootTests.test_imported_b21_runtime_identity_matches_static_source_identity",
+              "test_boundary_identity.BoundaryIdentityAndBootTests.test_smoke_script_help_and_boot_are_model_free_and_identity_stable",
               "test_native_command_recovery.NativeCommandRecoveryTests.test_short_entrypoint_contains_no_controller_paths",
               "test_native_command_recovery.NativeCommandRecoveryTests.test_controller_config_digest_binds_exact_current_peer"
             ],
@@ -1301,13 +1303,13 @@
           }
         },
         "entrypoints": [
-          "tools.smoke_readonly_scratch.admit_native_phase_with_recovery"
+          "slivin_harness.native_role_admission.admit_native_phase_with_recovery"
         ],
         "verification_limit": "Deterministic captured replay proves bounded recovery of the known transport-valid command drift only; native Windows sandbox and real-model qualification remain mandatory."
       }
     ]
   },
-  "harness_version": "0.8.0a34",
+  "harness_version": "0.8.0a35",
   "phase": "phase7-final-gate-delivery-benchmark",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",

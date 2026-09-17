@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- `0.8.0a35` makes boundary identity invariant across import, direct script and
+  runpy-style `__main__` execution. One Controller-owned resolver derives the
+  canonical module from the proven Python source path relative to the Harness
+  root plus normalized lexical qualname; the historical generic
+  `__main__ -> task_runner` rewrite is removed and outside-root sources fail closed.
+- B21 admission/recovery and its state types now live in
+  `slivin_harness.native_role_admission`; the native smoke remains an executable
+  consumer without duplicating the state machine. Runtime decoration and static
+  AST inventory use the same canonical entrypoint authority.
+- A mandatory `entrypoint_boot` stage executes explicit machine-readable
+  `--boot-check` contracts for `task_runner.py`, `tools/smoke_readonly_scratch.py`
+  and `tools/release_real_models.py` in exact script mode before `native_roles` or
+  `real_models`. Boot records assert `model_execution=NOT_RUN`. This does not imply
+  `RELEASE_QUALIFIED`.
 - `0.8.0a34` removes Controller-owned absolute probe configuration from model
   transcription. Native roles execute only `.\sandbox_probe.cmd`; exact
   project/scratch/sibling/private/current-peer bindings are supplied as a

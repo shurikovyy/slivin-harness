@@ -250,6 +250,10 @@ in the same thread, and only the failed exact commands may execute. For the prob
 is always the same short entrypoint. Repeated/ambiguous drift, policy/config/integrity/
 assertion-semantic failure and transport incompatibility remain hard failures, with
 the original mismatch retained.
+После replay `entrypoint_boot` запускает explicit `--boot-check` contracts для
+`task_runner.py`, `tools/smoke_readonly_scratch.py` и
+`tools/release_real_models.py` в exact script mode. Это import/decorator/CLI boot
+proof с `model_execution=NOT_RUN`, а не native или real-model qualification.
 Peer checks also target the granted scratch of another active role in both directions;
 an ungranted sibling directory alone does not prove per-thread isolation.
 Continuations check the same policy; fresh Planner follows scratch cleanup. Existing

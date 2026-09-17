@@ -74,11 +74,12 @@ class NativeCommandRecoveryTests(unittest.TestCase):
             return native.NativeCorrectionTurn(thread_id, tuple(correction_commands))
 
         result = native.admit_native_phase_with_recovery(
-            list(commands), thread_id="planner-thread", node=self.node,
-            project=self.project, scratch=self.scratch, sibling=self.sibling,
-            private=self.private, peer=self.peer, initial=initial,
-            correction=correction,
-        )
+            list(commands), thread_id="planner-thread", project=self.project,
+            validate=lambda rows: native.validate_phase(
+                rows, node=self.node, project=self.project, scratch=self.scratch,
+                sibling=self.sibling, private=self.private, peer=self.peer,
+                initial=initial),
+            correction=correction)
         return result, calls
 
     def test_short_entrypoint_contains_no_controller_paths(self) -> None:
@@ -154,9 +155,11 @@ class NativeCommandRecoveryTests(unittest.TestCase):
         with self.assertRaises(native.NativeRoleEvidenceError) as caught:
             native.admit_native_phase_with_recovery(
                 [self.exact_probe(), self.row(expected)],
-                thread_id="planner-thread", node=self.node, project=self.project,
-                scratch=self.scratch, sibling=self.sibling, private=self.private,
-                peer=self.peer, initial=False,
+                thread_id="planner-thread", project=self.project,
+                validate=lambda rows: native.validate_phase(
+                    rows, node=self.node, project=self.project, scratch=self.scratch,
+                    sibling=self.sibling, private=self.private, peer=self.peer,
+                    initial=False),
                 correction=lambda *_: invoked.append(True))
         self.assertEqual(caught.exception.category, "ASSERTION_EVIDENCE_FAILURE")
         self.assertEqual(invoked, [])
@@ -203,9 +206,11 @@ class NativeCommandRecoveryTests(unittest.TestCase):
         with self.assertRaises(native.NativeRoleEvidenceError) as caught:
             native.admit_native_phase_with_recovery(
                 [self.exact_probe(), self.exact_probe(), self.jest_pass()],
-                thread_id="planner-thread", node=self.node, project=self.project,
-                scratch=self.scratch, sibling=self.sibling, private=self.private,
-                peer=self.peer, initial=False, correction=correction)
+                thread_id="planner-thread", project=self.project,
+                validate=lambda rows: native.validate_phase(
+                    rows, node=self.node, project=self.project, scratch=self.scratch,
+                    sibling=self.sibling, private=self.private, peer=self.peer,
+                    initial=False), correction=correction)
         self.assertEqual(caught.exception.category, "ROLE_COMMAND_DRIFT")
         self.assertFalse(caught.exception.correctable)
         self.assertEqual(invoked, [])
@@ -217,9 +222,11 @@ class NativeCommandRecoveryTests(unittest.TestCase):
         with self.assertRaises(native.NativeRoleEvidenceError) as caught:
             native.admit_native_phase_with_recovery(
                 [self.captured_probe(), self.jest_pass()],
-                thread_id="planner-thread", node=self.node, project=self.project,
-                scratch=self.scratch, sibling=self.sibling, private=self.private,
-                peer=self.peer, initial=False, correction=correction)
+                thread_id="planner-thread", project=self.project,
+                validate=lambda rows: native.validate_phase(
+                    rows, node=self.node, project=self.project, scratch=self.scratch,
+                    sibling=self.sibling, private=self.private, peer=self.peer,
+                    initial=False), correction=correction)
         self.assertEqual(caught.exception.category, "INTEGRITY_FAILURE")
 
     def test_exact_policy_failure_and_config_tamper_never_retry(self) -> None:
@@ -243,9 +250,11 @@ class NativeCommandRecoveryTests(unittest.TestCase):
             ) as caught:
                 native.admit_native_phase_with_recovery(
                     [self.exact_probe(exit_code=7, output=output), self.jest_pass()],
-                    thread_id="planner-thread", node=self.node, project=self.project,
-                    scratch=self.scratch, sibling=self.sibling, private=self.private,
-                    peer=self.peer, initial=False, correction=correction)
+                    thread_id="planner-thread", project=self.project,
+                    validate=lambda rows: native.validate_phase(
+                        rows, node=self.node, project=self.project, scratch=self.scratch,
+                        sibling=self.sibling, private=self.private, peer=self.peer,
+                        initial=False), correction=correction)
             self.assertEqual(caught.exception.category, category)
             self.assertEqual(invoked, [])
 

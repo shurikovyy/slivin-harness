@@ -11,7 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 from slivin_harness.codex_transport import TRANSPORT_SCHEMA
-from tools.smoke_readonly_scratch import (
+from slivin_harness.native_role_admission import (
     NATIVE_COMMAND_CORRECTION_BUDGET, NATIVE_ROLE_COMMAND_ADMISSION_SCHEMA,
 )
 

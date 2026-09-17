@@ -11,6 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 from slivin_harness.boundaries import BOUNDARIES, attach_boundary_observer, detach_boundary_observer, boundary_inventory
+from slivin_harness.entrypoint_identity import canonical_boundary_entrypoint
 
 # Fixed suites contain independent expected outcomes. Entire modules retain
 # positive, negative, freshness and recovery siblings when a fixture evolves.
@@ -27,14 +28,13 @@ def check_inventory() -> dict:
     observed = {}
     for path in [ROOT / "task_runner.py", ROOT / "tools" / "smoke_readonly_scratch.py",
                  *sorted((ROOT / "slivin_harness").glob("*.py"))]:
-        module = path.relative_to(ROOT).with_suffix("").as_posix().replace("/", ".")
         def walk(node, prefix=""):
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, (ast.FunctionDef, ast.ClassDef)):
                     name = prefix + child.name
                     for decorator in child.decorator_list:
                         if isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Name) and decorator.func.id == "boundary":
-                            observed[module + "." + name] = ast.literal_eval(decorator.args[0])
+                            observed[canonical_boundary_entrypoint(path, name)] = ast.literal_eval(decorator.args[0])
                     walk(child, name + ".")
                 else:
                     walk(child, prefix)

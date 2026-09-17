@@ -14,15 +14,13 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
-from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from slivin_harness import __version__
 from slivin_harness.app_server import CodexAppServer
-from slivin_harness.boundaries import boundary
 from slivin_harness.control_plane import ControllerPlane, is_within
 from slivin_harness.codex_transport import (
     CAPTURED_FORM_ORIGINS, TRANSPORT_SCHEMA, CanonicalExecutedCommand, CodexTransportAdapter,
@@ -30,7 +28,15 @@ from slivin_harness.codex_transport import (
 )
 from slivin_harness.evaluator import EVALUATOR_INSTRUCTIONS
 from slivin_harness.execution import ExecutionBroker, ExecutionRole, ScopedExecutionPolicyError
+from slivin_harness.entrypoint_boot import emit_entrypoint_boot_if_requested
 from slivin_harness.git_integrity import CandidateWorkspaceBaseline, GitControlIntegrityManager, TrustedBatchIntegrityCoordinator
+from slivin_harness.native_role_admission import (
+    NATIVE_COMMAND_CORRECTION_BUDGET,
+    NATIVE_ROLE_COMMAND_ADMISSION_SCHEMA,
+    NativeCorrectionTurn,
+    NativeRoleEvidenceError,
+    admit_native_phase_with_recovery,
+)
 from slivin_harness.planner import PLANNER_INSTRUCTIONS
 from slivin_harness.run_state import build_candidate_identity
 from slivin_harness.runtime_projection import RuntimeProjectionIntegrityManager, fingerprint_runtime_tree
@@ -41,8 +47,6 @@ PROBE_ENTRYPOINT = r".\sandbox_probe.cmd"
 PROBE_CONFIG_ENV = "SLIVIN_NATIVE_PROBE_CONFIG"
 PROBE_CONFIG_SHA256_ENV = "SLIVIN_NATIVE_PROBE_CONFIG_SHA256"
 PROBE_CONFIG_SCHEMA = "native-sandbox-probe-config.v1"
-NATIVE_ROLE_COMMAND_ADMISSION_SCHEMA = "native-role-command-admission.v1"
-NATIVE_COMMAND_CORRECTION_BUDGET = 1
 
 PROBE = r"""
 const fs=require('fs'),path=require('path'),os=require('os'),cp=require('child_process'),crypto=require('crypto');
@@ -101,48 +105,6 @@ console.log('PROBE_RESULT='+JSON.stringify({cwd:process.cwd(),tmpdir:os.tmpdir()
  child:{status:child.status,stdout:child.stdout,stderr:child.stderr,error:child.error?{code:child.error.code,syscall:child.error.syscall}:null}}));
 if(errors.length)process.exitCode=7;
 """
-
-
-class NativeRoleEvidenceError(RuntimeError):
-    """Typed native acceptance failure after canonical transport admission."""
-
-    def __init__(self, category: str, *, context: str, detail: str,
-                 item_id: str | None = None, observed_payload: str | None = None,
-                 recovery_evidence: dict | None = None, correctable: bool = True,
-                 correction_commands: tuple[str, ...] = (),
-                 discard_item_ids: tuple[str, ...] = ()):
-        self.category = category
-        self.reason_code = category
-        self.context = context
-        self.detail = detail
-        self.item_id = item_id
-        self.observed_payload = observed_payload
-        self.recovery_evidence = recovery_evidence
-        self.correctable = correctable
-        self.correction_commands = correction_commands
-        self.discard_item_ids = discard_item_ids
-        super().__init__(f"{category} context={context} detail={detail}")
-
-    def to_dict(self) -> dict:
-        value = {"category": self.category, "context": self.context, "detail": self.detail}
-        if self.item_id:
-            value["item_id"] = self.item_id
-        if self.observed_payload is not None:
-            value["observed_payload"] = self.observed_payload
-        if self.recovery_evidence is not None:
-            value["recovery_evidence"] = self.recovery_evidence
-        value["correctable"] = self.correctable
-        if self.correction_commands:
-            value["correction_commands"] = list(self.correction_commands)
-        if self.discard_item_ids:
-            value["discard_item_ids"] = list(self.discard_item_ids)
-        return value
-
-
-@dataclass(frozen=True)
-class NativeCorrectionTurn:
-    thread_id: str
-    commands: tuple[CanonicalExecutedCommand, ...]
 
 
 def probe_configuration(*, project: Path, scratch: Path, sibling: Path,
@@ -446,79 +408,6 @@ def validate_phase(commands: list[CanonicalExecutedCommand], *, node: Path, proj
     return result
 
 
-@boundary("B21")
-def admit_native_phase_with_recovery(
-    commands: list[CanonicalExecutedCommand], *, thread_id: str, node: Path,
-    project: Path, scratch: Path, sibling: Path, private: Path, peer: Path,
-    initial: bool,
-    correction: Callable[[str, str], NativeCorrectionTurn],
-) -> dict:
-    """Admit a phase, allowing one same-thread validation-command retry only."""
-    original_error: NativeRoleEvidenceError | None = None
-    try:
-        result = validate_phase(commands, node=node, project=project, scratch=scratch,
-            sibling=sibling, private=private, peer=peer, initial=initial)
-        result["role_command_recovery"] = {
-            "schema_version": NATIVE_ROLE_COMMAND_ADMISSION_SCHEMA,
-            "status": "NOT_REQUIRED", "attempts": 0,
-        }
-        return result
-    except NativeRoleEvidenceError as error:
-        if (error.category != "ROLE_COMMAND_DRIFT" or not error.correctable or
-                not error.correction_commands):
-            raise
-        original_error = error
-    assert original_error is not None
-
-    prompt = (
-        "CONTROLLER ROLE-COMMAND CORRECTION. The previous validation command identity "
-        "did not match the Controller request. Execute exactly the following failed "
-        "validation command(s), separately and from the project cwd; execute no other "
-        "command:\n" + "\n".join(original_error.correction_commands) + "\n"
-        "Do not restate or alter any Controller-owned configuration. "
-        "Return only a brief acknowledgement after the command."
-    )
-    turn = correction(thread_id, prompt)
-    recovery = {
-        "schema_version": NATIVE_ROLE_COMMAND_ADMISSION_SCHEMA,
-        "status": "ATTEMPTED",
-        "attempts": NATIVE_COMMAND_CORRECTION_BUDGET,
-        "thread_id": thread_id,
-        "original": original_error.to_dict(),
-        "expected_commands": list(original_error.correction_commands),
-        "correction_command_count": len(turn.commands),
-    }
-    if turn.thread_id != thread_id:
-        raise NativeRoleEvidenceError("INTEGRITY_FAILURE", context="role-command-recovery",
-            detail="Correction escaped the original role thread", recovery_evidence=recovery)
-    if len(turn.commands) != len(original_error.correction_commands) or any(
-        row.shell != "powershell" or row.payload != expected or
-        not same_windows_path(row.cwd, str(project))
-        for row, expected in zip(turn.commands, original_error.correction_commands)
-    ):
-        raise NativeRoleEvidenceError("ROLE_COMMAND_DRIFT", context=original_error.context,
-            detail="Correction must execute only the exact failed validation command(s)",
-            recovery_evidence={**recovery, "status": "EXHAUSTED"})
-    admitted = [row for row in commands if row.item_id not in original_error.discard_item_ids]
-    admitted.extend(turn.commands)
-    try:
-        result = validate_phase(admitted, node=node, project=project, scratch=scratch,
-            sibling=sibling, private=private, peer=peer, initial=initial)
-    except NativeRoleEvidenceError as corrected:
-        if corrected.category == "ROLE_COMMAND_DRIFT":
-            raise NativeRoleEvidenceError("ROLE_COMMAND_DRIFT", context=corrected.context,
-                detail="Repeated role command drift exhausted correction budget",
-                item_id=corrected.item_id, observed_payload=corrected.observed_payload,
-                recovery_evidence={**recovery, "status": "EXHAUSTED"}) from corrected
-        raise
-    result["role_command_recovery"] = {
-        **recovery,
-        "status": "RECOVERED",
-        "correction_item_ids": [row.item_id for row in turn.commands],
-    }
-    return result
-
-
 def failure_category(error: Exception) -> str:
     if isinstance(error, NativeRoleEvidenceError):
         return error.category
@@ -687,10 +576,14 @@ def main() -> int:
                         return NativeCorrectionTurn(same_thread,
                             tuple(server.commands[correction_before:]))
 
+                    def validate_current_phase(rows: list[CanonicalExecutedCommand]) -> dict:
+                        return validate_phase(rows, node=args.node, project=project,
+                            scratch=scratch, sibling=sibling, private=private,
+                            peer=peer, initial=initial)
+
                     summary["phases"][phase] = admit_native_phase_with_recovery(
-                        phase_commands, thread_id=thread, node=args.node,
-                        project=project, scratch=scratch, sibling=sibling, private=private,
-                        peer=peer, initial=initial, correction=correct_role_command)
+                        phase_commands, thread_id=thread, project=project,
+                        validate=validate_current_phase, correction=correct_role_command)
                     write_json(logs / "result.json", summary)
                 role_canaries[role] = scratch / "positive/probe.txt"
         summary["status"] = "PASS"
@@ -737,4 +630,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if emit_entrypoint_boot_if_requested(
+        sys.argv[1:], source_file=__file__,
+        boundary_functions=(admit_native_phase_with_recovery,),
+    ):
+        raise SystemExit(0)
     raise SystemExit(main())

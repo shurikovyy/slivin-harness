@@ -22,8 +22,8 @@ class ReleaseArtifactReplayGateTests(unittest.TestCase):
 
     def test_release_gate_reaches_real_models_only_after_transcript_replay_passes(self) -> None:
         visited = execute_mandatory_stage_sequence(RELEASE_STAGES, lambda _name: True)
-        self.assertEqual(visited[-5:], ("artifact_replay", "transport_replay",
-            "native_command_replay", "native_roles", "real_models"))
+        self.assertEqual(visited[-6:], ("artifact_replay", "transport_replay",
+            "native_command_replay", "entrypoint_boot", "native_roles", "real_models"))
         self.assertEqual(len(REPLAY_TESTS), 3)
         self.assertEqual(len(REPLAY_CASES), 4)
         self.assertEqual(len(NATIVE_COMMAND_REPLAY_TESTS), 4)
@@ -42,33 +42,47 @@ class ReleaseArtifactReplayGateTests(unittest.TestCase):
         self.assertEqual(visited[-1], "native_command_replay")
         self.assertFalse(MODEL_BACKED_STAGES.intersection(visited))
 
+    def test_entrypoint_boot_failure_prevents_all_model_backed_stages(self) -> None:
+        visited = execute_mandatory_stage_sequence(
+            RELEASE_STAGES, lambda name: name != "entrypoint_boot",
+        )
+        self.assertEqual(visited[-1], "entrypoint_boot")
+        self.assertFalse(MODEL_BACKED_STAGES.intersection(visited))
+
     def test_model_backed_stages_cannot_move_before_replay(self) -> None:
         self.assertEqual(MODEL_BACKED_STAGES, {"native_roles", "real_models"})
         self.assertEqual(RELEASE_STAGES, (
             "self_check", "boundary", "stateful", "mutations", "mixed_runners",
             "artifact_replay", "transport_replay", "native_command_replay",
-            "native_roles", "real_models",
+            "entrypoint_boot", "native_roles", "real_models",
         ))
         validate_release_stage_order(RELEASE_STAGES)
         for invalid in (
             ("native_roles", "artifact_replay", "transport_replay",
-             "native_command_replay", "real_models"),
+             "native_command_replay", "entrypoint_boot", "real_models"),
             ("real_models", "artifact_replay", "transport_replay",
-             "native_command_replay", "native_roles"),
+             "native_command_replay", "entrypoint_boot", "native_roles"),
             ("native_roles", "real_models"),
             ("artifact_replay", "artifact_replay", "transport_replay",
-             "native_command_replay", "native_roles", "real_models"),
+             "native_command_replay", "entrypoint_boot", "native_roles", "real_models"),
             ("artifact_replay", "native_roles", "transport_replay",
-             "native_command_replay", "real_models"),
+             "native_command_replay", "entrypoint_boot", "real_models"),
             ("transport_replay", "artifact_replay", "native_command_replay",
-             "native_roles", "real_models"),
+             "entrypoint_boot", "native_roles", "real_models"),
             ("artifact_replay", "native_command_replay", "transport_replay",
-             "native_roles", "real_models"),
+             "entrypoint_boot", "native_roles", "real_models"),
+            ("artifact_replay", "transport_replay", "entrypoint_boot",
+             "native_command_replay", "native_roles", "real_models"),
             ("artifact_replay", "native_roles", "real_models"),
             ("self_check", "future_model_stage", "artifact_replay",
-             "transport_replay", "native_command_replay", "native_roles", "real_models"),
+             "transport_replay", "native_command_replay", "entrypoint_boot",
+             "native_roles", "real_models"),
             ("artifact_replay", "transport_replay", "native_command_replay",
-             "future_model_stage", "native_roles", "real_models"),
+             "entrypoint_boot", "future_model_stage", "native_roles", "real_models"),
+            ("artifact_replay", "transport_replay", "native_command_replay",
+             "native_roles", "entrypoint_boot", "real_models"),
+            ("artifact_replay", "transport_replay", "native_command_replay",
+             "native_roles", "real_models"),
         ):
             with self.subTest(invalid=invalid), self.assertRaises(RuntimeError):
                 validate_release_stage_order(invalid)

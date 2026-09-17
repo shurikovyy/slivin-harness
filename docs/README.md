@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a34
+# Документация Slivin Harness 0.8.0a35
 
-Актуальная версия: **0.8.0a34 — Native Role Command Ownership**.
+Актуальная версия: **0.8.0a35 — Executable Identity and Boot**.
 
 Основные документы:
 

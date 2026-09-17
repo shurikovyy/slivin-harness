@@ -11,6 +11,8 @@ import inspect
 import json
 from pathlib import Path
 
+from .entrypoint_identity import runtime_boundary_entrypoint
+
 BOUNDARY_VERSION = "boundary-contracts.v1"
 # Fully qualified lexical names include Controller closures, so continuation
 # and recompilation cannot disappear behind an inaccurate module-level symbol.
@@ -43,7 +45,7 @@ BOUNDARIES = {
         "slivin_harness.codex_transport.CodexTransportAdapter.observe_completed",
     )),
     "B21": ("Native role command admission and bounded recovery", (
-        "tools.smoke_readonly_scratch.admit_native_phase_with_recovery",
+        "slivin_harness.native_role_admission.admit_native_phase_with_recovery",
     )),
 }
 _observers = contextvars.ContextVar("harness_boundary_observers", default=())
@@ -71,10 +73,7 @@ def boundary(identifier: str):
     if identifier not in BOUNDARIES:
         raise ValueError("Unknown production boundary")
     def decorate(function):
-        lexical = function.__module__ + "." + function.__qualname__.replace(".<locals>", "")
-        # task_runner executed as a script retains the same public identity.
-        if lexical.startswith("__main__."):
-            lexical = "task_runner." + lexical[len("__main__."):]
+        lexical = runtime_boundary_entrypoint(function)
         if lexical not in BOUNDARIES[identifier][1]:
             raise ValueError("Boundary entrypoint is not in the executable inventory: " + lexical)
         @functools.wraps(function)
@@ -96,5 +95,6 @@ def boundary(identifier: str):
             emit("RETURN")
             return value
         wrapped.__boundary_id__ = identifier
+        wrapped.__boundary_entrypoint__ = lexical
         return wrapped
     return decorate

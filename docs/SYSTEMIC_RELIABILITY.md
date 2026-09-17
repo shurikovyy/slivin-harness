@@ -130,11 +130,15 @@ test IDs четырёх семейств каждой границы. AST про
 исполнения каждого required case ID. Missing/NOT_RUN/FAIL не заменяется соседним тестом.
 RuntimeExecutor и Controller contract closure входят в B16.
 
-Обязательны все десять stages: self-check, boundary families, stateful/fault injection,
+Обязательны все одиннадцать stages: self-check, boundary families, stateful/fault injection,
 mutations, mixed Node/Jest, deterministic artifact transcript replay, deterministic
-Codex transport replay, deterministic native command/recovery replay, native role
-sandbox, real-model FULL tasks. Все три replay gates обязаны PASS до любых
-model-backed turns. Artifact gate воспроизводит sanitized
+Codex transport replay, deterministic native command/recovery replay, exact executable
+boot, native role sandbox и real-model FULL tasks. Все три
+replay gates и `entrypoint_boot` обязаны PASS до любых model-backed turns.
+Boot stage запускает `task_runner.py`, `tools/smoke_readonly_scratch.py` и
+`tools/release_real_models.py` как реальные Python scripts с explicit
+machine-readable `--boot-check`; каждый record требует `model_execution=NOT_RUN`.
+Artifact gate воспроизводит sanitized
 QE1/QS1/QE2 failures. Transport gate проверяет captured `shr-q-5654234e36`
 (`-NoProfile -Command`, nullable legacy probe output) через adapter/AGENTS
 admission и `shr-q-5a12a511f1` (`-Command`, legacy path-bearing probe, AGENTS и

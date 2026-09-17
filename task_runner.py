@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from slivin_harness.boundaries import boundary, attach_boundary_observer, detach_boundary_observer
+from slivin_harness.entrypoint_boot import emit_entrypoint_boot_if_requested
 
 import argparse
 import copy
@@ -5414,4 +5415,14 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    if emit_entrypoint_boot_if_requested(
+        sys.argv[1:], source_file=__file__, boundary_functions=(
+            run_checks,
+            build_dynamic_check_specs,
+            verify_self_verification_stamp,
+            observe_terminal_report_candidate,
+            run_implementer_report,
+        ),
+    ):
+        raise SystemExit(0)
     raise SystemExit(main())

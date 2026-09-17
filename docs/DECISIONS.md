@@ -66,6 +66,7 @@
 | [D-029](#d-029) | Model wire ссылается на Controller origins, local correction отделена от semantics | IMPLEMENTED в 0.8.0a32; qualification конкретного SHA ещё требуется |
 | [D-030](#d-030) | Controller canonicalizes Codex command transport до evidence consumers | IMPLEMENTED в 0.8.0a33; native/full qualification конкретного SHA ещё требуется |
 | [D-031](#d-031) | Controller владеет opaque native probe configuration и bounded command recovery | IMPLEMENTED в 0.8.0a34; native/full qualification конкретного SHA ещё требуется |
+| [D-032](#d-032) | Boundary identity принадлежит source tree; model executables проходят exact boot | IMPLEMENTED в 0.8.0a35; native/full qualification конкретного SHA ещё требуется |
 
 <a id="d-001"></a>
 
@@ -1110,6 +1111,62 @@ command-ownership failure и bounded state machine; реальный Windows san
 **Пересмотр.** Расширять recovery можно только для Controller-known exact command
 identity с теми же same-thread, invariance, no-progress и single-attempt bounds;
 policy, assertion semantics, transport и integrity failures не становятся retry.
+
+<a id="d-032"></a>
+
+## D-032. Boundary identity принадлежит source tree; model executables проходят exact boot
+
+**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в `0.8.0a35`; native и full
+qualification этого SHA ещё не выполнялись. **Дата регистрации:** 2026-09-17.
+**Связанные решения:** D-013, D-020, D-030, D-031.
+
+**Проблема и проверенные основания.** Qualification `f2018b4...` прошла все восемь
+deterministic stages, затем `native_roles` остановилась до App Server startup.
+Import `tools.smoke_readonly_scratch` был успешен, но exact release invocation
+`python tools/smoke_readonly_scratch.py --help` падал на B21 decorator. Runtime
+identity строилась из `function.__module__`; исторический global alias считал любой
+`__main__` модулем `task_runner`, поэтому реальный B21 ошибочно назывался
+`task_runner.admit_native_phase_with_recovery`. Static AST inventory независимо
+выводил module из path и не воспроизводил execution mode. Это boot/identity defect,
+не transport, sandbox, command recovery или model semantics.
+
+**Решение и rationale.** Единственный Controller resolver получает existing `.py`
+source function, resolve-ит его внутри Harness root, превращает safe relative path в
+dotted module и добавляет normalized lexical qualname. Runtime decorator и static
+AST inventory используют одну функцию `canonical_boundary_entrypoint`; runtime
+`__module__`, basename guessing и special `__main__` aliases не являются authority.
+Outside-root, nonexistent, non-Python и non-module paths fail closed.
+
+B21 state machine, error/turn types и correction budget перенесены в
+`slivin_harness.native_role_admission`; native smoke связывает этот единственный
+package boundary с existing validator и execution loop. Это устраняет CLI/domain
+ownership без копирования admission logic и не меняет recovery или sandbox proof.
+
+Перед `native_roles` добавлен отдельный `entrypoint_boot`. Он exact subprocess-ом
+запускает `task_runner.py`, `tools/smoke_readonly_scratch.py` и
+`tools/release_real_models.py` с explicit machine-readable `--boot-check`.
+Contract фиксирует source/module, runtime boundary identities и
+`model_execution=NOT_RUN`; любой import/decorator/CLI failure останавливает pipeline
+до model-backed stages. `--help` smoke также остаётся обязательным regression.
+
+**Отвергнутые варианты.** REJECTED: special-case только
+`smoke_readonly_scratch.py` — следующий script повторит дефект; сохранить
+`__main__ -> task_runner` и расширять alias table — runtime name остаётся ложной
+authority; basename matching — допускает collisions/fuzzy identity; проверять только
+import — не воспроизводит release process mode; запускать native smoke для boot —
+тратит model quota и смешивает boot с sandbox proof; дублировать B21 в script/package —
+создаёт расходящиеся state machines; ослабить inventory — скрывает отсутствие hook.
+
+**Последствия, границы, проверка.** Transport adapter/corpus, short probe/config,
+ROLE_COMMAND_DRIFT, sandbox semantics, artifact/native-command replay и fixed model
+tasks не изменены. Boot доказывает только import/decorator/CLI initialization известных
+executables, не native sandbox и не model correctness. Новые executables, вызываемые
+после boot stage, должны получить explicit contract и target до qualification.
+`0.8.0a35` не является заявлением `RELEASE_QUALIFIED`.
+
+**Пересмотр.** Module identity изменяется только вместе с trusted source location;
+новая execution form принимается через тот же source-relative resolver и exact boot,
+а не через runtime alias.
 
 ## Шаблон новой записи
 
