@@ -130,17 +130,19 @@ class CodexTransportTests(unittest.TestCase):
         self.assertEqual(require_output(record), "first second")
         self.assertEqual(record.output_sources, ("delta",))
 
-    def test_captured_5a12_full_native_admission(self) -> None:
+    def test_captured_5a12_legacy_transport_evidence(self) -> None:
         commands = self.current.replay().commands
-        result = native.validate_phase(commands, node=self.current.node,
-            project=self.current.project, scratch=self.current.scratch,
-            sibling=self.current.sibling, private=self.current.private,
-            peer=self.current.peer, initial=True)
-        self.assertEqual(result["status"], "PASS")
-        self.assertEqual(result["jest_passes"], 2)
-        self.assertEqual(result["intentional_assertion_failures"], 1)
-        self.assertEqual(result["negative_attempts_denied"], 20)
-        self.assertFalse(result["instruction_reads"]["nested"]["output_marker_observed"])
+        evidence = native.validate_instruction_read_evidence(commands[:2],
+            project=self.current.project)
+        self.assertFalse(evidence["nested"]["output_marker_observed"])
+        self.assertEqual(commands[2].exit_code, 0)
+        self.assertTrue(commands[2].output_observed)
+        with self.assertRaisesRegex(native.NativeRoleEvidenceError,
+                                    "ROLE_COMMAND_DRIFT"):
+            native.validate_phase(commands, node=self.current.node,
+                project=self.current.project, scratch=self.current.scratch,
+                sibling=self.current.sibling, private=self.current.private,
+                peer=self.current.peer, initial=True)
 
     def test_observed_server_routes_captured_events_through_adapter(self) -> None:
         source = self.current.fixture["completed"][0]
@@ -178,9 +180,7 @@ class CodexTransportTests(unittest.TestCase):
         self.assertEqual(set(evidence), {"root", "nested"})
         self.assertFalse(commands[2].output_observed)
         self.assertEqual(commands[2].transport_form, "powershell-noprofile-command")
-        self.assertNotEqual(commands[2].payload, native.probe_command(node=old.node,
-            project=old.project, scratch=old.scratch, sibling=old.sibling,
-            private=old.private, peer=old.peer))
+        self.assertNotEqual(commands[2].payload, native.probe_command())
 
     def test_captured_420_evaluator_pwsh_adapter_only(self) -> None:
         capture = CapturedTransportFixture(self.root / "evaluator", load_capture(CAPTURED_420))
@@ -208,17 +208,20 @@ class CodexTransportTests(unittest.TestCase):
 
     def test_jest_output_and_cache_route_remain_required(self) -> None:
         commands = self.current.replay().commands
+        commands[2] = replace(commands[2], payload=native.probe_command())
         pass_row = commands[3]
         no_output = [replace(row, output=None, output_observed=False, output_sources=())
                      if row.item_id == pass_row.item_id else row for row in commands]
-        with self.assertRaisesRegex(CodexTransportError, "OUTPUT_UNAVAILABLE"):
+        with self.assertRaisesRegex(native.NativeRoleEvidenceError,
+                                    "ASSERTION_EVIDENCE_FAILURE"):
             native.validate_phase(no_output, node=self.current.node,
                 project=self.current.project, scratch=self.current.scratch,
                 sibling=self.current.sibling, private=self.current.private,
                 peer=self.current.peer, initial=True)
         forbidden = [replace(row, payload=row.payload + " --no-cache")
                      if row.item_id == pass_row.item_id else row for row in commands]
-        with self.assertRaisesRegex(CodexTransportError, "COMMAND_IDENTITY_MISMATCH"):
+        with self.assertRaisesRegex(native.NativeRoleEvidenceError,
+                                    "ROLE_COMMAND_DRIFT"):
             native.validate_phase(forbidden, node=self.current.node,
                 project=self.current.project, scratch=self.current.scratch,
                 sibling=self.current.sibling, private=self.current.private,
@@ -274,12 +277,14 @@ class CodexTransportTests(unittest.TestCase):
                                           str(self.current.project)))
         self.assertEqual(windows_path_key("\\\\?\\" + str(self.current.project)),
                          windows_path_key(str(self.current.project)))
-        with self.assertRaisesRegex(CodexTransportError, "COMMAND_IDENTITY_MISMATCH"):
+        with self.assertRaisesRegex(native.NativeRoleEvidenceError,
+                                    "ROLE_COMMAND_DRIFT"):
             native.validate_instruction_read_evidence(
                 [replace(root, cwd=windows_path_key(str(self.root / "wrong"))), current.commands[1]],
                 project=self.current.project,
             )
-        with self.assertRaisesRegex(CodexTransportError, "COMMAND_IDENTITY_MISMATCH"):
+        with self.assertRaisesRegex(native.NativeRoleEvidenceError,
+                                    "ROLE_COMMAND_DRIFT"):
             native.validate_instruction_read_evidence(
                 [replace(root, payload="Write-Output 'AGENTS.md'"), current.commands[1]],
                 project=self.current.project,
@@ -290,7 +295,8 @@ class CodexTransportTests(unittest.TestCase):
             "Write-Output " + native.INSTRUCTION_READ_SPECS[0][3],
         )
         echoed = CodexTransportAdapter().observe_completed(wrapped, phase="phase")
-        with self.assertRaisesRegex(CodexTransportError, "COMMAND_IDENTITY_MISMATCH"):
+        with self.assertRaisesRegex(native.NativeRoleEvidenceError,
+                                    "ROLE_COMMAND_DRIFT"):
             native.validate_instruction_read_evidence([echoed, current.commands[1]],
                 project=self.current.project)
         adapter = CodexTransportAdapter()

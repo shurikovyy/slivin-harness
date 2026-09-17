@@ -4,7 +4,7 @@
   "source_run_id": "shr-q-5a12a511f1",
   "source_projection": ["native_roles/diagnostics/commands.jsonl", "native_roles/diagnostics/output_deltas.jsonl"],
   "sanitization": "Only synthetic role commands retained; home, project, scratch and canary paths rebound. Jest text reduced to actual assertion lines; probe output reduced to actual operation names/results/codes.",
-  "expected_admission": "PASS",
+  "expected_admission": "PASS_ADAPTER_ONLY",
   "phase": "planner_initial_initial",
   "completed": [
     {

@@ -10,11 +10,14 @@ import subprocess
 import unittest
 import uuid
 
-from slivin_harness.codex_transport import CanonicalExecutedCommand, CodexTransportError, windows_path_key
+from slivin_harness.codex_transport import CanonicalExecutedCommand, windows_path_key
 
 from tools.smoke_readonly_scratch import (
     INSTRUCTION_READ_SPECS,
+    NativeRoleEvidenceError,
     PROBE,
+    probe_configuration,
+    probe_environment,
     validate_instruction_read_evidence,
     probe_command,
     validate_phase,
@@ -64,7 +67,7 @@ class InstructionReadEvidenceTests(unittest.TestCase):
             "Write-Output 'ROOT_INSTRUCTIONS_READ NESTED_INSTRUCTIONS_READ AGENTS.md'",
             output="ROOT_INSTRUCTIONS_READ NESTED_INSTRUCTIONS_READ",
         )
-        with self.assertRaisesRegex(CodexTransportError, "COMMAND_IDENTITY_MISMATCH"):
+        with self.assertRaisesRegex(NativeRoleEvidenceError, "ROLE_COMMAND_DRIFT"):
             validate_instruction_read_evidence([echoed], project=self.project)
 
     def test_missing_wrong_path_wrong_cwd_and_nonzero_reads_fail(self) -> None:
@@ -88,7 +91,7 @@ class InstructionReadEvidenceTests(unittest.TestCase):
         cases["nonzero"] = (nonzero, "src/AGENTS.md")
 
         for name, (commands, _expected_path) in cases.items():
-            with self.subTest(name=name), self.assertRaises(CodexTransportError):
+            with self.subTest(name=name), self.assertRaises(NativeRoleEvidenceError):
                 validate_instruction_read_evidence(commands, project=self.project)
 
 
@@ -112,9 +115,7 @@ class SandboxProbeEvidenceTests(unittest.TestCase):
 
     def probe_row(self, *, script: str | None = None, cwd: Path | None = None,
                   exit_code: int = 0, output: str | None = None) -> CanonicalExecutedCommand:
-        script = script if script is not None else probe_command(node=self.node,
-            project=self.project, scratch=self.scratch, sibling=self.sibling,
-            private=self.private, peer=self.peer)
+        script = script if script is not None else probe_command()
         return canonical_row(script, cwd or self.project, exit_code=exit_code, output=output)
 
     def jest_row(self) -> CanonicalExecutedCommand:
@@ -154,33 +155,28 @@ class SandboxProbeEvidenceTests(unittest.TestCase):
     def test_nonzero_and_wrong_cwd_fail(self) -> None:
         for name, row in (("nonzero", self.probe_row(exit_code=7)),
                           ("wrong_cwd", self.probe_row(cwd=self.scratch))):
-            with self.subTest(name=name), self.assertRaises(CodexTransportError):
+            with self.subTest(name=name), self.assertRaises(NativeRoleEvidenceError):
                 self.phase(row)
 
-    def test_altered_controller_arguments_fail(self) -> None:
-        for field in ("project", "scratch", "sibling", "private", "peer"):
-            args = {name: getattr(self, name) for name in
-                ("project", "scratch", "sibling", "private", "peer")}
-            args[field] = args[field].parent / (args[field].name + "-wrong")
-            script = probe_command(node=self.node, **args)
-            with self.subTest(field=field), self.assertRaisesRegex(CodexTransportError, "COMMAND_IDENTITY_MISMATCH"):
-                self.phase(self.probe_row(script=script))
+    def test_legacy_path_arguments_are_role_command_drift(self) -> None:
+        legacy = (f"& '{self.node}' .\\sandbox_probe.cjs '{self.project}' "
+                  f"'{self.scratch}' '{self.sibling}' '{self.private}' '{self.peer}'")
+        with self.assertRaisesRegex(NativeRoleEvidenceError, "ROLE_COMMAND_DRIFT"):
+            self.phase(self.probe_row(script=legacy))
 
     def test_echo_and_other_node_command_do_not_count(self) -> None:
-        exact = probe_command(node=self.node, project=self.project, scratch=self.scratch,
-            sibling=self.sibling, private=self.private, peer=self.peer)
+        exact = probe_command()
         for script in (f"Write-Output '{exact}'",
                        f"& '{self.node}' .\\other_probe.cjs '{self.project}'"):
-            with self.subTest(script=script), self.assertRaisesRegex(CodexTransportError, "COMMAND_IDENTITY_MISMATCH"):
+            with self.subTest(script=script), self.assertRaisesRegex(NativeRoleEvidenceError, "ROLE_COMMAND_DRIFT"):
                 self.phase(self.probe_row(script=script, output="PROBE_RESULT={}"))
 
     def test_duplicate_qualifying_probe_commands_fail(self) -> None:
         first = self.probe_row()
-        with self.assertRaisesRegex(CodexTransportError, "DUPLICATE_EXECUTION"):
+        with self.assertRaisesRegex(NativeRoleEvidenceError, "ROLE_COMMAND_DRIFT"):
             self.phase(first, self.probe_row())
-        altered = probe_command(node=self.node, project=self.project, scratch=self.scratch,
-            sibling=self.sibling, private=self.private, peer=self.peer.parent / "wrong.txt")
-        with self.assertRaisesRegex(CodexTransportError, "DUPLICATE_EXECUTION"):
+        altered = r".\sandbox_probe.cjs"
+        with self.assertRaisesRegex(NativeRoleEvidenceError, "ROLE_COMMAND_DRIFT"):
             self.phase(first, self.probe_row(script=altered))
 
 
@@ -208,7 +204,8 @@ class SandboxProbeProcessTests(unittest.TestCase):
         self.script = self.project / "sandbox_probe.cjs"
         self.script.write_text(PROBE, encoding="utf-8")
 
-    def run_probe(self, special: str) -> tuple[subprocess.CompletedProcess[str], dict]:
+    def run_probe(self, special: str, *, tamper_config_digest: bool = False
+                  ) -> tuple[subprocess.CompletedProcess[str], dict]:
         # Exercise the production probe body with deterministic filesystem failures.
         # One test simulates an unrelated ENOENT; the other allows one write.
         runner = r"""
@@ -227,13 +224,18 @@ for(const name of ['appendFileSync','writeFileSync','unlinkSync','renameSync']){
   throw error;
  };
 }
-process.argv=[process.execPath,process.env.PROBE_PATH,...JSON.parse(process.env.PROBE_ARGS)];
+process.argv=[process.execPath,process.env.PROBE_PATH];
 require(process.env.PROBE_PATH);
 """
-        env = {**os.environ, "TEMP": str(self.scratch), "TMP": str(self.scratch),
+        config = probe_configuration(project=self.project, scratch=self.scratch,
+            sibling=self.sibling, private=self.private, peer=self.peer)
+        selected_environment = probe_environment(config)
+        if tamper_config_digest:
+            selected_environment["SLIVIN_NATIVE_PROBE_CONFIG_SHA256"] = "0" * 64
+        env = {**os.environ, **selected_environment,
+               "TEMP": str(self.scratch), "TMP": str(self.scratch),
                "PROBE_SCRATCH": str(self.scratch), "PROBE_PATH": str(self.script),
-               "PROBE_ARGS": json.dumps([str(p) for p in (self.project, self.scratch,
-                    self.sibling, self.private, self.peer)]), "PROBE_SPECIAL": special}
+               "PROBE_SPECIAL": special}
         result = subprocess.run([shutil.which("node"), "-e", runner], cwd=self.project,
                                 env=env, text=True, encoding="utf-8", capture_output=True, check=False)
         output = next(line for line in result.stdout.splitlines() if line.startswith("PROBE_RESULT="))
@@ -257,6 +259,11 @@ require(process.env.PROBE_PATH);
         self.assertTrue(any(row["result"] == "ALLOWED" for row in result["rows"]
                             if row["name"].endswith("write:src/arithmetic.cjs")))
         self.assertTrue(any("not-policy-denial" in error for error in result["errors"]))
+
+    def test_controller_config_digest_tamper_fails_probe(self) -> None:
+        process, result = self.run_probe("denied", tamper_config_digest=True)
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("config-integrity", result["errors"])
 
 
 if __name__ == "__main__":

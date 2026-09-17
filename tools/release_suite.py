@@ -25,7 +25,8 @@ BOUNDARY_MODULES = (
 
 def check_inventory() -> dict:
     observed = {}
-    for path in [ROOT / "task_runner.py", *sorted((ROOT / "slivin_harness").glob("*.py"))]:
+    for path in [ROOT / "task_runner.py", ROOT / "tools" / "smoke_readonly_scratch.py",
+                 *sorted((ROOT / "slivin_harness").glob("*.py"))]:
         module = path.relative_to(ROOT).with_suffix("").as_posix().replace("/", ".")
         def walk(node, prefix=""):
             for child in ast.iter_child_nodes(node):

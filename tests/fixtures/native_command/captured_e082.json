@@ -1,0 +1,23 @@
+{
+  "fixture_id": "native-role-probe-peer-typo-e082",
+  "fixture_origin": "captured_real",
+  "source_run_id": "shr-q-e082a9f137",
+  "source_projection": [
+    "native_roles/diagnostics/commands.jsonl",
+    "native_roles/diagnostics/result.json"
+  ],
+  "phase": "planner_initial_continuation",
+  "expected_admission": "RECOVERED_AFTER_ROLE_COMMAND_DRIFT",
+  "sanitization": "Only the synthetic probe command identity and peer failure rows are retained; paths are deterministic placeholders and unrelated probe rows/prose are omitted.",
+  "expected_peer_spelling": "C:\\Users\\Slivin.Aleksandr\\AppData\\Local\\Temp\\{{RUN}}\\native_roles\\project\\.harness_tmp\\peer\\canary.txt",
+  "observed_peer_spelling": "C:\\Users\\Slivin\\Aleksandr\\AppData\\Local\\Temp\\{{RUN}}\\native_roles\\project\\.harness_tmp\\peer\\canary.txt",
+  "expected_legacy_payload": "& '{{NODE}}' .\\sandbox_probe.cjs '{{PROJECT}}' '{{SCRATCH}}' '{{SIBLING}}' '{{PRIVATE}}' 'C:\\Users\\Slivin.Aleksandr\\AppData\\Local\\Temp\\{{RUN}}\\native_roles\\project\\.harness_tmp\\peer\\canary.txt'",
+  "completed": {
+    "type": "commandExecution",
+    "id": "call_S6l17M3FC5twbY3ogm5HRCUa",
+    "command": "\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"& '{{NODE}}' .\\\\sandbox_probe.cjs '{{PROJECT}}' '{{SCRATCH}}' '{{SIBLING}}' '{{PRIVATE}}' 'C:\\\\Users\\\\Slivin\\\\Aleksandr\\\\AppData\\\\Local\\\\Temp\\\\{{RUN}}\\\\native_roles\\\\project\\\\.harness_tmp\\\\peer\\\\canary.txt'\"",
+    "cwd": "{{PROJECT}}",
+    "exitCode": 1,
+    "aggregatedOutput": "PROBE_RESULT={\"peer\":\"C:\\\\Users\\\\Slivin\\\\Aleksandr\\\\AppData\\\\Local\\\\Temp\\\\{{RUN}}\\\\native_roles\\\\project\\\\.harness_tmp\\\\peer\\\\canary.txt\",\"rows\":[{\"name\":\"absolute:peer\",\"result\":\"DENIED\",\"code\":\"ENOENT\"},{\"name\":\"relative-after-chdir:peer\",\"result\":\"DENIED\",\"code\":\"ENOENT\"}],\"errors\":[\"peer-target:ENOENT\",\"absolute:peer:not-policy-denial\",\"relative-after-chdir:peer:not-policy-denial\"]}\n"
+  }
+}

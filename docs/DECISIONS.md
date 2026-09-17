@@ -65,6 +65,7 @@
 | [D-028](#d-028) | Owner check inputs и production toolchain остаются властью Controller | IMPLEMENTED; qualification конкретного SHA ещё требуется |
 | [D-029](#d-029) | Model wire ссылается на Controller origins, local correction отделена от semantics | IMPLEMENTED в 0.8.0a32; qualification конкретного SHA ещё требуется |
 | [D-030](#d-030) | Controller canonicalizes Codex command transport до evidence consumers | IMPLEMENTED в 0.8.0a33; native/full qualification конкретного SHA ещё требуется |
+| [D-031](#d-031) | Controller владеет opaque native probe configuration и bounded command recovery | IMPLEMENTED в 0.8.0a34; native/full qualification конкретного SHA ещё требуется |
 
 <a id="d-001"></a>
 
@@ -1040,6 +1041,75 @@ reconstruction и три fixed FULL cases сохранены. Adapter не ис�
 containment decisions. Неизвестные transport forms остаются typed hard stop до
 нового captured counterexample и replay. Deterministic PASS не означает
 `RELEASE_QUALIFIED`.
+
+**Пересмотр.** Новый envelope/output transport принимается только по retained
+production evidence, exact fail-closed adapter rule и deterministic replay; command
+identity или sandbox semantics не должны переноситься обратно в raw parser.
+
+<a id="d-031"></a>
+
+## D-031. Controller владеет opaque native probe configuration и bounded command recovery
+
+**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в `0.8.0a34`; native и full
+qualification этого SHA ещё не выполнялись. **Дата регистрации:** 2026-09-17.
+**Связанные решения:** D-013, D-018, D-020, D-021, D-029, D-030.
+
+**Проблема и проверенные основания.** В retained qualification
+`shr-q-e082a9f137` все deterministic stages прошли, а первая native Planner phase
+доказала исправность `CodexTransportAdapter`, sandbox policy, Jest, AGENTS и
+invariance. В continuation transport снова canonicalized успешно, но role
+переписала единственную точку в Controller-selected peer path как backslash:
+`Slivin.Aleksandr` → `Slivin\Aleksandr`. Self-validating probe правильно получил
+`ENOENT`, non-policy denial и non-zero exit. Ошибка возникла до policy semantics:
+stochastic model всё ещё отвечала за byte-exact transcription пяти opaque absolute
+paths. Prose роли, назвавшая ENOENT приемлемым, не является evidence.
+
+**Решение и rationale.** Model-authored probe command сокращён до immutable
+`.\sandbox_probe.cmd`. До `thread/start` Controller выбирает exact current peer и
+создаёт canonical `native-sandbox-probe-config.v1` с project, role scratch,
+sibling, private и peer paths; JSON и его SHA-256 передаются только в thread-scoped
+synthetic role environment. Tracked read-only launcher содержит Controller-selected
+Node path и запускает `sandbox_probe.cjs`, который сначала проверяет digest/schema,
+а затем сохраняет полный D-018 proof: cwd/TEMP/TMP/os.tmpdir, две positive scratch
+operations, exact ordered inventory из 20 protected operations, только DENIED и
+только EPERM/EACCES. Peer не discover/match fuzzy: он выбран Controller и exact
+связан с thread config.
+
+После успешной transport canonicalization несовпадение requested и executed
+validation command классифицируется `ROLE_COMMAND_DRIFT`; transport, sandbox
+policy, assertion и integrity failures имеют отдельные категории. Correctable
+missing/altered Controller validation command может получить ровно одну correction
+turn в том же role thread. Correction обязана выполнить только exact failed command(s);
+для probe это тот же short entrypoint. Исходный drift и attempt остаются в evidence.
+Duplicate/ambiguous original evidence, повторный drift, чужой thread, extra/fake
+correction command, exact probe non-zero, config/digest tamper, assertion semantics
+и transport incompatibility не retry.
+
+Captured sanitized e082 projection сохраняет структурно реальный PowerShell
+envelope, exact observed dot-to-backslash difference и ENOENT rows. Отдельный
+`native_command_replay` выполняется после artifact/transport replay и до всех
+model-backed stages; B21 фиксирует ownership и bounded recovery как executable
+boundary. Replay не заменяет mandatory `native_roles`.
+
+**Отвергнутые варианты.** REJECTED: разрешить оба spelling или canonicalize
+`Slivin\Aleksandr` обратно — это выдуманная path equivalence и fail-open; повторно
+просить model перепечатать длинные paths — сохраняет источник stochastic failure;
+искать peer fuzzy/discovery — теряется Controller-selected isolation target;
+считать model prose authority — ENOENT станет ложным sandbox PASS; retry любого
+non-zero probe или увеличить budget — маскирует настоящий policy/integrity defect;
+убрать continuation probe — уменьшает active sandbox coverage; менять transport
+adapter — retained run доказал, что D-030 layer отработал правильно.
+
+**Последствия, границы, проверка.** Feature freeze и product semantics сохранены.
+AGENTS/Jest evidence, candidate/Git/runtime guards, current peer isolation и все
+20 negative operations не ослаблены. Deterministic corpus закрывает только известный
+command-ownership failure и bounded state machine; реальный Windows sandbox и
+неизвестные role/transport формы доказываются последующей native/full qualification.
+`0.8.0a34` не является заявлением `RELEASE_QUALIFIED`.
+
+**Пересмотр.** Расширять recovery можно только для Controller-known exact command
+identity с теми же same-thread, invariance, no-progress и single-attempt bounds;
+policy, assertion semantics, transport и integrity failures не становятся retry.
 
 ## Шаблон новой записи
 

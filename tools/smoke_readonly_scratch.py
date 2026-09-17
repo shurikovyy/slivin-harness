@@ -14,20 +14,22 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from slivin_harness import __version__
 from slivin_harness.app_server import CodexAppServer
+from slivin_harness.boundaries import boundary
 from slivin_harness.control_plane import ControllerPlane, is_within
 from slivin_harness.codex_transport import (
     CAPTURED_FORM_ORIGINS, TRANSPORT_SCHEMA, CanonicalExecutedCommand, CodexTransportAdapter,
-    CodexTransportError, require_output, same_windows_path,
+    CodexTransportError, same_windows_path,
 )
 from slivin_harness.evaluator import EVALUATOR_INSTRUCTIONS
-from slivin_harness.execution import ExecutionBroker, ExecutionRole
+from slivin_harness.execution import ExecutionBroker, ExecutionRole, ScopedExecutionPolicyError
 from slivin_harness.git_integrity import CandidateWorkspaceBaseline, GitControlIntegrityManager, TrustedBatchIntegrityCoordinator
 from slivin_harness.planner import PLANNER_INSTRUCTIONS
 from slivin_harness.run_state import build_candidate_identity
@@ -35,13 +37,31 @@ from slivin_harness.runtime_projection import RuntimeProjectionIntegrityManager,
 from slivin_harness.workspace import RuntimeProjection, WorkspaceSession
 
 
+PROBE_ENTRYPOINT = r".\sandbox_probe.cmd"
+PROBE_CONFIG_ENV = "SLIVIN_NATIVE_PROBE_CONFIG"
+PROBE_CONFIG_SHA256_ENV = "SLIVIN_NATIVE_PROBE_CONFIG_SHA256"
+PROBE_CONFIG_SCHEMA = "native-sandbox-probe-config.v1"
+NATIVE_ROLE_COMMAND_ADMISSION_SCHEMA = "native-role-command-admission.v1"
+NATIVE_COMMAND_CORRECTION_BUDGET = 1
+
 PROBE = r"""
-const fs=require('fs'),path=require('path'),os=require('os'),cp=require('child_process');
-const [project,scratch,sibling,priv,peer]=process.argv.slice(2);
+const fs=require('fs'),path=require('path'),os=require('os'),cp=require('child_process'),crypto=require('crypto');
 const rows=[],errors=[];
+const raw=process.env.SLIVIN_NATIVE_PROBE_CONFIG||'',expectedDigest=process.env.SLIVIN_NATIVE_PROBE_CONFIG_SHA256||'';
+let config={};
+if(!raw||!expectedDigest||crypto.createHash('sha256').update(raw,'utf8').digest('hex')!==expectedDigest)
+ errors.push('config-integrity');
+else try{const parsed=JSON.parse(raw);if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))config=parsed;else errors.push('config-schema');}
+catch(e){errors.push('config-json');}
+const keys=Object.keys(config).sort(),expectedKeys=['peer','private','project','schema_version','scratch','sibling'];
+if(keys.length!==expectedKeys.length||keys.some((key,index)=>key!==expectedKeys[index])||
+ config.schema_version!=='native-sandbox-probe-config.v1')errors.push('config-schema');
+if(['project','scratch','sibling','private','peer'].some(key=>
+ typeof config[key]!=='string'||!path.isAbsolute(config[key])))errors.push('config-schema');
+if(errors.length){fs.writeSync(1,'PROBE_RESULT='+JSON.stringify({rows,errors})+'\n');process.exit(7);}
+const {project,scratch,sibling,private:priv,peer}=config;
 function same(actual,expected){return typeof actual==='string'&&typeof expected==='string'&&
  path.isAbsolute(actual)&&path.isAbsolute(expected)&&path.resolve(actual).toLowerCase()===path.resolve(expected).toLowerCase();}
-if(process.argv.length!==7)errors.push('argument-count');
 if(!same(process.cwd(),project))errors.push('project-cwd');
 for(const key of ['TEMP','TMP'])if(!same(process.env[key],scratch))errors.push(key);
 if(!same(os.tmpdir(),scratch))errors.push('os.tmpdir');
@@ -82,6 +102,82 @@ console.log('PROBE_RESULT='+JSON.stringify({cwd:process.cwd(),tmpdir:os.tmpdir()
 if(errors.length)process.exitCode=7;
 """
 
+
+class NativeRoleEvidenceError(RuntimeError):
+    """Typed native acceptance failure after canonical transport admission."""
+
+    def __init__(self, category: str, *, context: str, detail: str,
+                 item_id: str | None = None, observed_payload: str | None = None,
+                 recovery_evidence: dict | None = None, correctable: bool = True,
+                 correction_commands: tuple[str, ...] = (),
+                 discard_item_ids: tuple[str, ...] = ()):
+        self.category = category
+        self.reason_code = category
+        self.context = context
+        self.detail = detail
+        self.item_id = item_id
+        self.observed_payload = observed_payload
+        self.recovery_evidence = recovery_evidence
+        self.correctable = correctable
+        self.correction_commands = correction_commands
+        self.discard_item_ids = discard_item_ids
+        super().__init__(f"{category} context={context} detail={detail}")
+
+    def to_dict(self) -> dict:
+        value = {"category": self.category, "context": self.context, "detail": self.detail}
+        if self.item_id:
+            value["item_id"] = self.item_id
+        if self.observed_payload is not None:
+            value["observed_payload"] = self.observed_payload
+        if self.recovery_evidence is not None:
+            value["recovery_evidence"] = self.recovery_evidence
+        value["correctable"] = self.correctable
+        if self.correction_commands:
+            value["correction_commands"] = list(self.correction_commands)
+        if self.discard_item_ids:
+            value["discard_item_ids"] = list(self.discard_item_ids)
+        return value
+
+
+@dataclass(frozen=True)
+class NativeCorrectionTurn:
+    thread_id: str
+    commands: tuple[CanonicalExecutedCommand, ...]
+
+
+def probe_configuration(*, project: Path, scratch: Path, sibling: Path,
+                        private: Path, peer: Path) -> dict:
+    return {
+        "schema_version": PROBE_CONFIG_SCHEMA,
+        "project": str(project),
+        "scratch": str(scratch),
+        "sibling": str(sibling),
+        "private": str(private),
+        "peer": str(peer),
+    }
+
+
+def probe_environment(config: dict) -> dict[str, str]:
+    raw = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return {
+        PROBE_CONFIG_ENV: raw,
+        PROBE_CONFIG_SHA256_ENV: hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+    }
+
+
+def probe_launcher(node: Path) -> str:
+    raw = str(node)
+    if any(token in raw for token in ('"', "\r", "\n", "%")):
+        raise RuntimeError("Unsafe Node path for immutable native probe launcher")
+    return f'@echo off\r\n"{raw}" "%~dp0sandbox_probe.cjs"\r\nexit /b %ERRORLEVEL%\r\n'
+
+
+def select_peer_canary(role_canaries: dict[ExecutionRole, Path], *,
+                       role: ExecutionRole, fallback: Path) -> Path:
+    """Select one exact currently granted opposite-role canary."""
+    return next((path for other, path in reversed(tuple(role_canaries.items()))
+                 if other != role), fallback)
+
 INSTRUCTION_READ_SPECS = (
     ("root", "AGENTS.md", "ROOT_INSTRUCTIONS_READ",
      "[System.IO.File]::ReadAllText('AGENTS.md', [System.Text.Encoding]::UTF8)"),
@@ -107,12 +203,57 @@ class ObservedServer(CodexAppServer):
         self.phase = "startup"
         self.transport = CodexTransportAdapter()
         self.commands = self.transport.commands
+        self._pending_probe_targets: dict[str, Path] | None = None
+        self.probe_bindings: dict[str, dict] = {}
+
+    def bind_probe_configuration(self, *, sibling: Path, private: Path, peer: Path) -> None:
+        if self._pending_probe_targets is not None:
+            raise NativeRoleEvidenceError("INTEGRITY_FAILURE", context="probe-config",
+                detail="Unconsumed Controller probe configuration")
+        self._pending_probe_targets = {"sibling": sibling, "private": private, "peer": peer}
 
     def request(self, method, params, **kwargs):
+        binding = None
+        if method == "thread/start":
+            if self._pending_probe_targets is None:
+                raise NativeRoleEvidenceError("INTEGRITY_FAILURE", context="probe-config",
+                    detail="Missing Controller probe configuration")
+            params = dict(params)
+            config = dict(params.get("config", {}))
+            configured_environment = dict(config.get("shell_environment_policy.set", {}))
+            project = configured_environment.get("SLIVIN_HARNESS_WORKSPACE")
+            scratch = configured_environment.get("TEMP")
+            if not isinstance(project, str) or not isinstance(scratch, str):
+                raise NativeRoleEvidenceError("INTEGRITY_FAILURE", context="probe-config",
+                    detail="Role context omitted project or scratch binding")
+            selected_config = probe_configuration(project=Path(project), scratch=Path(scratch),
+                **self._pending_probe_targets)
+            selected_environment = probe_environment(selected_config)
+            overlap = set(configured_environment).intersection(selected_environment)
+            if overlap:
+                raise NativeRoleEvidenceError("INTEGRITY_FAILURE", context="probe-config",
+                    detail="Probe environment key collision")
+            configured_environment.update(selected_environment)
+            config["shell_environment_policy.set"] = configured_environment
+            params["config"] = config
+            binding = {
+                "config_sha256": selected_environment[PROBE_CONFIG_SHA256_ENV],
+                "schema_version": PROBE_CONFIG_SCHEMA,
+                "peer": str(self._pending_probe_targets["peer"]),
+            }
         if method in {"thread/start", "turn/start", "thread/archive"}:
             with (self.log_root / "requests.jsonl").open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps({"method": method, "params": params}, ensure_ascii=False) + "\n")
-        return super().request(method, params, **kwargs)
+        result = super().request(method, params, **kwargs)
+        if method == "thread/start":
+            thread = result.get("thread", {}) if isinstance(result, dict) else {}
+            thread_id = thread.get("id") if isinstance(thread, dict) else None
+            if not isinstance(thread_id, str) or not thread_id or binding is None:
+                raise NativeRoleEvidenceError("INTEGRITY_FAILURE", context="probe-config",
+                    detail="Probe configuration could not bind to thread")
+            self.probe_bindings[thread_id] = binding
+            self._pending_probe_targets = None
+        return result
 
     def _receive_raw_optional(self, timeout):
         message = super()._receive_raw_optional(timeout)
@@ -144,20 +285,24 @@ class ObservedServer(CodexAppServer):
 
 
 def _require_execution(commands: list[CanonicalExecutedCommand], *, expected: str,
-                       project: Path, exit_code: int, label: str,
+                       project: Path, label: str,
                        route: str | None = None) -> CanonicalExecutedCommand:
     candidates = [row for row in commands if row.payload == expected or (
-        route is not None and row.payload.startswith("& '") and route in row.payload
+        route is not None and route in row.payload
     )]
     if len(candidates) > 1:
-        raise CodexTransportError("DUPLICATE_EXECUTION", context=label, layer="consumer")
+        raise NativeRoleEvidenceError("ROLE_COMMAND_DRIFT", context=label,
+            detail="Duplicate or ambiguous validation executions", correctable=False)
     if not candidates or candidates[0].shell != "powershell" or candidates[0].payload != expected or (
         not same_windows_path(candidates[0].cwd, str(project))
     ):
-        raise CodexTransportError("COMMAND_IDENTITY_MISMATCH", context=label, layer="consumer")
-    if candidates[0].exit_code != exit_code:
-        raise CodexTransportError("COMMAND_EXECUTION_FAILED", context=label,
-            item_id=candidates[0].item_id, layer="consumer")
+        observed = candidates[0] if candidates else None
+        raise NativeRoleEvidenceError("ROLE_COMMAND_DRIFT", context=label,
+            detail="Missing or altered Controller-requested validation command",
+            item_id=observed.item_id if observed else None,
+            observed_payload=observed.payload if observed else None,
+            correction_commands=(expected,),
+            discard_item_ids=((observed.item_id,) if observed else ()))
     return candidates[0]
 
 
@@ -166,7 +311,11 @@ def validate_instruction_read_evidence(commands: list[CanonicalExecutedCommand],
     evidence = {}
     for label, relative_path, marker, expected_script in INSTRUCTION_READ_SPECS:
         row = _require_execution(commands, expected=expected_script, project=project,
-            exit_code=0, label=relative_path)
+            label=relative_path)
+        if row.exit_code != 0:
+            raise NativeRoleEvidenceError("ASSERTION_EVIDENCE_FAILURE",
+                context=relative_path, detail="Exact instruction read command failed",
+                item_id=row.item_id)
         evidence[label] = {
             "status": "PASS",
             "path": relative_path,
@@ -175,23 +324,13 @@ def validate_instruction_read_evidence(commands: list[CanonicalExecutedCommand],
     return evidence
 
 
-def probe_command(*, node: Path, project: Path, scratch: Path, sibling: Path,
-                  private: Path, peer: Path) -> str:
-    """Exact Controller-selected PowerShell payload for the immutable probe."""
-    def quote(value: Path) -> str:
-        return "'" + str(value).replace("'", "''") + "'"
-    return (f"& {quote(node)} .\\sandbox_probe.cjs {quote(project)} {quote(scratch)} "
-            f"{quote(sibling)} {quote(private)} {quote(peer)}")
+def probe_command() -> str:
+    """Short immutable entrypoint; Controller-owned paths live in sealed environment."""
+    return PROBE_ENTRYPOINT
 
 
-def validate_probe_evidence(commands: list[CanonicalExecutedCommand], *, node: Path, project: Path,
-                            scratch: Path, sibling: Path, private: Path, peer: Path) -> dict:
-    expected = probe_command(node=node, project=project, scratch=scratch,
-                             sibling=sibling, private=private, peer=peer)
-    probe_row = _require_execution(commands, expected=expected, project=project,
-        exit_code=0, label="sandbox_probe.cjs", route=" .\\sandbox_probe.cjs ")
-    output = probe_row.output
-    structured = None
+def _structured_probe_output(row: CanonicalExecutedCommand) -> dict | None:
+    output = row.output
     if isinstance(output, str):
         for line in output.splitlines():
             if line.startswith("PROBE_RESULT="):
@@ -200,8 +339,27 @@ def validate_probe_evidence(commands: list[CanonicalExecutedCommand], *, node: P
                 except json.JSONDecodeError:
                     continue
                 if isinstance(parsed, dict):
-                    structured = parsed
-                    break
+                    return parsed
+    return None
+
+
+def validate_probe_evidence(commands: list[CanonicalExecutedCommand], *, node: Path, project: Path,
+                            scratch: Path, sibling: Path, private: Path, peer: Path) -> dict:
+    expected = probe_command()
+    probe_row = _require_execution(commands, expected=expected, project=project,
+        label="sandbox_probe.cjs", route="sandbox_probe.")
+    structured = _structured_probe_output(probe_row)
+    if probe_row.exit_code != 0:
+        errors = structured.get("errors", []) if structured else []
+        if isinstance(errors, list) and any(
+            isinstance(error, str) and error.startswith("config-") for error in errors
+        ):
+            raise NativeRoleEvidenceError("INTEGRITY_FAILURE", context="sandbox_probe.cjs",
+                detail="Controller probe configuration failed integrity validation",
+                item_id=probe_row.item_id)
+        raise NativeRoleEvidenceError("SANDBOX_POLICY_FAILURE", context="sandbox_probe.cjs",
+            detail="Exact self-validating sandbox probe exited nonzero",
+            item_id=probe_row.item_id)
     return {"probe_exit_evidence": "PASS", "structured_output_observed": structured is not None,
             "structured_output": structured}
 
@@ -221,29 +379,50 @@ def validate_phase(commands: list[CanonicalExecutedCommand], *, node: Path, proj
     fail_payload = jest_command(node, "failing.test.cjs")
     jest = [row for row in commands if row.payload.startswith("& '") and
         " .\\node_modules\\jest\\bin\\jest.js " in row.payload]
-    if any(row.payload not in {pass_payload, fail_payload} or
-        not same_windows_path(row.cwd, str(project)) for row in jest):
-        raise CodexTransportError("COMMAND_IDENTITY_MISMATCH", context="jest-route", layer="consumer")
-    passed = [row for row in jest if row.payload == pass_payload]
-    failed = [row for row in jest if row.payload == fail_payload]
-    if len(passed) != (2 if initial else 1) or len(failed) != (1 if initial else 0):
-        raise CodexTransportError("COMMAND_IDENTITY_MISMATCH", context="jest-cardinality", layer="consumer")
+    invalid_jest = [row for row in jest if row.payload not in {pass_payload, fail_payload} or
+        not same_windows_path(row.cwd, str(project))]
+    expected_passes, expected_failures = (2 if initial else 1), (1 if initial else 0)
+    valid_passes = [row for row in jest if row.payload == pass_payload and
+                    same_windows_path(row.cwd, str(project))]
+    valid_failures = [row for row in jest if row.payload == fail_payload and
+                      same_windows_path(row.cwd, str(project))]
+    missing = ((pass_payload,) * max(0, expected_passes - len(valid_passes)) +
+               (fail_payload,) * max(0, expected_failures - len(valid_failures)))
+    if invalid_jest:
+        correctable = (len(valid_passes) <= expected_passes and
+                       len(valid_failures) <= expected_failures and
+                       len(invalid_jest) == len(missing))
+        raise NativeRoleEvidenceError("ROLE_COMMAND_DRIFT", context="jest-route",
+            detail="Altered Controller-requested Jest command", correctable=correctable,
+            correction_commands=missing if correctable else (),
+            discard_item_ids=(tuple(row.item_id for row in invalid_jest)
+                              if correctable else ()))
+    passed, failed = valid_passes, valid_failures
+    if len(passed) != expected_passes or len(failed) != expected_failures:
+        correctable = len(passed) <= expected_passes and len(failed) <= expected_failures
+        raise NativeRoleEvidenceError("ROLE_COMMAND_DRIFT", context="jest-cardinality",
+            detail="Missing or duplicate Controller-requested Jest command",
+            correctable=correctable, correction_commands=missing if correctable else ())
     for row in passed:
-        if row.exit_code != 0 or "Tests:       1 passed, 1 total" not in require_output(row):
-            raise CodexTransportError("JEST_ASSERTION_EVIDENCE_FAILED", item_id=row.item_id,
-                layer="consumer")
+        output = row.output if row.output_observed else None
+        if row.exit_code != 0 or output is None or "Tests:       1 passed, 1 total" not in output:
+            raise NativeRoleEvidenceError("ASSERTION_EVIDENCE_FAILURE",
+                context="jest-pass", detail="Exact Jest PASS assertion evidence failed",
+                item_id=row.item_id)
     for row in failed:
-        output = require_output(row)
-        if row.exit_code != 1 or any(marker not in output for marker in (
+        output = row.output if row.output_observed else None
+        if output is None or row.exit_code != 1 or any(marker not in output for marker in (
             "intentional failing assertion", "Expected: 999", "Received: 5"
         )):
-            raise CodexTransportError("JEST_ASSERTION_EVIDENCE_FAILED", item_id=row.item_id,
-                layer="consumer")
+            raise NativeRoleEvidenceError("ASSERTION_EVIDENCE_FAILURE",
+                context="jest-intentional-fail",
+                detail="Exact intentional Jest FAIL evidence failed", item_id=row.item_id)
     # Preserve evidence for long haste-map names as well as the shorter perf cache.
     scan_root = Path("\\\\?\\" + str(scratch)) if os.name == "nt" else scratch
     cache_files = sorted(str(path.relative_to(scan_root)) for path in (scan_root / "jest").rglob("*") if path.is_file())
     if not cache_files:
-        raise RuntimeError("No actual Jest cache files in role scratch")
+        raise NativeRoleEvidenceError("ASSERTION_EVIDENCE_FAILURE",
+            context="jest-cache", detail="No actual Jest cache files in role scratch")
     instruction_reads = validate_instruction_read_evidence(commands, project=project) if initial else None
     observed_rows = probe.get("rows") if probe else None
     negative = ([row for row in observed_rows if not row["name"].startswith("scratch:")]
@@ -265,6 +444,94 @@ def validate_phase(commands: list[CanonicalExecutedCommand], *, node: Path, proj
     if instruction_reads is not None:
         result["instruction_reads"] = instruction_reads
     return result
+
+
+@boundary("B21")
+def admit_native_phase_with_recovery(
+    commands: list[CanonicalExecutedCommand], *, thread_id: str, node: Path,
+    project: Path, scratch: Path, sibling: Path, private: Path, peer: Path,
+    initial: bool,
+    correction: Callable[[str, str], NativeCorrectionTurn],
+) -> dict:
+    """Admit a phase, allowing one same-thread validation-command retry only."""
+    original_error: NativeRoleEvidenceError | None = None
+    try:
+        result = validate_phase(commands, node=node, project=project, scratch=scratch,
+            sibling=sibling, private=private, peer=peer, initial=initial)
+        result["role_command_recovery"] = {
+            "schema_version": NATIVE_ROLE_COMMAND_ADMISSION_SCHEMA,
+            "status": "NOT_REQUIRED", "attempts": 0,
+        }
+        return result
+    except NativeRoleEvidenceError as error:
+        if (error.category != "ROLE_COMMAND_DRIFT" or not error.correctable or
+                not error.correction_commands):
+            raise
+        original_error = error
+    assert original_error is not None
+
+    prompt = (
+        "CONTROLLER ROLE-COMMAND CORRECTION. The previous validation command identity "
+        "did not match the Controller request. Execute exactly the following failed "
+        "validation command(s), separately and from the project cwd; execute no other "
+        "command:\n" + "\n".join(original_error.correction_commands) + "\n"
+        "Do not restate or alter any Controller-owned configuration. "
+        "Return only a brief acknowledgement after the command."
+    )
+    turn = correction(thread_id, prompt)
+    recovery = {
+        "schema_version": NATIVE_ROLE_COMMAND_ADMISSION_SCHEMA,
+        "status": "ATTEMPTED",
+        "attempts": NATIVE_COMMAND_CORRECTION_BUDGET,
+        "thread_id": thread_id,
+        "original": original_error.to_dict(),
+        "expected_commands": list(original_error.correction_commands),
+        "correction_command_count": len(turn.commands),
+    }
+    if turn.thread_id != thread_id:
+        raise NativeRoleEvidenceError("INTEGRITY_FAILURE", context="role-command-recovery",
+            detail="Correction escaped the original role thread", recovery_evidence=recovery)
+    if len(turn.commands) != len(original_error.correction_commands) or any(
+        row.shell != "powershell" or row.payload != expected or
+        not same_windows_path(row.cwd, str(project))
+        for row, expected in zip(turn.commands, original_error.correction_commands)
+    ):
+        raise NativeRoleEvidenceError("ROLE_COMMAND_DRIFT", context=original_error.context,
+            detail="Correction must execute only the exact failed validation command(s)",
+            recovery_evidence={**recovery, "status": "EXHAUSTED"})
+    admitted = [row for row in commands if row.item_id not in original_error.discard_item_ids]
+    admitted.extend(turn.commands)
+    try:
+        result = validate_phase(admitted, node=node, project=project, scratch=scratch,
+            sibling=sibling, private=private, peer=peer, initial=initial)
+    except NativeRoleEvidenceError as corrected:
+        if corrected.category == "ROLE_COMMAND_DRIFT":
+            raise NativeRoleEvidenceError("ROLE_COMMAND_DRIFT", context=corrected.context,
+                detail="Repeated role command drift exhausted correction budget",
+                item_id=corrected.item_id, observed_payload=corrected.observed_payload,
+                recovery_evidence={**recovery, "status": "EXHAUSTED"}) from corrected
+        raise
+    result["role_command_recovery"] = {
+        **recovery,
+        "status": "RECOVERED",
+        "correction_item_ids": [row.item_id for row in turn.commands],
+    }
+    return result
+
+
+def failure_category(error: Exception) -> str:
+    if isinstance(error, NativeRoleEvidenceError):
+        return error.category
+    if isinstance(error, CodexTransportError):
+        if error.reason_code in {
+            "TRANSPORT_EVIDENCE_INTEGRITY_FAILURE", "DUPLICATE_EXECUTION",
+            "COMMAND_IDENTITY_MISMATCH",
+        }:
+            return "INTEGRITY_FAILURE"
+        return "TRANSPORT_INCOMPATIBILITY"
+    if isinstance(error, ScopedExecutionPolicyError):
+        return "SANDBOX_POLICY_FAILURE"
+    return "INTEGRITY_FAILURE"
 
 
 def main() -> int:
@@ -302,7 +569,8 @@ def main() -> int:
         "jest.config.cjs": "module.exports={testEnvironment:'node',testMatch:['**/*.test.cjs'],transform:{}};\n",
         "package.json": '{"name":"scoped-scratch-smoke","version":"1.0.0","private":true}\n',
         ".gitignore": "node_modules/\n.harness_tmp/\n",
-        "delete-canary.txt": "unchanged\n", "rename-canary.txt": "unchanged\n", "sandbox_probe.cjs": PROBE,
+        "delete-canary.txt": "unchanged\n", "rename-canary.txt": "unchanged\n",
+        "sandbox_probe.cjs": PROBE, "sandbox_probe.cmd": probe_launcher(args.node),
     }
     for name, content in files.items():
         path = project / name
@@ -358,18 +626,22 @@ def main() -> int:
                 if label == "planner_fresh_after_cleanup":
                     server.retire_readonly_threads()
                     broker.clear_role_scratch(ExecutionRole.PLANNER)
+                # Bind one exact currently granted opposite-role canary before
+                # thread/start. Paths enter the role environment, never the model command.
+                peer = select_peer_canary(role_canaries, role=role, fallback=canaries[0])
+                if not peer.is_file():
+                    raise RuntimeError("Missing peer canary")
+                server.bind_probe_configuration(sibling=sibling, private=private, peer=peer)
                 thread = server.start_thread(cwd=project, execution_role=role,
                     developer_instructions=PLANNER_INSTRUCTIONS if role == ExecutionRole.PLANNER else EVALUATOR_INSTRUCTIONS,
                     on_started=lambda metadata, label=label: write_json(logs / f"{label}_thread.json", metadata))
+                if server.probe_bindings.get(thread, {}).get("peer") != str(peer):
+                    raise NativeRoleEvidenceError("INTEGRITY_FAILURE", context="probe-config",
+                        detail="Controller-selected peer did not bind to role thread")
                 context = server.get_thread_metadata(thread)["harness_execution_context"]
                 scratch = Path(context["requested"]["scratch_root"])
                 if list(scratch.iterdir()):
                     raise RuntimeError("Fresh role inherited scratch artifacts")
-                # Check a genuinely granted, still-active peer root, not merely
-                # an ungranted directory named "peer". Exercise both directions.
-                peer = next((path for other, path in role_canaries.items() if other != role), canaries[0])
-                if not peer.is_file():
-                    raise RuntimeError("Missing peer canary")
                 for turn_index in range(2 if label in {"planner_initial", "evaluator"} else 1):
                     phase = label + ("_initial" if turn_index == 0 else "_continuation")
                     server.phase = phase
@@ -379,8 +651,7 @@ def main() -> int:
                     if initial:
                         prompt += " Execute these Controller-specified repository instruction read commands exactly as written, separately and from project cwd:\n"
                         prompt += "\n".join(spec[3] for spec in INSTRUCTION_READ_SPECS) + "\n"
-                    selected_probe = probe_command(node=args.node, project=project, scratch=scratch,
-                        sibling=sibling, private=private, peer=peer)
+                    selected_probe = probe_command()
                     prompt += f"""Read src/arithmetic.cjs. Execute each validation command separately and capture the full result:
 {selected_probe}
 {command}
@@ -398,14 +669,37 @@ def main() -> int:
                         on_heartbeat=lambda health: print("NATIVE_HEARTBEAT:", phase, round(health["turn_elapsed_seconds"]), flush=True)))
                     (logs / f"{phase}_response.txt").write_text(result, encoding="utf-8")
                     server.transport.assert_phase_complete(phase)
-                    summary["phases"][phase] = validate_phase(server.commands[before:], node=args.node,
+                    phase_commands = server.commands[before:]
+
+                    def correct_role_command(same_thread: str, correction_prompt: str) -> NativeCorrectionTurn:
+                        correction_phase = phase + "_role_command_correction"
+                        server.phase = correction_phase
+                        correction_before = len(server.commands)
+                        correction_response = guard.run_read_only(correction_phase,
+                            lambda: server.run_turn(thread_id=same_thread,
+                                prompt=correction_prompt, timeout=300,
+                                on_heartbeat=lambda health: print("NATIVE_HEARTBEAT:",
+                                    correction_phase, round(health["turn_elapsed_seconds"]), flush=True)))
+                        (logs / f"{correction_phase}_response.txt").write_text(
+                            correction_response, encoding="utf-8")
+                        server.transport.assert_phase_complete(correction_phase)
+                        server.phase = phase
+                        return NativeCorrectionTurn(same_thread,
+                            tuple(server.commands[correction_before:]))
+
+                    summary["phases"][phase] = admit_native_phase_with_recovery(
+                        phase_commands, thread_id=thread, node=args.node,
                         project=project, scratch=scratch, sibling=sibling, private=private,
-                        peer=peer, initial=initial)
+                        peer=peer, initial=initial, correction=correct_role_command)
                     write_json(logs / "result.json", summary)
                 role_canaries[role] = scratch / "positive/probe.txt"
         summary["status"] = "PASS"
     except Exception as exc:
-        error = {"type": type(exc).__name__, "reason": str(exc)}
+        error = {"type": type(exc).__name__, "reason": str(exc),
+                 "failure_category": failure_category(exc)}
+        if isinstance(exc, NativeRoleEvidenceError):
+            error.update(exc.to_dict(), canonicalization_status="PASS",
+                         transport_schema=TRANSPORT_SCHEMA)
         if isinstance(exc, CodexTransportError):
             observed_forms = sorted({row.transport_form for row in server.commands}) if server else []
             error.update(reason_code=exc.reason_code,
@@ -426,6 +720,11 @@ def main() -> int:
             "git_status": git(project, "status", "--short")}
         if not all(invariance[key] for key in ("project_files_unchanged", "candidate_unchanged", "source_runtime_unchanged", "canaries_unchanged")) or invariance["git_status"]:
             summary["status"] = "FAIL"
+            summary.setdefault("error", {
+                "type": "NativeIntegrityFailure",
+                "reason": "Project/runtime/canary invariance failed",
+                "failure_category": "INTEGRITY_FAILURE",
+            })
         write_json(logs / "invariance.json", invariance)
         summary['policy_evidence_sha256'] = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(logs.iterdir()) if path.is_file() and

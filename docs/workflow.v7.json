@@ -1244,10 +1244,70 @@
           "slivin_harness.codex_transport.CodexTransportAdapter.observe_completed"
         ],
         "verification_limit": "Finite captured/synthetic transport fixtures prove known representation compatibility only; native sandbox and real-model qualification remain mandatory."
+      },
+      {
+        "boundary_id": "B21",
+        "schemas": [
+          "native-role-command-admission.v1",
+          "native-sandbox-probe-config.v1"
+        ],
+        "ownership": "Controller owns the immutable validation entrypoint, exact role environment configuration, peer selection and correction budget; the role owns only whether it executes the requested command.",
+        "preconditions": "Canonical commands belong to one native role phase and the Controller has bound exact project, scratch, sibling, private and current peer identities to that role thread.",
+        "postconditions": "Exact self-validating probe and assertion evidence is admitted, or one same-thread correction records and replaces only correctable validation-command identity drift; policy, assertion-semantic, transport and integrity failures remain hard stops.",
+        "evidence_dependencies": "Canonical command identity/cwd/exit, Controller probe-config digest and thread binding, immutable launcher/script, assertion evidence and read-only invariance guards.",
+        "allowed_outcomes": [
+          "ADMITTED",
+          "RECOVERED_ROLE_COMMAND_DRIFT",
+          "TYPED_NATIVE_STOP"
+        ],
+        "recovery_contract": "At most one same-thread turn may execute only the exact failed Controller validation commands; duplicate/ambiguous drift, repeated drift, policy failure, config tamper, assertion-semantic failure and transport incompatibility are not converted to success.",
+        "checkpoint_contract": "Original drift, correction attempt/item and Controller-selected peer remain in native result evidence; recovery never erases the first mismatch.",
+        "families": {
+          "input": {
+            "expectation": "The model command is a short path-free immutable entrypoint and exact Controller config/digest binds the current peer.",
+            "unittest_ids": [
+              "test_native_command_recovery.NativeCommandRecoveryTests.test_short_entrypoint_contains_no_controller_paths",
+              "test_native_command_recovery.NativeCommandRecoveryTests.test_controller_config_digest_binds_exact_current_peer"
+            ],
+            "required": true
+          },
+          "output": {
+            "expectation": "One exact corrected execution on the same thread admits the unchanged phase and retains original ROLE_COMMAND_DRIFT evidence.",
+            "unittest_ids": [
+              "test_native_command_recovery.NativeCommandRecoveryTests.test_one_same_thread_correction_recovers_and_records_original"
+            ],
+            "required": true
+          },
+          "freshness": {
+            "expectation": "The captured e082 peer spelling drift remains distinct from the exact current peer, and Planner/Evaluator selections exercise opposite-role isolation in both directions.",
+            "unittest_ids": [
+              "test_native_command_recovery.NativeCommandRecoveryTests.test_captured_e082_transport_passes_and_classifies_role_drift",
+              "test_native_command_recovery.NativeCommandRecoveryTests.test_planner_and_evaluator_peer_selection_exercises_both_directions"
+            ],
+            "required": true
+          },
+          "recovery": {
+            "expectation": "Missing command can recover once; repeated/fake/extra drift stops and exact policy or config-integrity failure never retries.",
+            "unittest_ids": [
+              "test_native_command_recovery.NativeCommandRecoveryTests.test_missing_command_recovers_but_repeated_drift_stops",
+              "test_native_command_recovery.NativeCommandRecoveryTests.test_jest_identity_drift_recovers_but_assertion_failure_does_not",
+              "test_native_command_recovery.NativeCommandRecoveryTests.test_missing_instruction_read_reruns_only_that_command",
+              "test_native_command_recovery.NativeCommandRecoveryTests.test_extra_or_fake_command_cannot_satisfy_correction",
+              "test_native_command_recovery.NativeCommandRecoveryTests.test_duplicate_original_probe_is_not_retried",
+              "test_native_command_recovery.NativeCommandRecoveryTests.test_correction_cannot_escape_original_thread",
+              "test_native_command_recovery.NativeCommandRecoveryTests.test_exact_policy_failure_and_config_tamper_never_retry"
+            ],
+            "required": true
+          }
+        },
+        "entrypoints": [
+          "tools.smoke_readonly_scratch.admit_native_phase_with_recovery"
+        ],
+        "verification_limit": "Deterministic captured replay proves bounded recovery of the known transport-valid command drift only; native Windows sandbox and real-model qualification remain mandatory."
       }
     ]
   },
-  "harness_version": "0.8.0a33",
+  "harness_version": "0.8.0a34",
   "phase": "phase7-final-gate-delivery-benchmark",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",

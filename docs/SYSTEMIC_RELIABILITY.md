@@ -130,20 +130,27 @@ test IDs четырёх семейств каждой границы. AST про
 исполнения каждого required case ID. Missing/NOT_RUN/FAIL не заменяется соседним тестом.
 RuntimeExecutor и Controller contract closure входят в B16.
 
-Обязательны все девять stages: self-check, boundary families, stateful/fault injection,
+Обязательны все десять stages: self-check, boundary families, stateful/fault injection,
 mutations, mixed Node/Jest, deterministic artifact transcript replay, deterministic
-Codex transport replay, native role sandbox, real-model FULL tasks. Оба replay gates
-обязаны PASS до любых model-backed turns. Artifact gate воспроизводит sanitized
+Codex transport replay, deterministic native command/recovery replay, native role
+sandbox, real-model FULL tasks. Все три replay gates обязаны PASS до любых
+model-backed turns. Artifact gate воспроизводит sanitized
 QE1/QS1/QE2 failures. Transport gate проверяет captured `shr-q-5654234e36`
 (`-NoProfile -Command`, nullable legacy probe output) через adapter/AGENTS
-admission и `shr-q-5a12a511f1` (`-Command`, exact current probe, AGENTS и Jest)
-через full production native admission. Дополнительный captured Evaluator `shr-q-42026aa1d8`
+admission и `shr-q-5a12a511f1` (`-Command`, legacy path-bearing probe, AGENTS и
+Jest) как captured transport compatibility. Дополнительный captured Evaluator `shr-q-42026aa1d8`
 доказывает bundled `pwsh.exe -Command` envelope только на уровне adapter:
 его прежний probe contract не является доказательством текущего smoke.
 Synthetic negatives помечены отдельно. Fixture SHA256, origin,
 source run и expected/actual outcome записываются в `transport_replay/summary.json`.
 Этот replay закрывает известные representation regressions, но не доказывает
-native sandbox и не заменяет три FULL cases. Mutation gate
+native sandbox и не заменяет три FULL cases. Отдельный `native_command_replay`
+сохраняет sanitized captured `shr-q-e082a9f137`: transport-valid legacy probe
+исказил только peer spelling (`Slivin.Aleksandr` → `Slivin\Aleksandr`). Replay
+обязан получить `ROLE_COMMAND_DRIFT`, доказать один same-thread exact-entrypoint
+recovery, exhaustion при повторном drift и отсутствие retry для настоящего policy/
+config-integrity failure. SHA-256 captured fixture и original mismatch остаются в
+machine-readable summary. Mutation gate
 требует unmutated PASS, затем конкретный typed failure и исполнение mutated target
 на disposable source copy. Infrastructure ERROR не считается обнаружением дефекта.
 

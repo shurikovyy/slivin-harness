@@ -15,7 +15,7 @@ from slivin_harness.codex_transport import TRANSPORT_SCHEMA
 
 FIXTURES = ROOT / "tests" / "fixtures" / "codex_transport"
 REPLAY_CASES = (
-    ("captured_5a12.json", "test_codex_transport.CodexTransportTests.test_captured_5a12_full_native_admission"),
+    ("captured_5a12.json", "test_codex_transport.CodexTransportTests.test_captured_5a12_legacy_transport_evidence"),
     ("captured_565.json", "test_codex_transport.CodexTransportTests.test_captured_565_legacy_null_stays_adapter_only"),
     ("captured_420.json", "test_codex_transport.CodexTransportTests.test_captured_420_evaluator_pwsh_adapter_only"),
     ("synthetic_negative.json", "test_codex_transport.CodexTransportTests.test_synthetic_negative_corpus"),
@@ -53,9 +53,12 @@ def observed_admission(filename: str, fixture: dict) -> str:
         capture = CapturedTransportFixture(Path(root), load_capture(FIXTURES / filename))
         commands = capture.replay().commands
         if filename == "captured_5a12.json":
-            return native.validate_phase(commands, node=capture.node, project=capture.project,
-                scratch=capture.scratch, sibling=capture.sibling, private=capture.private,
-                peer=capture.peer, initial=True)["status"]
+            native.validate_instruction_read_evidence(commands[:2], project=capture.project)
+            return "PASS_ADAPTER_ONLY" if (
+                commands[2].transport_form == "powershell-command" and
+                commands[2].exit_code == 0 and commands[2].output_observed and
+                all(row.transport_form == "powershell-command" for row in commands)
+            ) else "UNEXPECTED_LEGACY_SHAPE"
         if filename == "captured_565.json":
             native.validate_instruction_read_evidence(commands[:2], project=capture.project)
             return "PASS_ADAPTER_ONLY" if (

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- `0.8.0a34` removes Controller-owned absolute probe configuration from model
+  transcription. Native roles execute only `.\sandbox_probe.cmd`; exact
+  project/scratch/sibling/private/current-peer bindings are supplied as a
+  Controller-built thread environment record with a canonical SHA-256 digest.
+  The immutable probe retains all 20 protected operations and strict
+  EPERM/EACCES policy proof.
+- Transport-valid validation-command mismatch is typed `ROLE_COMMAND_DRIFT`.
+  One same-thread correction is allowed for correctable missing or altered
+  Controller validation commands and may execute only those exact failed commands;
+  repeated/ambiguous drift, sandbox policy failure, assertion-semantic failure,
+  transport incompatibility and config/integrity failure remain hard stops.
+  Original drift evidence is retained.
+- Sanitized captured evidence from `shr-q-e082a9f137` replays in mandatory
+  `native_command_replay` after artifact/transport replay and before every
+  model-backed stage. B21 makes command admission/recovery an executable
+  boundary contract. This does not imply `RELEASE_QUALIFIED`.
 - `0.8.0a33` introduces a Controller-owned Codex command transport adapter.
   Captured `-Command` and `-NoProfile -Command` envelopes canonicalize once;
   AGENTS, self-validating sandbox probe and Jest assertions consume exact

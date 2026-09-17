@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a33 — Phase 7
+# Архитектура Slivin Harness 0.8.0a34 — Phase 7
 
 ## Назначение
 
-`0.8.0a33` требует typed impact closure в `planner.v6` до `READY`, сохраняет
+`0.8.0a34` требует typed impact closure в `planner.v6` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a33
+Harness                     0.8.0a34
 Manifest                    version = 2
 Workflow                    workflow.v7
 Run State                   run-state.v1
@@ -231,7 +231,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a33`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a34`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -645,7 +645,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a33` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a34` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 Planner/Evaluator используют один `RoleExecutionContext` (`role-execution-context.v1`)
 из `ExecutionBroker.prepare_readonly_role()`. Project root остаётся контекстом repository,
@@ -663,11 +663,16 @@ repository AGENTS.md. В synthetic native acceptance Controller задаёт о�
 `ReadAllText` commands для root и nested instructions; успешный `commandExecution` с
 project cwd и `exitCode=0` является authority независимо от наличия marker в
 `aggregatedOutput`. Echo/другая команда с текстом `AGENTS.md` evidence не создаёт.
-Также synthetic sandbox probe исполняет immutable `sandbox_probe.cjs` с точными
-Controller-selected project/scratch/sibling/private/peer аргументами. Script сам
-проверяет cwd, TEMP/TMP/os.tmpdir, scratch write/read, полный набор protected
-operations и только EPERM/EACCES для каждого отказа; нарушение даёт non-zero exit.
-Authority приёмки — один exact `commandExecution` с project cwd и `exitCode=0`.
+Synthetic sandbox probe запускается коротким immutable entrypoint
+`.\sandbox_probe.cmd`: model-authored command больше не содержит project/scratch/
+sibling/private/peer paths. Перед `thread/start` Controller выбирает exact current
+peer, строит `native-sandbox-probe-config.v1`, canonical JSON и SHA-256, затем
+добавляет их в thread-scoped role environment. Tracked read-only launcher вызывает
+Controller-selected Node и `sandbox_probe.cjs`; script проверяет digest/schema и
+только после этого проверяет cwd, TEMP/TMP/os.tmpdir, scratch write/read, полный
+набор из 20 protected operations, exact inventory/order и только EPERM/EACCES для
+каждого отказа. Нарушение даёт non-zero exit. Authority приёмки — один exact
+canonical `commandExecution` entrypoint с project cwd и `exitCode=0`.
 `PROBE_RESULT` в `aggregatedOutput` дополняет diagnostics, но не требуется для PASS;
 отсутствующие per-operation details не восстанавливаются из exit code. Child-process
 observation остаётся diagnostic и не входит в sandbox acceptance contract.
@@ -683,6 +688,15 @@ Controller-selected installed runtime path. Adapter сохраняет exact dec
 требуют observed output лишь для Jest assertion. Raw command/delta остаются
 diagnostic logs, не вторым admission parser. Допустимые неизвестные transport
 формы требуют нового captured evidence и deterministic replay перед native stage.
+Transport-valid несовпадение model-executed validation command с Controller request
+классифицируется отдельно как `ROLE_COMMAND_DRIFT`, а не transport/sandbox failure.
+Correctable missing/altered validation command получает одну correction turn в том
+же role thread: она может исполнить только exact failed command(s). Для probe это
+тот же short entrypoint без paths; identity drift AGENTS/Jest отделён от non-zero или
+неверного assertion output. Original drift сохраняется в result. Duplicate/ambiguous
+evidence, repeated drift, exact probe с sandbox policy failure, config/digest tamper,
+assertion-semantic failure и transport incompatibility не retry. Model prose не
+участвует в acceptance authority.
 Audit прямых raw reads: `codex_transport.py` — единственный admission parser (A);
 `ObservedServer` сохраняет raw command/delta только в diagnostics (B);
 `execution.py` и check-spec consumers `phase4.py`/`phase6.py` используют

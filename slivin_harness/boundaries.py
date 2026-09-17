@@ -42,6 +42,9 @@ BOUNDARIES = {
         "slivin_harness.codex_transport.CodexTransportAdapter.observe_delta",
         "slivin_harness.codex_transport.CodexTransportAdapter.observe_completed",
     )),
+    "B21": ("Native role command admission and bounded recovery", (
+        "tools.smoke_readonly_scratch.admit_native_phase_with_recovery",
+    )),
 }
 _observers = contextvars.ContextVar("harness_boundary_observers", default=())
 

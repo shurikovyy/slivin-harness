@@ -229,16 +229,27 @@ Evaluator instructions. It never installs packages or changes ACL/config/sandbox
 It records actual command/cwd/exit/output, thread policy, versions, cached cold/warm and
 fresh-role Jest passes, an executed intentional assertion failure, scratch write/read,
 and denied absolute/relative project/test/dependency/Git/private/peer/neighbor operations.
-The immutable probe checks its own expected project cwd, role scratch environment,
-Controller-selected targets, operation counts and EPERM/EACCES denial reasons before
-returning exit code 0. Acceptance requires the exact Controller command, project cwd
-and one successful execution; App Server `aggregatedOutput` may be absent. When it is
+The role executes only the short immutable `.\sandbox_probe.cmd`; it does not
+transcribe Controller-owned absolute paths. Before `thread/start`, Controller binds
+exact project, role scratch, sibling, private and current peer paths as canonical
+`native-sandbox-probe-config.v1` JSON plus SHA-256 in the role thread environment.
+The tracked read-only launcher invokes Controller-selected Node. The immutable probe
+checks config integrity, its expected project cwd, role scratch environment,
+Controller-selected targets, exact operation inventory/counts and EPERM/EACCES denial
+reasons before returning exit code 0. Acceptance requires the exact short canonical
+command, project cwd and one successful execution; App Server `aggregatedOutput` may be absent. When it is
 absent, `result.json` records exit evidence but leaves per-operation and child-process
 diagnostics unavailable rather than reconstructing them.
 `CodexTransportAdapter` admits raw command/delta events once. Native consumers
 match exact canonical payload/cwd/exit records, not PowerShell wrapper text.
 Captured `-Command` and `-NoProfile -Command` forms replay deterministically before
-this opt-in native stage; unknown envelopes remain typed failures.
+this opt-in native stage; unknown envelopes remain typed failures. A separate captured
+`shr-q-e082a9f137` replay distinguishes transport-valid `ROLE_COMMAND_DRIFT` from
+sandbox failure. Correctable missing/altered validation commands may be repeated once
+in the same thread, and only the failed exact commands may execute. For the probe this
+is always the same short entrypoint. Repeated/ambiguous drift, policy/config/integrity/
+assertion-semantic failure and transport incompatibility remain hard failures, with
+the original mismatch retained.
 Peer checks also target the granted scratch of another active role in both directions;
 an ungranted sibling directory alone does not prove per-thread isolation.
 Continuations check the same policy; fresh Planner follows scratch cleanup. Existing

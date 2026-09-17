@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a33
+# Документация Slivin Harness 0.8.0a34
 
-Актуальная версия: **0.8.0a33 — Codex Transport Stabilization**.
+Актуальная версия: **0.8.0a34 — Native Role Command Ownership**.
 
 Основные документы:
 
