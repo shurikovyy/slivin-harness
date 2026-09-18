@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `0.8.0a37` introduces explicit `dev` and `release` qualification profiles.
+  Both retain every deterministic gate and mandatory native-role acceptance while
+  pinning model identity through Controller-owned Codex CLI overrides. Dev runs only
+  `expiry-1` with `gpt-5.6-terra`/`medium` and fail-fast; its successful terminal
+  state is `DEV_QUALIFICATION_PASS`, never `RELEASE_QUALIFIED`.
+- Release remains the compatible default and requires all three fixed cases in their
+  existing order with `gpt-5.6-sol`/`high`. Qualification and per-case evidence bind
+  mode, model, effort, Codex version, requested/executed cases, fail-fast policy and
+  release eligibility. A failed or missing mandatory case still blocks release.
 - `0.8.0a36` adds one bounded Evaluator Phase-B closure turn for a
   status-compatible negative disposition whose already-declared material claim is
   missing only its final finding or `finding_ids` binding. Status, dispositions,

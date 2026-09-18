@@ -38,6 +38,7 @@ from slivin_harness.native_role_admission import (
     admit_native_phase_with_recovery,
 )
 from slivin_harness.planner import PLANNER_INSTRUCTIONS
+from slivin_harness.qualification import validate_model_identity
 from slivin_harness.run_state import build_candidate_identity
 from slivin_harness.runtime_projection import RuntimeProjectionIntegrityManager, fingerprint_runtime_tree
 from slivin_harness.workspace import RuntimeProjection, WorkspaceSession
@@ -429,6 +430,9 @@ def main() -> int:
     parser.add_argument("--node", type=Path, required=True)
     parser.add_argument("--runtime-source", type=Path, required=True, help="Existing node_modules; read/copy only")
     parser.add_argument("--output", type=Path, help="New disposable output directory; must not exist")
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--effort", required=True)
+    parser.add_argument("--qualification-mode", choices=("dev", "release"), required=True)
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("This acceptance targets native Windows")
@@ -438,6 +442,10 @@ def main() -> int:
         parser.error("Expected installed Codex, Node and a complete Jest runtime")
     if args.runtime_source.name != "node_modules":
         parser.error("Runtime projection requires an existing node_modules directory")
+    try:
+        validate_model_identity(args.model, args.effort)
+    except ValueError as exc:
+        parser.error(str(exc))
     output = (args.output or Path(tempfile.gettempdir()) / ("slivin-native-scratch-" + uuid.uuid4().hex[:10])).resolve()
     if is_within(ROOT, output) or is_within(args.runtime_source.parent, output):
         parser.error("Diagnostic output must be outside Harness and the source project/runtime")
@@ -493,7 +501,10 @@ def main() -> int:
     identity = lambda: build_candidate_identity(project, baseline_sha=baseline, excluded_prefixes=excluded)
     guard = TrustedBatchIntegrityCoordinator(git_manager=git_manager, runtime_manager=runtime_manager, candidate_identity=identity)
     candidate_before = identity().candidate_id
-    summary = {"schema_version": "native-scoped-scratch-smoke.v1", "harness_version": __version__, "status": "RUNNING", "phases": {}}
+    summary = {"schema_version": "native-scoped-scratch-smoke.v1", "harness_version": __version__, "status": "RUNNING", "phases": {},
+               "qualification_mode": args.qualification_mode,
+               "selected_model": args.model, "selected_reasoning_effort": args.effort,
+               "ambient_model_inheritance": False}
     summary["execution_source_sha256"] = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
         for name in ("slivin_harness/app_server.py", "slivin_harness/codex_transport.py",
             "slivin_harness/execution.py", "slivin_harness/planner.py",
@@ -507,7 +518,8 @@ def main() -> int:
     try:
         with ObservedServer(args.codex, log_root=logs, client_version=__version__, execution_broker=broker,
             runtime_tmp=broker.scratch_root(ExecutionRole.APP_SERVER),
-            process_env=broker.environment_for(ExecutionRole.APP_SERVER, preserve_sensitive=("OPENAI_API_KEY",))) as server:
+            process_env=broker.environment_for(ExecutionRole.APP_SERVER, preserve_sensitive=("OPENAI_API_KEY",)),
+            model=args.model, model_reasoning_effort=args.effort) as server:
             write_json(logs / "app_server_command.json", server._command())
             role_canaries: dict[ExecutionRole, Path] = {}
             for label, role in (("planner_initial", ExecutionRole.PLANNER), ("planner_fresh_after_cleanup", ExecutionRole.PLANNER),

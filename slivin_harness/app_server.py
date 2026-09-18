@@ -17,6 +17,7 @@ from typing import Callable
 
 from slivin_harness.output_schema import validate_strict_output_schema
 from slivin_harness.execution import ExecutionBroker, ExecutionRole, RoleExecutionContext, ScopedExecutionPolicyError
+from slivin_harness.qualification import codex_config_overrides
 
 
 def _phase4_inactivity_expired(
@@ -58,7 +59,13 @@ class CodexAppServer:
         process_env: dict[str, str] | None = None,
         execution_policy: dict | None = None,
         execution_broker: ExecutionBroker | None = None,
+        model: str | None = None,
+        model_reasoning_effort: str | None = None,
     ) -> None:
+        if (model is None) != (model_reasoning_effort is None):
+            raise ValueError("Codex model and reasoning effort must be supplied together")
+        if model is not None:
+            codex_config_overrides(model, model_reasoning_effort)
         self.codex_cmd = codex_cmd
         self.client_name = client_name
         self.client_title = client_title
@@ -67,6 +74,8 @@ class CodexAppServer:
         self.process_env = dict(process_env) if process_env is not None else None
         self.execution_policy = execution_policy
         self.execution_broker = execution_broker
+        self.model = model
+        self.model_reasoning_effort = model_reasoning_effort
         self._role_contexts: dict[str, RoleExecutionContext] = {}
         self._retired_threads: set[str] = set()
 
@@ -98,8 +107,13 @@ class CodexAppServer:
             "sandbox_workspace_write.exclude_slash_tmp=true",
             "-c",
             "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-            "--stdio",
         ]
+        if self.model is not None:
+            for override in codex_config_overrides(
+                self.model, self.model_reasoning_effort,
+            ):
+                args.extend(("-c", override))
+        args.append("--stdio")
         if os.name != "nt":
             return args
 

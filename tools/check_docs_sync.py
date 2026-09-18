@@ -57,6 +57,7 @@ from slivin_harness.protocol import (
     MANIFEST_VERSION,
     PLANNER_PROTOCOL_VERSION,
 )
+from slivin_harness.qualification import REAL_MODEL_CASES, qualification_profile
 from task_runner import (
     load_manifest,
     split_checks,
@@ -121,7 +122,7 @@ def _check_one_h1(path: Path) -> None:
 
 
 def main() -> int:
-    _assert(__version__ == "0.8.0a36", f"Unexpected Harness version: {__version__}")
+    _assert(__version__ == "0.8.0a37", f"Unexpected Harness version: {__version__}")
     _assert(MANIFEST_VERSION == 2, f"Unexpected manifest version: {MANIFEST_VERSION}")
     _assert(PLANNER_PROTOCOL_VERSION == "planner.v6", PLANNER_PROTOCOL_VERSION)
     _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v4", IMPLEMENTATION_CONTRACT_VERSION)
@@ -152,6 +153,28 @@ def main() -> int:
     _assert(DELIVERY_RECORD_VERSION == "delivery-record.v2", DELIVERY_RECORD_VERSION)
     _assert(HELDOUT_EVIDENCE_VERSION == "heldout-evidence.v2", HELDOUT_EVIDENCE_VERSION)
     _assert(BENCHMARK_ISOLATION_VERSION == "benchmark-isolation.v1", BENCHMARK_ISOLATION_VERSION)
+    dev_qualification = qualification_profile("dev")
+    release_qualification = qualification_profile("release")
+    _assert(
+        (
+            dev_qualification.model,
+            dev_qualification.model_reasoning_effort,
+            dev_qualification.real_model_cases,
+            dev_qualification.fail_fast,
+            dev_qualification.release_qualifying,
+        ) == ("gpt-5.6-terra", "medium", ("expiry-1",), True, False),
+        "Development qualification profile drifted",
+    )
+    _assert(
+        (
+            release_qualification.model,
+            release_qualification.model_reasoning_effort,
+            release_qualification.real_model_cases,
+            release_qualification.fail_fast,
+            release_qualification.release_qualifying,
+        ) == ("gpt-5.6-sol", "high", REAL_MODEL_CASES, False, True),
+        "Release qualification profile drifted",
+    )
     validate_workflow_definition()
 
     docs_dir = ROOT / "docs"
@@ -172,6 +195,16 @@ def main() -> int:
         "docs/WINDOWS_SETUP.md must reference the current Final Acceptance protocol",
     )
     _assert(USER_FOLLOW_UP_VERSION in windows_text, "docs/WINDOWS_SETUP.md is missing mandatory user follow-up evidence")
+    reliability_text = (docs_dir / "SYSTEMIC_RELIABILITY.md").read_text(encoding="utf-8")
+    for marker in (
+        "--qualification dev",
+        "--qualification release",
+        "gpt-5.6-terra",
+        "gpt-5.6-sol",
+        "DEV_QUALIFICATION_PASS",
+        "RELEASE_QUALIFIED",
+    ):
+        _assert(marker in reliability_text, f"docs/SYSTEMIC_RELIABILITY.md is missing {marker}")
 
     generated_markdown = render_workflow_markdown(harness_version=__version__)
     _assert(
@@ -216,7 +249,7 @@ def main() -> int:
         for path in [ROOT / "README.md", docs_dir / "ARCHITECTURE.md", docs_dir / "QUALITY_MODEL.md"]
     )
     for marker in (
-        "0.8.0a36",
+        "0.8.0a37",
         "version = 2",
         "task-contract.v1",
         "planner.v6",

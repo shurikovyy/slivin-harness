@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from slivin_harness import __version__
 from slivin_harness.build_identity import detect_harness_build_identity, source_manifest
+from slivin_harness.qualification import QualificationProfile, qualification_profile
 from slivin_harness.workflow import workflow_snapshot
 from tools.release_identity import codex_launch_identity
 
@@ -176,6 +177,65 @@ def validate_release_stage_order(stage_names) -> None:
         raise RuntimeError("All deterministic replay and boot gates must precede every model-backed release stage")
 
 
+def qualification_stage_identity_matches(
+    summary: dict, profile: QualificationProfile, *, native: bool = False,
+) -> bool:
+    if not isinstance(summary, dict):
+        return False
+    if (
+        summary.get("qualification_mode") != profile.mode
+        or summary.get("selected_model") != profile.model
+        or summary.get("selected_reasoning_effort") != profile.model_reasoning_effort
+        or summary.get("ambient_model_inheritance") is not False
+    ):
+        return False
+    if native:
+        return True
+    return (
+        summary.get("real_model_cases_requested") == list(profile.real_model_cases)
+        and summary.get("real_model_cases_executed") == list(profile.real_model_cases)
+        and summary.get("fail_fast") is profile.fail_fast
+        and summary.get("release_qualifying") is profile.release_qualifying
+    )
+
+
+def model_backed_stage_commands(
+    profile: QualificationProfile, *, python: str, node: Path, codex: Path,
+    runtime: Path, output: Path,
+) -> dict[str, tuple[list[str], int]]:
+    real_model_command = [
+        python, "tools/release_real_models.py", "--node", str(node),
+        "--codex", str(codex), "--runtime-source", str(runtime),
+        "--output", str(output / "real_models"),
+        "--qualification-mode", profile.mode,
+        "--model", profile.model,
+        "--effort", profile.model_reasoning_effort,
+    ]
+    for case in profile.real_model_cases:
+        real_model_command.extend(("--case", case))
+    if profile.fail_fast:
+        real_model_command.append("--fail-fast")
+    native_command = [
+        python, "tools/smoke_readonly_scratch.py", "--node", str(node),
+        "--codex", str(codex), "--runtime-source", str(runtime),
+        "--output", str(output / "native_roles"), "--model", profile.model,
+        "--effort", profile.model_reasoning_effort,
+        "--qualification-mode", profile.mode,
+    ]
+    return {
+        "native_roles": (native_command, 3600),
+        "real_models": (real_model_command, 28000),
+    }
+
+
+def qualification_terminal_status(
+    profile: QualificationProfile, *, passed: bool,
+) -> str:
+    if not passed:
+        return "NOT_QUALIFIED"
+    return "RELEASE_QUALIFIED" if profile.release_qualifying else "DEV_QUALIFICATION_PASS"
+
+
 def tools_from_profile(args):
     # Only explicit tool paths and runtime directories are read from the local
     # profile. It is never edited, copied into fixtures or emitted in evidence.
@@ -209,10 +269,12 @@ def tools_from_profile(args):
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("windows-local",), required=True)
+    parser.add_argument("--qualification", choices=("dev", "release"), default="release")
     for name in ("node", "jest", "codex", "output"):
         parser.add_argument("--" + name, type=Path)
     parser.add_argument("--diagnostic", action="store_true", help="Allow a dirty development tree; outcome is always NOT_QUALIFIED")
     args = parser.parse_args()
+    qualification = qualification_profile(args.qualification)
     output = args.output or default_output_root()
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -222,9 +284,11 @@ def main() -> int:
     initial = source_manifest(ROOT)
     names = RELEASE_STAGES
     validate_release_stage_order(names)
-    report = dict(schema_version="release-qualification.v1", status="NOT_QUALIFIED", profile=args.profile,
+    report = dict(schema_version="release-qualification.v2", status="NOT_QUALIFIED", profile=args.profile,
         started_at=datetime.now(timezone.utc).isoformat(), harness_build=identity, harness_source=initial,
         workflow=workflow_snapshot(harness_version=__version__), diagnostic=args.diagnostic,
+        qualification={**qualification.to_dict(), "codex_version": None,
+                       "real_model_cases_executed": []},
         stages={name: dict(status="NOT_RUN") for name in names})
     write(output / "qualification.json", report)
     print("RELEASE_EVIDENCE:", output, flush=True)
@@ -238,6 +302,11 @@ def main() -> int:
             raise RuntimeError("Qualification requires a frozen, clean Git commit")
         node, jest, codex, runtime, versions = tools_from_profile(args)
         report["executables"] = versions
+        report["qualification"]["codex_version"] = versions["codex"]["version"]
+        model_commands = model_backed_stage_commands(
+            qualification, python=sys.executable, node=node, codex=codex,
+            runtime=runtime, output=output,
+        )
         commands = {
             "self_check": ([sys.executable, "tools/self_check.py"], 2400),
             "boundary": ([sys.executable, "tools/release_suite.py", "--stage", "boundary", "--output", str(output / "boundary")], 2400),
@@ -249,8 +318,7 @@ def main() -> int:
             "native_command_replay": ([sys.executable, "tools/replay_native_command_drift.py", "--output", str(output / "native_command_replay")], 300),
             "real_model_failure_replay": ([sys.executable, "tools/replay_real_model_failures.py", "--output", str(output / "real_model_failure_replay")], 300),
             "entrypoint_boot": ([sys.executable, "tools/check_release_entrypoints.py", "--output", str(output / "entrypoint_boot")], 300),
-            "native_roles": ([sys.executable, "tools/smoke_readonly_scratch.py", "--node", str(node), "--codex", str(codex), "--runtime-source", str(runtime), "--output", str(output / "native_roles")], 3600),
-            "real_models": ([sys.executable, "tools/release_real_models.py", "--node", str(node), "--codex", str(codex), "--runtime-source", str(runtime), "--output", str(output / "real_models")], 28000),
+            **model_commands,
         }
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1",
                    SLIVIN_SMOKE_NODE=str(node), SLIVIN_SMOKE_JEST=str(jest))
@@ -281,6 +349,14 @@ def main() -> int:
                     stage["summary_sha256"] = hashlib.sha256(raw_summary).hexdigest()
                     if not isinstance(summary_payload, dict) or summary_payload.get("status") != "PASS":
                         stage["status"] = "FAIL"
+                    elif name in {"native_roles", "real_models"} and not qualification_stage_identity_matches(
+                        summary_payload, qualification, native=name == "native_roles",
+                    ):
+                        stage.update(status="FAIL", reason="Qualification model identity mismatch")
+                    if name == "real_models" and isinstance(summary_payload, dict):
+                        report["qualification"]["real_model_cases_executed"] = summary_payload.get(
+                            "real_model_cases_executed", []
+                        )
             elif name != "self_check":
                 stage.update(status="FAIL", reason="Mandatory machine-readable evidence missing")
             write(output / "qualification.json", report)
@@ -297,8 +373,10 @@ def main() -> int:
         # PATH/local Node or platform package/native payload after the run.
         report["executables_after"] = tools_from_profile(args)[4]
         report["executables_unchanged"] = report["executables_after"] == versions
-        qualified = not args.diagnostic and report["source_unchanged"] and report["executables_unchanged"] and all(stage["status"] == "PASS" for stage in report["stages"].values())
-        report["status"] = "RELEASE_QUALIFIED" if qualified else "NOT_QUALIFIED"
+        passed = (not args.diagnostic and report["source_unchanged"]
+                  and report["executables_unchanged"]
+                  and all(stage["status"] == "PASS" for stage in report["stages"].values()))
+        report["status"] = qualification_terminal_status(qualification, passed=passed)
     except Exception as error:
         report["error"] = dict(type=type(error).__name__, reason=str(error))
         for stage in report["stages"].values():
@@ -311,7 +389,7 @@ def main() -> int:
     report["completed_at"] = datetime.now(timezone.utc).isoformat()
     write(output / "qualification.json", report)
     print(report["status"], output / "qualification.json", flush=True)
-    return 0 if report["status"] == "RELEASE_QUALIFIED" else 1
+    return 0 if report["status"] in {"RELEASE_QUALIFIED", "DEV_QUALIFICATION_PASS"} else 1
 
 
 if __name__ == "__main__":

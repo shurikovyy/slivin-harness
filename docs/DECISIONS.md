@@ -68,6 +68,7 @@
 | [D-031](#d-031) | Controller владеет opaque native probe configuration и bounded command recovery | IMPLEMENTED в 0.8.0a34; native/full qualification конкретного SHA ещё требуется |
 | [D-032](#d-032) | Boundary identity принадлежит source tree; model executables проходят exact boot | IMPLEMENTED в 0.8.0a35; native/full qualification конкретного SHA ещё требуется |
 | [D-033](#d-033) | Claim closure, checkpoint evidence и qualification authority разделены по ownership | IMPLEMENTED в 0.8.0a36; full qualification конкретного SHA ещё требуется |
+| [D-034](#d-034) | Qualification mode и model identity принадлежат Controller | IMPLEMENTED в 0.8.0a37; full qualification конкретного SHA ещё требуется |
 
 <a id="d-001"></a>
 
@@ -1232,6 +1233,58 @@ checkpoint authority без explicit registration. Captured exact QE1 `PASS`+neg
 claim с frozen semantics. Новая durable role evidence category требует explicit
 Controller registration. Mixed-document authorities изменяются только вместе с task
 semantics и отдельными regressions на каждую unrelated region.
+
+<a id="d-034"></a>
+
+## D-034. Qualification mode и model identity принадлежат Controller
+
+**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в `0.8.0a37`; full qualification
+этого SHA ещё не выполнялась. **Дата регистрации:** 2026-09-18.
+**Связанные решения:** D-013, D-030, D-032, D-033.
+
+**Проблема и проверенные основания.** Единственный прежний real-model driver всегда
+запускал три expensive cases последовательно и продолжал после раннего FAIL. Model и
+reasoning effort не входили в Controller profile: App Server наследовал их из ambient
+user Codex config, поэтому два внешне одинаковых qualification records могли фактически
+использовать разные model identities. Короткий regression feedback требовал полного
+многочасового прогона, хотя один fixed case достаточен для development signal, но не
+для release evidence.
+
+**Решение и rationale.** Controller владеет двумя explicit profiles. `dev` сохраняет
+каждый deterministic gate и `native_roles`, затем запускает ровно `expiry-1` с
+`gpt-5.6-terra`/`medium` и fail-fast. Даже полный PASS завершается
+`DEV_QUALIFICATION_PASS` и profile помечен `release_qualifying=false`. `release`
+является совместимым default, pin-ит `gpt-5.6-sol`/`high`, выполняет expiry-1,
+suspension-1, expiry-2 в прежнем порядке и продолжает собирать evidence всех cases;
+только он может выдать `RELEASE_QUALIFIED`.
+
+Selected model/effort передаются каждому qualification App Server как exact Codex CLI
+`-c` overrides. Real-model fixture config переносит ту же identity во вложенный
+`task_runner`; global `~/.codex/config.toml` не читается как qualification authority и
+не изменяется. Top-level и per-case evidence связывают mode, model, effort, Codex
+version, requested/executed cases, fail-fast и release eligibility. Несовпадение
+summary с profile превращает stage в FAIL.
+
+**Отвергнутые варианты.** REJECTED: изменить default driver на один case — это могло
+бы выдать неполное evidence как release; разрешить dev выдать `RELEASE_QUALIFIED` —
+смешивает feedback и qualification; пропускать deterministic/native stages в dev —
+скрывает boundary regressions; наследовать ambient model — identity не
+воспроизводима; редактировать user config — persistent side effect; продолжать dev
+после первого FAIL — не сокращает feedback loop; делать release fail-fast — теряется
+полная трёх-case диагностическая выборка; менять prompts/fixtures — ослабляет
+сопоставимость qualification.
+
+**Последствия, границы, проверка.** Transport, sandbox, artifact/native/real-failure
+replays, entrypoint boot, три release fixtures, их independent validation и
+Matrix/hidden semantics не изменены. Direct real-model tool допускает explicit focused
+selection, но такой run machine-readably non-release. Deterministic tests фиксируют
+profile commands, CLI overrides, fail-fast, evidence identity и запрет release при
+любом missing/failed mandatory case. `0.8.0a37` не является заявлением
+`RELEASE_QUALIFIED`.
+
+**Пересмотр.** Model или effort меняются только новым Controller decision вместе с
+evidence identity и regression update. Дополнительный dev case не становится release
+substitute; изменение трёх-case release set требует отдельного material review.
 
 ## Шаблон новой записи
 

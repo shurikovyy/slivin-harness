@@ -116,10 +116,16 @@ sharing/access violations с bounded budget. Ambiguous completed replace све�
 
 ## Запуск квалификации
 
-`py.exe -3 tools/release_check.py --profile windows-local` требует native Windows и
-чистый Git commit. Используются текущие configured executables; доступны explicit
+`py.exe -3 tools/release_check.py --profile windows-local --qualification release`
+требует native Windows и чистый Git commit. Совместимый default также выбирает
+`release`. Используются текущие configured executables; доступны explicit
 `--node`, `--jest`, `--codex`, `--output`. Evidence сохраняется вне checkout.
 `--diagnostic` допускает dirty tree, но никогда не квалифицирует сборку.
+`--qualification dev` выполняет те же deterministic stages и обязательный
+`native_roles`, затем только `expiry-1` с `gpt-5.6-terra`/`medium` и fail-fast.
+Его успешный статус — `DEV_QUALIFICATION_PASS`; он никогда не означает
+`RELEASE_QUALIFIED`. `release` pin-ит `gpt-5.6-sol`/`high`, запускает все три cases
+и только он может выдать `RELEASE_QUALIFIED`.
 Default evidence root и внутренние имена FULL workspaces ограничены по длине; перед
 model turns gate вычисляет фактический Windows path budget для physical `node_modules`
 и завершает этап типизированным FAIL, если безопасного запаса нет.
@@ -171,7 +177,9 @@ bounded closure для status-compatible claim, QS1 — отсутствие che
 Каждый result связывает fixture bytes и retained source artifact SHA-256.
 
 FULL fixtures фиксированы в `tools/release_real_models.py`: expiry, suspension,
-повтор expiry; 900 секунд на turn, два fix и два replan cycles. Public baseline
+повтор expiry; 900 секунд на turn, два fix и два replan cycles. Direct diagnostic
+CLI принимает explicit `--case`, `--model`, `--effort`, `--fail-fast`; отсутствие
+`--case` сохраняет полный трёх-case порядок без fail-fast. Public baseline
 assertions должны реально выполниться и упасть. Delivered candidate проверяется
 исходными frozen Node/Jest assertions, exact tests/config и независимой legacy
 implementation. В mixed README eligibility section может изменяться по task semantics,
@@ -202,7 +210,10 @@ rechecks, transactional rollback и защиты concurrent user edits. Реал
 source object database для этой проверки не используются как writable storage.
 
 `qualification.json` связывает stages/logs с full Git SHA, source manifest,
-Harness/workflow и exact executables. Для npm Codex сверяется полная цепочка:
+Harness/workflow, qualification mode, explicit model/effort, Codex version,
+requested/executed cases, fail-fast/release eligibility и exact executables. Эти же
+model/effort поля обязательны в каждом real-model case summary. Для npm Codex
+сверяется полная цепочка:
 `codex.cmd`, фактически выбранный им Node, `codex.js`, package metadata,
 native vendor payload со всеми helpers и command processor. Resolution и hashes
 повторяются после прогона; неизвестный wrapper не получает qualification.

@@ -138,6 +138,7 @@ from slivin_harness.protocol import (
     safe_repo_relative,
     stable_fingerprint,
 )
+from slivin_harness.qualification import validate_model_identity
 from slivin_harness.run_state import (
     RunState,
     build_candidate_identity,
@@ -642,6 +643,23 @@ def resolve_codex_cmd(local_config: dict) -> Path:
     raise RuntimeError(
         "Codex CLI is not configured. Set [codex].command in harness.local.toml."
     )
+
+
+def resolve_codex_model_identity(local_config: dict) -> tuple[str | None, str | None]:
+    codex = local_config.get("codex", {})
+    if not isinstance(codex, dict):
+        raise RuntimeError("[codex] must be a table")
+    model = codex.get("model")
+    effort = codex.get("model_reasoning_effort")
+    if model is None and effort is None:
+        return None, None
+    if not isinstance(model, str) or not isinstance(effort, str):
+        raise RuntimeError("[codex] model and model_reasoning_effort must be strings supplied together")
+    try:
+        validate_model_identity(model, effort)
+    except ValueError as exc:
+        raise RuntimeError("Invalid Controller-selected Codex model identity") from exc
+    return model, effort
 
 
 def resolve_toolchain(
@@ -3068,6 +3086,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         runtime_tmp = execution_broker.scratch_root(ExecutionRole.APP_SERVER)
         codex_cmd = resolve_codex_cmd(local_config)
+        codex_model, codex_effort = resolve_codex_model_identity(local_config)
         app_server_policy = execution_broker.policy_for(ExecutionRole.APP_SERVER)
         app_server_env = execution_broker.environment_for(
             ExecutionRole.APP_SERVER,
@@ -3082,6 +3101,8 @@ def main(argv: list[str] | None = None) -> int:
             process_env=app_server_env,
             execution_policy=app_server_policy.to_dict(),
             execution_broker=execution_broker,
+            model=codex_model,
+            model_reasoning_effort=codex_effort,
         ) as codex:
             print("=== USER TASK CONTRACT ===")
             task_contract = integrity_coordinator.run_read_only(

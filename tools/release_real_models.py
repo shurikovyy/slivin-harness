@@ -1,8 +1,9 @@
-"""Fixed, generic FULL qualification tasks using actual configured Codex turns.
+"""Fixed, generic qualification tasks using Controller-selected Codex turns.
 
 Fixture source and assertions are public to the roles. No benchmark corpus,
-reference fix, hidden grader or model double is involved. Two tasks, then repeat
-the first; budgets and fixtures are part of the hashed release source.
+reference fix, hidden grader or model double is involved. Release mode runs two
+tasks and then repeats the first; budgets and fixtures are part of the hashed
+release source. Focused and development runs are always non-release evidence.
 """
 from __future__ import annotations
 
@@ -21,6 +22,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from slivin_harness.entrypoint_boot import emit_entrypoint_boot_if_requested
 from slivin_harness.runtime_projection import fingerprint_runtime_tree
+from slivin_harness.qualification import (
+    REAL_MODEL_CASES,
+    qualification_profile,
+    validate_real_model_selection,
+)
 from slivin_harness.control_plane import safe_artifact_name
 from slivin_harness.run_state import build_candidate_identity
 from dataclasses import asdict
@@ -30,6 +36,11 @@ CASE_LAYOUTS = {
     "expiry-1": ("e1", "QE1"),
     "suspension-1": ("s1", "QS1"),
     "expiry-2": ("e2", "QE2"),
+}
+CASE_KINDS = {
+    "expiry-1": "expiry",
+    "suspension-1": "suspension",
+    "expiry-2": "expiry",
 }
 WINDOWS_WORKSPACE_PATH_LIMIT = 240
 README_LEGACY_REGION = (
@@ -483,7 +494,9 @@ def case_failure_evidence(*, run: Path, exit_code: int, independent_validation: 
     }
 
 
-def execute_case(*, output: Path, label: str, kind: str, node: Path, codex: Path, runtime: Path) -> dict:
+def execute_case(*, output: Path, label: str, kind: str, node: Path, codex: Path,
+                 runtime: Path, qualification_mode: str, model: str,
+                 effort: str, codex_version: str) -> dict:
     folder, workspace_root, project_name, task_id = qualification_case_layout(output, label)
     folder.mkdir()
     repo = folder / "source"
@@ -519,6 +532,8 @@ def execute_case(*, output: Path, label: str, kind: str, node: Path, codex: Path
     config = folder / "fixture.local.toml"
     config.write_text(f'''[codex]
 command = {json.dumps(str(codex))}
+model = {json.dumps(model)}
+model_reasoning_effort = {json.dumps(effort)}
 [workspace]
 root = {json.dumps(str(workspace_root))}
 [projects.{project_name}]
@@ -540,6 +555,9 @@ allow_sensitive_copy = false
     log_text = (folder / "pipeline.log").read_text(encoding="utf-8")
     matches = re.findall(r"^RUN_DIR:\s*(.+)$", log_text, flags=re.MULTILINE)
     record = dict(label=label, kind=kind, task_id=task_id, model_turns="REAL", exit_code=completed.returncode,
+                  qualification_mode=qualification_mode, selected_model=model,
+                  selected_reasoning_effort=effort, codex_version=codex_version,
+                  ambient_model_inheritance=False,
                   workspace_path_budget=path_budget,
                   baseline_sha=baseline, status="FAIL", prompt=prompt, fixture_sha256=hashlib.sha256(json.dumps(files,sort_keys=True).encode()).hexdigest())
     if matches:
@@ -594,22 +612,79 @@ allow_sensitive_copy = false
     return record
 
 
+def execute_case_sequence(case_names, *, fail_fast: bool, execute,
+                          on_progress=lambda records: None) -> list[dict]:
+    """Execute an exact ordered selection and stop only under explicit fail-fast."""
+    records: list[dict] = []
+    for name in case_names:
+        records.append(execute(name))
+        on_progress(list(records))
+        if fail_fast and records[-1].get("status") != "PASS":
+            break
+    return records
+
+
+def real_model_run_passed(
+    requested_cases, cases: list[dict], *, runtime_source_unchanged: bool,
+) -> bool:
+    return (
+        tuple(case.get("label") for case in cases) == tuple(requested_cases)
+        and all(case.get("status") == "PASS" for case in cases)
+        and runtime_source_unchanged
+    )
+
+
+def resolve_run_selection(*, cases, qualification_mode: str | None, model: str,
+                          effort: str, fail_fast: bool) -> tuple[tuple[str, ...], str, bool]:
+    """Resolve direct CLI defaults without allowing a focused run to masquerade as release."""
+    requested_cases = tuple(cases or REAL_MODEL_CASES)
+    resolved_mode = qualification_mode or ("focused" if cases else "release")
+    release_qualifying = validate_real_model_selection(
+        mode=resolved_mode, model=model, effort=effort,
+        cases=requested_cases, fail_fast=fail_fast,
+    )
+    return requested_cases, resolved_mode, release_qualifying
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("node", "codex", "runtime-source", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--case", action="append", choices=REAL_MODEL_CASES)
+    parser.add_argument("--model", default=qualification_profile("release").model)
+    parser.add_argument("--effort", default=qualification_profile("release").model_reasoning_effort)
+    parser.add_argument("--fail-fast", action="store_true")
+    parser.add_argument("--qualification-mode", choices=("dev", "release", "focused"))
     args = parser.parse_args()
+    try:
+        requested_cases, qualification_mode, release_qualifying = resolve_run_selection(
+            cases=args.case, qualification_mode=args.qualification_mode,
+            model=args.model, effort=args.effort, fail_fast=args.fail_fast,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     args.output.mkdir(parents=True, exist_ok=False)
     before = asdict(fingerprint_runtime_tree(args.runtime_source))
-    cases = []
-    # Failures stay in the report; no change to task count, order, prompt or budget.
-    for label, kind in (("expiry-1", "expiry"), ("suspension-1", "suspension"), ("expiry-2", "expiry")):
+    codex_version = subprocess.run(
+        [str(args.codex), "--version"], capture_output=True, text=True,
+        encoding="utf-8", check=True, timeout=30,
+    ).stdout.strip()
+
+    def run_one(label: str) -> dict:
         try:
-            cases.append(execute_case(output=args.output, label=label, kind=kind, node=args.node,
-                                      codex=args.codex, runtime=args.runtime_source))
+            record = execute_case(
+                output=args.output, label=label, kind=CASE_KINDS[label], node=args.node,
+                codex=args.codex, runtime=args.runtime_source,
+                qualification_mode=qualification_mode, model=args.model,
+                effort=args.effort, codex_version=codex_version,
+            )
         except Exception as error:
-            cases.append(dict(
-                label=label, kind=kind, status="FAIL", error_type=type(error).__name__,
+            record = dict(
+                label=label, kind=CASE_KINDS[label], status="FAIL",
+                qualification_mode=qualification_mode, selected_model=args.model,
+                selected_reasoning_effort=args.effort, codex_version=codex_version,
+                ambient_model_inheritance=False,
+                error_type=type(error).__name__,
                 reason=str(error), failure_class="HARNESS_INFRASTRUCTURE_FAILURE",
                 failure_evidence={
                     "terminal_failure_type": "HARNESS_INFRASTRUCTURE_FAILURE",
@@ -619,12 +694,56 @@ def main() -> int:
                     "field": None,
                     "correction_attempt": None,
                 },
-            ))
-        (args.output / "summary.json").write_text(json.dumps(dict(status="RUNNING", cases=cases), ensure_ascii=False, indent=2), encoding="utf-8")
+            )
+            folder = qualification_case_layout(args.output, label)[0]
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "summary.json").write_text(
+                json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+            )
+        return record
+
+    def persist_progress(cases: list[dict]) -> None:
+        progress = {
+            "schema_version": "real-model-qualification.v2",
+            "status": "RUNNING",
+            "qualification_mode": qualification_mode,
+            "selected_model": args.model,
+            "selected_reasoning_effort": args.effort,
+            "codex_version": codex_version,
+            "real_model_cases_requested": list(requested_cases),
+            "real_model_cases_executed": [case["label"] for case in cases],
+            "fail_fast": args.fail_fast,
+            "release_qualifying": release_qualifying,
+            "cases": cases,
+        }
+        (args.output / "summary.json").write_text(
+            json.dumps(progress, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        )
+
+    cases = execute_case_sequence(
+        requested_cases, fail_fast=args.fail_fast, execute=run_one,
+        on_progress=persist_progress,
+    )
     unchanged = before == asdict(fingerprint_runtime_tree(args.runtime_source))
-    passed = len(cases) == 3 and all(case["status"] == "PASS" for case in cases) and unchanged
-    record = dict(schema_version="real-model-qualification.v1", status="PASS" if passed else "FAIL", cases=cases,
-                  runtime_source_unchanged=unchanged, runtime_before=before, doubles=False)
+    passed = real_model_run_passed(
+        requested_cases, cases, runtime_source_unchanged=unchanged,
+    )
+    terminal_status = (
+        "RELEASE_CASE_SET_PASS" if passed and release_qualifying
+        else "NON_RELEASE_CASE_SET_PASS" if passed
+        else "REAL_MODEL_CASE_SET_FAIL"
+    )
+    record = dict(
+        schema_version="real-model-qualification.v2", status="PASS" if passed else "FAIL",
+        terminal_status=terminal_status,
+        qualification_mode=qualification_mode, selected_model=args.model,
+        selected_reasoning_effort=args.effort, codex_version=codex_version,
+        real_model_cases_requested=list(requested_cases),
+        real_model_cases_executed=[case["label"] for case in cases],
+        fail_fast=args.fail_fast, release_qualifying=release_qualifying,
+        ambient_model_inheritance=False, cases=cases,
+        runtime_source_unchanged=unchanged, runtime_before=before, doubles=False,
+    )
     (args.output / "summary.json").write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return 0 if passed else 1
 

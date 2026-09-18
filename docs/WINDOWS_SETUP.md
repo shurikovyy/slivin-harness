@@ -257,6 +257,13 @@ mixed-document qualification authority проверяются production paths �
 `task_runner.py`, `tools/smoke_readonly_scratch.py` и
 `tools/release_real_models.py` в exact script mode. Это import/decorator/CLI boot
 proof с `model_execution=NOT_RUN`, а не native или real-model qualification.
+Полный профиль запускается как
+`py.exe -3 tools/release_check.py --profile windows-local --qualification release`:
+он pin-ит `gpt-5.6-sol`/`high` и требует все три real-model cases. Для короткого
+feedback используется `--qualification dev`: deterministic/native stages остаются
+обязательными, но real-model driver запускает только `expiry-1` с
+`gpt-5.6-terra`/`medium` и fail-fast. `DEV_QUALIFICATION_PASS` не является
+`RELEASE_QUALIFIED`; global `~/.codex/config.toml` не изменяется.
 Peer checks also target the granted scratch of another active role in both directions;
 an ungranted sibling directory alone does not prove per-thread isolation.
 Continuations check the same policy; fresh Planner follows scratch cleanup. Existing

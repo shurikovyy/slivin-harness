@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a36
+# Документация Slivin Harness 0.8.0a37
 
-Актуальная версия: **0.8.0a36 — Real-model Liveness Closure**.
+Актуальная версия: **0.8.0a37 — Explicit Qualification Profiles**.
 
 Основные документы:
 

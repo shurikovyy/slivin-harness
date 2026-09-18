@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a36 — Phase 7
+# Архитектура Slivin Harness 0.8.0a37 — Phase 7
 
 ## Назначение
 
-`0.8.0a36` требует typed impact closure в `planner.v6` до `READY`, сохраняет
+`0.8.0a37` требует typed impact closure в `planner.v6` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a36
+Harness                     0.8.0a37
 Manifest                    version = 2
 Workflow                    workflow.v7
 Run State                   run-state.v1
@@ -231,7 +231,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a36`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a37`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -650,7 +650,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a36` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a37` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 Planner/Evaluator используют один `RoleExecutionContext` (`role-execution-context.v1`)
 из `ExecutionBroker.prepare_readonly_role()`. Project root остаётся контекстом repository,
@@ -720,6 +720,13 @@ QE1 claim closure, QS1 volatile scratch race и QE2 mixed-document authority ч�
 те же production admission/checkpoint/outer-validator paths. Fixture origin, source
 run, expected/actual outcome и SHA-256 сохраняются machine-readably; replay не
 заменяет fixed real-model cases.
+Qualification profile — Controller-owned identity. `dev` сохраняет все deterministic
+stages и `native_roles`, затем выполняет только `expiry-1` с
+`gpt-5.6-terra`/`medium` и fail-fast; он никогда не release-qualifying. `release`
+использует `gpt-5.6-sol`/`high` и все три fixed cases без сокращения evidence.
+`CodexAppServer` передаёт оба значения explicit CLI `-c`, поэтому ambient user
+config не может переопределить профиль. Mode/model/effort/Codex version,
+requested/executed cases и fail-fast policy входят в qualification и per-case evidence.
 После replay `entrypoint_boot` выполняет exact script-mode
 `--boot-check` для `task_runner.py`, native smoke и real-model driver. Каждый
 executable возвращает `release-entrypoint-boot.v1` с canonical source/module,
