@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from slivin_harness import __version__
+from slivin_harness.checkpoint import CHECKPOINT_VERSION
 from slivin_harness.handoff import USER_FOLLOW_UP_VERSION
 from slivin_harness.implementer import IMPLEMENTER_PROTOCOL_VERSION, IMPLEMENTATION_CONTRACT_VERSION
 from slivin_harness.control_plane import CONTROL_PLANE_VERSION
@@ -120,7 +121,7 @@ def _check_one_h1(path: Path) -> None:
 
 
 def main() -> int:
-    _assert(__version__ == "0.8.0a35", f"Unexpected Harness version: {__version__}")
+    _assert(__version__ == "0.8.0a36", f"Unexpected Harness version: {__version__}")
     _assert(MANIFEST_VERSION == 2, f"Unexpected manifest version: {MANIFEST_VERSION}")
     _assert(PLANNER_PROTOCOL_VERSION == "planner.v6", PLANNER_PROTOCOL_VERSION)
     _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v4", IMPLEMENTATION_CONTRACT_VERSION)
@@ -129,6 +130,7 @@ def main() -> int:
     _assert(WORKFLOW_VERSION == "workflow.v7", WORKFLOW_VERSION)
     _assert(RUN_STATE_VERSION == "run-state.v1", RUN_STATE_VERSION)
     _assert(CANDIDATE_IDENTITY_VERSION == "candidate.v1", CANDIDATE_IDENTITY_VERSION)
+    _assert(CHECKPOINT_VERSION == "candidate-checkpoint.v2", CHECKPOINT_VERSION)
     _assert(CONTROL_PLANE_VERSION == "controller-plane.v1", CONTROL_PLANE_VERSION)
     _assert(EXECUTION_BROKER_VERSION == "execution-broker.v1", EXECUTION_BROKER_VERSION)
     _assert(TASK_CONTRACT_VERSION == "task-contract.v1", TASK_CONTRACT_VERSION)
@@ -214,7 +216,7 @@ def main() -> int:
         for path in [ROOT / "README.md", docs_dir / "ARCHITECTURE.md", docs_dir / "QUALITY_MODEL.md"]
     )
     for marker in (
-        "0.8.0a35",
+        "0.8.0a36",
         "version = 2",
         "task-contract.v1",
         "planner.v6",
@@ -225,6 +227,7 @@ def main() -> int:
         WORKFLOW_VERSION,
         RUN_STATE_VERSION,
         CANDIDATE_IDENTITY_VERSION,
+        CHECKPOINT_VERSION,
         CONTROL_PLANE_VERSION,
         EXECUTION_BROKER_VERSION,
         PHASE5_VERSION,

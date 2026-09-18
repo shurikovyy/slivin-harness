@@ -1,0 +1,54 @@
+{
+  "schema_version": "real-model-failure-fixture.v1",
+  "fixture_id": "qe1-20260918-negative-disposition-closure",
+  "origin": "captured_real",
+  "source_qualification_run_id": "shr-q-fb852e56ab",
+  "source_case": "expiry-1",
+  "source_run_id": "QE1/20260918-111130-807b2974",
+  "source_artifact": "controller_private/evaluator_01_PHASE_B_00.raw.json",
+  "source_artifact_sha256": "ea59ce669828006b6a5ea03a619a16f882be8bfd5846170f7bc0fc1100f4d728",
+  "observed_structure": {
+    "top_level_fields": [
+      "protocol_version",
+      "status",
+      "candidate_id",
+      "summary",
+      "impact_challenge",
+      "blind_finding_dispositions",
+      "findings",
+      "reason"
+    ],
+    "impact_group_counts": {
+      "blind_contract_dispositions": 2,
+      "blind_consumer_dispositions": 5,
+      "planner_consumer_dispositions": 4,
+      "implementer_consumer_dispositions": 0,
+      "not_affected_dispositions": 6,
+      "related_follow_up_dispositions": 5,
+      "changed_path_dispositions": 3
+    },
+    "failing_group": "blind_consumer_dispositions",
+    "failing_row_index": 4,
+    "blind_finding_dispositions": 0,
+    "final_findings": 0
+  },
+  "captured_wire": {
+    "protocol_version": "evaluator.v8",
+    "status": "PASS",
+    "candidate_id": "@CANDIDATE@",
+    "impact_group": "blind_consumer_dispositions",
+    "impact_index": 4,
+    "row": {
+      "origin_ref": "ORIGIN-3b59da51cc7b7dd21e2e2a44",
+      "disposition": "MISCLASSIFIED_NOT_AFFECTED",
+      "finding_ids": [],
+      "matches": [
+        {"origin_ref": "ORIGIN-2f8fda1ead49951cc1c33450"},
+        {"origin_ref": "ORIGIN-c32c846e11807e43bbd56cba"}
+      ]
+    },
+    "findings": []
+  },
+  "expected_outcome": "HARD_FAIL_PASS_WITH_NEGATIVE_DISPOSITION",
+  "compatible_status_outcome": "ONE_BOUNDED_CLAIM_CLOSURE"
+}

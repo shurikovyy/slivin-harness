@@ -166,7 +166,7 @@ class NativeTrustedRunnerTests(unittest.TestCase):
         self.assertEqual(state['current_candidate']['candidate_id'], current['candidate_id'])
         physical = task_runner.build_candidate_identity(workspaces[-1])
         self.assertEqual(physical.candidate_id, current['candidate_id'])
-        self.assertTrue(any(row.get('schema_version') == 'candidate-checkpoint.v1'
+        self.assertTrue(any(row.get('schema_version') == 'candidate-checkpoint.v2'
             and row.get('candidate', {}).get('candidate_id') == current['candidate_id'] for row in checkpoints))
         if registry_deltas:
             self.assertEqual(len(set(registry_digests[-3:])), 3)

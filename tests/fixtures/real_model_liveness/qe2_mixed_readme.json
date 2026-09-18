@@ -1,0 +1,21 @@
+{
+  "schema_version": "real-model-failure-fixture.v1",
+  "fixture_id": "qe2-20260918-mixed-readme-authority",
+  "origin": "captured_real",
+  "source_qualification_run_id": "shr-q-fb852e56ab",
+  "source_case": "expiry-2",
+  "source_run_id": "QE2/20260918-115427-a34f37a2",
+  "source_artifact": "real_models/e2/summary.json",
+  "source_artifact_sha256": "09cf11d9c919f61067aa99911e029f7f9868ced4b59424b4fcfdc02a265f463a",
+  "baseline_readme": "# Resource reads\n\nContent, availability and counts use the same eligibility policy.\n\nRun `npm test` to execute the Jest suite. Native assertions also exist.\n\nThe legacy label is documented as `current`; it is independent of resource eligibility.\n\nDocumentation navigation refers to [deployment instructions](docs/deployment.md).\n",
+  "delivered_readme": "# Resource reads\n\nContent, availability and counts use the same eligibility policy.\n\nAn entry is eligible only while it is active and `now < expiresAt`. At or after\n`expiresAt`, content reads return `null`, availability is false, and counts\nexclude the entry.\n\nRun `npm test` to execute the Jest suite. Native assertions also exist.\n\nThe legacy label is documented as `current`; it is independent of resource eligibility.\n\nDocumentation navigation refers to [deployment instructions](docs/deployment.md).\n",
+  "delivered_product_files": {
+    "src/state.cjs": "module.exports.isReadable = entry => Boolean(entry.active) && entry.now < entry.expiresAt;\n",
+    "src/access.cjs": "const {isReadable}=require('./state.cjs');\nexports.available=entry=>isReadable(entry);\n"
+  },
+  "preserved_regions": {
+    "legacy_label": "The legacy label is documented as `current`; it is independent of resource eligibility.",
+    "deployment_navigation": "Documentation navigation refers to [deployment instructions](docs/deployment.md)."
+  },
+  "expected_outcome": "MIXED_DOCUMENT_AUTHORITY_PASS"
+}

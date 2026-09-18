@@ -250,6 +250,9 @@ in the same thread, and only the failed exact commands may execute. For the prob
 is always the same short entrypoint. Repeated/ambiguous drift, policy/config/integrity/
 assertion-semantic failure and transport incompatibility remain hard failures, with
 the original mismatch retained.
+Captured `shr-q-fb852e56ab` QE1/QS1/QE2 liveness fixtures затем проходят
+`real_model_failure_replay`: Phase-B claim closure, volatile checkpoint scratch и
+mixed-document qualification authority проверяются production paths без model turns.
 После replay `entrypoint_boot` запускает explicit `--boot-check` contracts для
 `task_runner.py`, `tools/smoke_readonly_scratch.py` и
 `tools/release_real_models.py` в exact script mode. Это import/decorator/CLI boot

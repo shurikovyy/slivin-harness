@@ -228,8 +228,10 @@ Every attempt has a separate private raw artifact and diagnostic; public outcome
 codes/fields without raw private values. `terminal_candidate_observation.json` records
 current physical files, or UNKNOWN with an explicitly stale previous identity if observation
 is unsafe/unavailable, including timeout/unknown transport before any raw report.
-`candidate-checkpoint.v1` privately seals physical changed file bytes/deletions, baseline,
-source inventory, build digest and known evidence before validation. It is unverified
+`candidate-checkpoint.v2` privately seals physical changed file bytes/deletions, baseline,
+source inventory, build digest, strict Controller evidence and explicitly registered
+durable role evidence before validation. Unregistered role scratch is a forensic tree
+exclusion and is not traversed or required to remain available. It is unverified
 and does not authorize acceptance or cross-process resume. Successful correction still runs the full validator and existing
 trusted checks, binding and Contract expansion; it does not itself prove COMPLETE.
 

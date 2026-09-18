@@ -67,6 +67,7 @@
 | [D-030](#d-030) | Controller canonicalizes Codex command transport до evidence consumers | IMPLEMENTED в 0.8.0a33; native/full qualification конкретного SHA ещё требуется |
 | [D-031](#d-031) | Controller владеет opaque native probe configuration и bounded command recovery | IMPLEMENTED в 0.8.0a34; native/full qualification конкретного SHA ещё требуется |
 | [D-032](#d-032) | Boundary identity принадлежит source tree; model executables проходят exact boot | IMPLEMENTED в 0.8.0a35; native/full qualification конкретного SHA ещё требуется |
+| [D-033](#d-033) | Claim closure, checkpoint evidence и qualification authority разделены по ownership | IMPLEMENTED в 0.8.0a36; full qualification конкретного SHA ещё требуется |
 
 <a id="d-001"></a>
 
@@ -1167,6 +1168,70 @@ executables, не native sandbox и не model correctness. Новые executabl
 **Пересмотр.** Module identity изменяется только вместе с trusted source location;
 новая execution form принимается через тот же source-relative resolver и exact boot,
 а не через runtime alias.
+
+<a id="d-033"></a>
+
+## D-033. Claim closure, checkpoint evidence и qualification authority разделены по ownership
+
+**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в `0.8.0a36`; full qualification
+этого SHA ещё не выполнялась. **Дата регистрации:** 2026-09-18.
+**Связанные решения:** D-013, D-017, D-020, D-026, D-029, D-032.
+
+**Проблема и проверенные основания.** Qualification `shr-q-fb852e56ab` прошла все
+deterministic gates и `native_roles`, затем три fixed FULL cases обнаружили три разные
+false-stop boundary. QE1 дошёл до пяти PASS Controller checks, но Phase B сохранила
+отрицательный disposition без materialized final finding. QS1 закончил product work и
+self-verification, но checkpoint попытался прочитать случайный
+`jest-access-cache/haste-map-*`, исчезнувший между walk и read. QE2 получил
+`HARNESS_TASK_PASS`, но outer validator byte-freeze всего mixed README отверг точное
+task-related documentation clarification при сохранённых unrelated sections.
+
+**Решение и rationale.** Отрицательный disposition уже является semantic claim.
+Для status-compatible Phase B Controller допускает ровно один отдельный closure turn,
+который только materialize этот claim: добавляет требуемый final finding и связывает
+его exact ID. Status, dispositions, origin refs/matches, blind dispositions, reasons,
+coverage, candidate и existing findings frozen. `PASS` с negative disposition,
+semantic reversal, repeated/no-progress correction и другие semantic conflicts
+остаются hard failure.
+
+`candidate-checkpoint.v2` делит evidence по authority. Candidate bytes, Controller
+artifacts, self-verify stamp и explicit Controller-registered durable role paths
+читаются stable, sealed и fail closed при disappearance/replacement. Arbitrary
+unregistered role scratch не обходится и записывается как forensic tree exclusion;
+его volatile availability не может остановить checkpoint. Links/junctions,
+sensitive paths и candidate drift по-прежнему отклоняются.
+
+Outer qualification точно замораживает owner tests/config и independent legacy
+implementation, но mixed README проверяет отдельные authorities: task-related
+eligibility prose изменяема, а unrelated legacy-label и deployment-navigation regions
+сохраняются exact. Product assertions, candidate identity, reconstruction и delivery
+не ослаблены. Public synthetic-case evidence получает bounded typed failure class,
+reason/kind/field/attempt и safe artifact reference. Captured QE1/QS1/QE2 fixtures
+выполняются production paths в обязательном `real_model_failure_replay` до любого
+model-backed stage; это не заменяет три fixed FULL cases.
+
+**Отвергнутые варианты.** REJECTED: переклассифицировать любые semantic disagreements
+как local wire errors или увеличить generic retry count — это разрешит менять verdict;
+разрешить correction сменить negative на positive/status — это стирает заявленный
+дефект; добавить `jest-access-cache` в список имён — следующий arbitrary cache повторит
+TOCTOU; best-effort читать authoritative evidence — это fail-open; byte-freeze всего
+README — создаёт hidden product constraint; убрать documentation validation — теряется
+защита unrelated content; настроить validator под exact QE2 prose или обучить prompts
+трём ответам — это leakage, а не task authority; реконструировать incidents helper-ом
+вместо captured evidence — не доказывает исходную failure shape.
+
+**Последствия, границы, проверка.** Evaluator independence, negative-finding rule,
+origin catalog, Controller candidate/Git/runtime integrity, owner checks, transport,
+native sandbox, entrypoint boot, reconstruction и fixed real-model tasks/count/order
+сохранены. Arbitrary scratch остаётся доступным для role во время turn, но не является
+checkpoint authority без explicit registration. Captured exact QE1 `PASS`+negative
+по-прежнему hard-fail; companion status-compatible artifact доказывает closure route.
+`0.8.0a36` не является заявлением `RELEASE_QUALIFIED`.
+
+**Пересмотр.** Расширять closure разрешено только для уже объявленного exact negative
+claim с frozen semantics. Новая durable role evidence category требует explicit
+Controller registration. Mixed-document authorities изменяются только вместе с task
+semantics и отдельными regressions на каждую unrelated region.
 
 ## Шаблон новой записи
 

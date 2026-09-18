@@ -73,6 +73,10 @@ negotiation. Evaluator Phase B использует Controller-built `phase-b-or
 model wire содержит exact `origin_ref`, а authority/classification/source ID/revision
 canonicalize из current state. Unknown/incompatible handle исправляется только как exact
 reference; semantic conflicts и integrity/catalog failures не становятся retries.
+Status-compatible negative disposition, который уже объявляет material problem, но
+не materialized final finding/ID binding, получает один отдельный claim-preserving
+closure turn. Все semantic claims и existing findings frozen; `PASS` с negative,
+semantic reversal и repeated/no-progress closure не retry.
 
 ## Recovery и checkpoints
 
@@ -94,14 +98,16 @@ BLOCKED сохраняет candidate. Строго проверенный TECHNI
 checks, выполняет capability gate и требует current self-verification. BLOCKED без
 delta не считается прогрессом; owner assertions не исключаются.
 
-До report validation сохраняется private `candidate-checkpoint.v1` SAVED_UNVERIFIED:
+До report validation сохраняется private `candidate-checkpoint.v2` SAVED_UNVERIFIED:
 baseline и physical inventory, изменённые bytes/deletions, полный active Contract,
 source inventory, revision/registry binding, source manifest Harness и версии
-Controller/receipt/execution policy. Controller evidence и authored role scratch
-копируются в digest blobs до cleanup. Воспроизводимые caches/runtime исключаются с
-inventory; sensitive material не читается. `verify_checkpoint_evidence` обнаруживает
-удаление/подмену durable bytes и не создаёт fresh receipt. Checkpoint не является
-приёмкой или cross-process resume.
+Controller/receipt/execution policy. Candidate bytes, Controller artifacts,
+self-verify stamp и explicit Controller-registered durable role evidence читаются
+stable и sealed строго. Произвольный unregistered role scratch не обходится и
+machine-readably отмечается как forensic tree exclusion; его исчезновение/rename
+не является availability dependency. Link/junction escape, disappearance/replacement
+registered evidence и candidate drift fail closed. Sensitive material не читается.
+Checkpoint не является приёмкой или cross-process resume.
 
 Timeout/unknown transport до raw report сохраняет actual terminal candidate либо
 UNKNOWN с invalidated прежней identity. Atomic writes повторяют только Windows
@@ -130,10 +136,10 @@ test IDs четырёх семейств каждой границы. AST про
 исполнения каждого required case ID. Missing/NOT_RUN/FAIL не заменяется соседним тестом.
 RuntimeExecutor и Controller contract closure входят в B16.
 
-Обязательны все одиннадцать stages: self-check, boundary families, stateful/fault injection,
+Обязательны все двенадцать stages: self-check, boundary families, stateful/fault injection,
 mutations, mixed Node/Jest, deterministic artifact transcript replay, deterministic
 Codex transport replay, deterministic native command/recovery replay, exact executable
-boot, native role sandbox и real-model FULL tasks. Все три
+real-model failure replay, boot, native role sandbox и real-model FULL tasks. Все четыре
 replay gates и `entrypoint_boot` обязаны PASS до любых model-backed turns.
 Boot stage запускает `task_runner.py`, `tools/smoke_readonly_scratch.py` и
 `tools/release_real_models.py` как реальные Python scripts с explicit
@@ -158,21 +164,28 @@ machine-readable summary. Mutation gate
 требует unmutated PASS, затем конкретный typed failure и исполнение mutated target
 на disposable source copy. Infrastructure ERROR не считается обнаружением дефекта.
 
+`real_model_failure_replay` использует sanitized captured evidence qualification
+`shr-q-fb852e56ab`: QE1 проверяет hard conflict для exact captured `PASS`+negative и
+bounded closure для status-compatible claim, QS1 — отсутствие checkpoint зависимости
+от исчезнувшего `jest-access-cache/haste-map-*`, QE2 — mixed README authority.
+Каждый result связывает fixture bytes и retained source artifact SHA-256.
+
 FULL fixtures фиксированы в `tools/release_real_models.py`: expiry, suspension,
 повтор expiry; 900 секунд на turn, два fix и два replan cycles. Public baseline
 assertions должны реально выполниться и упасть. Delivered candidate проверяется
-исходными frozen Node/Jest assertions, сохранностью tests/config и независимого
-legacy дефекта, двумя разными follow-ups, actual identity, полными stage payloads,
+исходными frozen Node/Jest assertions, exact tests/config и независимой legacy
+implementation. В mixed README eligibility section может изменяться по task semantics,
+но unrelated legacy-label paragraph и deployment navigation сохраняются независимо.
+Также требуются два разных follow-up, actual identity, полные stage payloads,
 digests/current receipt, reconstruction и keep_worktree delivery. Каждый успешный
 FULL payload затем обязан отвергнуть независимые in-memory подмены owner command,
 Node, runtime/capability, Evaluator A/B и receipt; исходные artifacts и candidate
 после fault injection должны остаться неизменны. Правильная задача,
 завершившаяся controlled stop, остаётся FAIL.
 
-Candidate checkpoint сохраняет authored role scratch, но исключает reserved Jest
-`haste-map-*`/`perf-cache-*` как воспроизводимый volatile runtime. Эти cache-файлы
-могут исчезать во время model turn и не заменяют доказательства, на которые ссылается
-role artifact; обычные proof-файлы по-прежнему sealing до report validation.
+Candidate checkpoint не трактует произвольный authored role scratch как authority.
+Только explicit Controller-registered durable role path sealing до report validation;
+остальное дерево scratch остаётся forensic/non-authoritative независимо от имени cache.
 
 `candidate.patch` строится из exact physical blobs в disposable Git object database.
 Пути, exact bytes которых configured Git worktree conversion не воспроизводит из

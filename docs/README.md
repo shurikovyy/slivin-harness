@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a35
+# Документация Slivin Harness 0.8.0a36
 
-Актуальная версия: **0.8.0a35 — Executable Identity and Boot**.
+Актуальная версия: **0.8.0a36 — Real-model Liveness Closure**.
 
 Основные документы:
 

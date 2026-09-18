@@ -13,9 +13,18 @@ from slivin_harness.execution import ExecutionRole
 from slivin_harness.impact import impact_paths, impact_text, safe_impact_path, validate_owner_prose_boundary, validate_impact_structure
 from slivin_harness.implementer import validate_implementation_impact_closure
 from slivin_harness.source_records import source_ref
-from slivin_harness.report_recovery import ReportCorrectionState, ReportRecoveryStop, MAX_REPORT_CORRECTIONS, correction_prompt
+from slivin_harness.report_recovery import (
+    EvaluatorClosureCorrectionState,
+    ReportCorrectionState,
+    ReportRecoveryStop,
+    MAX_REPORT_CORRECTIONS,
+    correction_fields,
+    correction_prompt,
+    evaluator_closure_prompt,
+)
 from slivin_harness.protocol import (
     ArtifactContractError,
+    ArtifactDiagnosticBatch,
     ArtifactFailureKind,
     stable_fingerprint,
 )
@@ -398,6 +407,95 @@ def _model_conflict(code: str, *, field: str, message: str, actual: object = Non
         expected="A semantically consistent agent artifact", actual=actual,
         failure_kind=ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT,
     )
+
+
+def detect_evaluator_claim_closure(evaluation: Mapping[str, Any]) -> None:
+    """Identify only missing materialization of an already-declared negative claim."""
+    challenge = evaluation.get("impact_challenge")
+    findings = evaluation.get("findings")
+    if not isinstance(challenge, Mapping) or not isinstance(findings, list):
+        return
+    final_ids = {
+        row.get("finding_id") for row in findings
+        if isinstance(row, Mapping) and isinstance(row.get("finding_id"), str)
+    }
+    diagnostics: list[ArtifactContractError] = []
+    for group, dispositions in _CHALLENGE_DISPOSITIONS.items():
+        rows = challenge.get(group)
+        if not isinstance(rows, list):
+            continue
+        for index, row in enumerate(rows):
+            if not isinstance(row, Mapping) or row.get("disposition") in {None, dispositions[0], "PROMOTED_IN_SCOPE"}:
+                continue
+            field = f"impact_challenge.{group}[{index}].finding_ids"
+            if evaluation.get("status") == EvaluatorStatus.PASS.value:
+                _model_conflict(
+                    "PASS_WITH_NEGATIVE_DISPOSITION", field=f"impact_challenge.{group}[{index}]",
+                    message="Evaluator PASS forbids negative impact dispositions",
+                    actual=row.get("disposition"),
+                )
+            finding_ids = row.get("finding_ids")
+            if finding_ids == []:
+                diagnostics.append(ArtifactContractError(
+                    code="NEGATIVE_WITHOUT_FINDING", field=field,
+                    message="Every negative impact disposition requires a corresponding final finding",
+                    expected="One or more material final finding IDs",
+                    actual=[],
+                    failure_kind=ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE,
+                ))
+            elif (isinstance(finding_ids, list) and finding_ids
+                  and all(isinstance(item, str) for item in finding_ids)
+                  and len(finding_ids) == len(set(finding_ids))
+                  and not set(finding_ids) <= final_ids):
+                diagnostics.append(ArtifactContractError(
+                    code="NEGATIVE_FINDING_MISSING", field=field,
+                    message="A negative disposition references a final finding that was not materialized",
+                    expected="Every referenced finding ID exists in final findings",
+                    actual=sorted(set(finding_ids) - final_ids),
+                    failure_kind=ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE,
+                ))
+    if diagnostics:
+        raise ArtifactDiagnosticBatch(diagnostics)
+
+
+def evaluator_failure_record(
+    *, phase: str, attempt: int, error: ArtifactContractError,
+    report: Mapping[str, Any], correctable: bool,
+) -> dict[str, Any]:
+    """Safe structured diagnostics for a synthetic model-artifact boundary."""
+    record: dict[str, Any] = {
+        "schema_version": "evaluator-artifact-failure.v1",
+        "status": "INVALID",
+        "phase": phase,
+        "correction_attempt": attempt,
+        "reason_code": error.code,
+        "failure_kind": error.failure_kind.value,
+        "field": error.field,
+        "correctable": correctable,
+        "artifact_fingerprint": stable_fingerprint(report, length=64),
+        "sanitized_artifact": {
+            key: copy.deepcopy(report.get(key))
+            for key in ("protocol_version", "status", "candidate_id")
+        },
+    }
+    match = re.fullmatch(r"impact_challenge\.([a-z_]+)\[(\d+)\](?:\..+)?", error.field)
+    challenge = report.get("impact_challenge")
+    if match and isinstance(challenge, Mapping):
+        rows = challenge.get(match.group(1))
+        index = int(match.group(2))
+        if isinstance(rows, list) and index < len(rows) and isinstance(rows[index], Mapping):
+            row = rows[index]
+            record["sanitized_artifact"]["failed_row"] = {
+                key: copy.deepcopy(row.get(key))
+                for key in ("origin_ref", "path", "disposition", "finding_ids", "matches")
+                if key in row
+            }
+    findings = report.get("findings")
+    if isinstance(findings, list):
+        record["sanitized_artifact"]["finding_ids"] = [
+            row.get("finding_id") for row in findings if isinstance(row, Mapping)
+        ]
+    return record
 
 
 def _integrity_failure(code: str, *, field: str, message: str, actual: object = None) -> None:
@@ -784,6 +882,7 @@ def admit_evaluation_artifact(
             admitted_rows.append(admitted)
         canonical_challenge[group] = admitted_rows
     canonical["impact_challenge"] = canonical_challenge
+    detect_evaluator_claim_closure(canonical)
     validate_evaluation_artifact(
         canonical, blind_audit=blind_audit, workspace=workspace, candidate_id=candidate_id,
         changed_paths=changed_paths, planner_impact_closure=planner_impact_closure,
@@ -941,6 +1040,7 @@ def validate_evaluation_artifact(
     status = evaluation["status"]
     if status not in set(enum_values(EvaluatorStatus)):
         _model_conflict("EVALUATOR_STATUS", field="status", message="Evaluator status invalid", actual=status)
+    detect_evaluator_claim_closure(evaluation)
     if not isinstance(evaluation["summary"], str) or not evaluation["summary"].strip():
         raise ArtifactContractError(code="EVALUATOR_SUMMARY_EMPTY", field="summary",
             message="Evaluator summary must be non-empty", expected="A non-empty summary", actual=evaluation["summary"])
@@ -1060,6 +1160,7 @@ def run_evaluator(
     on_phase_complete: Callable[[str], None],
     on_origin_catalog: Callable[[dict[str, Any]], None],
     on_raw_report: Callable[[str, int, str], None] | None = None,
+    on_artifact_failure: Callable[[str, int, dict[str, Any]], None] | None = None,
     runtime_probe_guidance: list[str] | None = None,
     explicit_skills: list[dict[str, str]] | None = None,
     on_heartbeat: Callable[[dict], None] | None = None,
@@ -1078,7 +1179,10 @@ def run_evaluator(
     )
 
     def admit_phase(phase: str, prompt: str, schema: dict, validate) -> dict:
-        correction = ReportCorrectionState()
+        local_correction = ReportCorrectionState()
+        closure_correction = EvaluatorClosureCorrectionState()
+        correction_mode: str | None = None
+        local_attempt = 0
         for attempt in range(MAX_REPORT_CORRECTIONS + 1):
             raw = codex.run_turn(
                 thread_id=thread_id, prompt=prompt, output_schema=schema,
@@ -1089,15 +1193,51 @@ def run_evaluator(
                 on_raw_report(phase, attempt, raw)
             on_phase_complete(phase)
             report = _parse_json(raw, label=f"Evaluator {phase}")
-            correction.observe(report)
+            if correction_mode == "LOCAL":
+                local_correction.observe(report)
+            elif correction_mode == "CLOSURE":
+                closure_correction.observe_corrected(report)
             try:
                 admitted = validate(report)
                 return report if admitted is None else admitted
             except ArtifactContractError as error:
-                if error.failure_kind is not ArtifactFailureKind.LOCAL_WIRE_ERROR:
+                locally_correctable = (
+                    error.failure_kind is ArtifactFailureKind.LOCAL_WIRE_ERROR
+                    and correction_fields(error) is not None
+                )
+                closure_correctable = (
+                    phase == "PHASE_B"
+                    and error.failure_kind is ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE
+                    and report.get("status") != EvaluatorStatus.PASS.value
+                )
+                if on_artifact_failure is not None:
+                    on_artifact_failure(phase, attempt, evaluator_failure_record(
+                        phase=phase, attempt=attempt, error=error, report=report,
+                        correctable=locally_correctable or closure_correctable,
+                    ))
+                if error.failure_kind is ArtifactFailureKind.LOCAL_WIRE_ERROR:
+                    if correction_mode not in {None, "LOCAL"}:
+                        raise ReportRecoveryStop("EVALUATOR_CORRECTION_ROUTE_CHANGED") from error
+                    if correction_mode is None:
+                        local_correction.observe(report)
+                        correction_mode = "LOCAL"
+                    fields = local_correction.next_fields(error, attempt=local_attempt)
+                    local_attempt += 1
+                    prompt = correction_prompt(error, fields=fields, role=f"Evaluator {phase}")
+                    continue
+                if error.failure_kind is ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE:
+                    if phase != "PHASE_B" or correction_mode is not None:
+                        raise ReportRecoveryStop(
+                            "EVALUATOR_CLOSURE_EXHAUSTED",
+                            failure_kind=ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE,
+                            field=error.field, correction_attempt=attempt,
+                        ) from error
+                    fields = closure_correction.begin(report, error)
+                    correction_mode = "CLOSURE"
+                    prompt = evaluator_closure_prompt(error, fields=fields)
+                    continue
+                else:
                     raise
-                fields = correction.next_fields(error, attempt=attempt)
-                prompt = correction_prompt(error, fields=fields, role=f"Evaluator {phase}")
         raise ReportRecoveryStop("REPORT_CORRECTION_EXHAUSTED")
     phase_a_prompt = f"""
 PHASE A — BLIND DISCOVERY.

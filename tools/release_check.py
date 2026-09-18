@@ -30,12 +30,13 @@ RELEASE_SUMMARY_DIAGNOSTIC_BYTES = 1_048_576
 RELEASE_STAGES = (
     "self_check", "boundary", "stateful", "mutations", "mixed_runners",
     "artifact_replay", "transport_replay", "native_command_replay",
-    "entrypoint_boot", "native_roles", "real_models",
+    "real_model_failure_replay", "entrypoint_boot", "native_roles", "real_models",
 )
 MODEL_BACKED_STAGES = frozenset({"native_roles", "real_models"})
 DETERMINISTIC_PRE_MODEL_STAGES = frozenset({
     "self_check", "boundary", "stateful", "mutations", "mixed_runners",
-    "artifact_replay", "transport_replay", "native_command_replay", "entrypoint_boot",
+    "artifact_replay", "transport_replay", "native_command_replay",
+    "real_model_failure_replay", "entrypoint_boot",
 })
 _SECRET_NAME_RE = re.compile(
     r"(?:^|_)(?:TOKEN|PASSWORD|PASSWD|SECRET|API_KEY|PRIVATE_KEY|ACCESS_KEY|CLIENT_SECRET|CREDENTIAL)(?:_|$)",
@@ -157,20 +158,21 @@ def validate_release_stage_order(stage_names) -> None:
     """All deterministic replay gates must precede every model-backed stage."""
     names = tuple(stage_names)
     deterministic_gates = (
-        "artifact_replay", "transport_replay", "native_command_replay", "entrypoint_boot",
+        "artifact_replay", "transport_replay", "native_command_replay",
+        "real_model_failure_replay", "entrypoint_boot",
     )
     if len(names) != len(set(names)) or any(
         names.count(name) != 1 for name in deterministic_gates
     ):
         raise RuntimeError("Release stage order requires unique deterministic pre-model gates")
-    artifact_index, transport_index, native_command_index, boot_index = (
+    artifact_index, transport_index, native_command_index, failure_replay_index, boot_index = (
         names.index(name) for name in deterministic_gates)
     if any(name not in DETERMINISTIC_PRE_MODEL_STAGES for name in
            names[:boot_index + 1]) or any(
         name not in MODEL_BACKED_STAGES for name in names[boot_index + 1:]
     ) or not MODEL_BACKED_STAGES.issubset(names) or any(
         names.index(name) <= boot_index for name in MODEL_BACKED_STAGES
-    ) or not artifact_index < transport_index < native_command_index < boot_index:
+    ) or not artifact_index < transport_index < native_command_index < failure_replay_index < boot_index:
         raise RuntimeError("All deterministic replay and boot gates must precede every model-backed release stage")
 
 
@@ -245,6 +247,7 @@ def main() -> int:
             "artifact_replay": ([sys.executable, "tools/replay_model_artifact_transcripts.py", "--output", str(output / "artifact_replay")], 300),
             "transport_replay": ([sys.executable, "tools/replay_codex_transport.py", "--output", str(output / "transport_replay")], 300),
             "native_command_replay": ([sys.executable, "tools/replay_native_command_drift.py", "--output", str(output / "native_command_replay")], 300),
+            "real_model_failure_replay": ([sys.executable, "tools/replay_real_model_failures.py", "--output", str(output / "real_model_failure_replay")], 300),
             "entrypoint_boot": ([sys.executable, "tools/check_release_entrypoints.py", "--output", str(output / "entrypoint_boot")], 300),
             "native_roles": ([sys.executable, "tools/smoke_readonly_scratch.py", "--node", str(node), "--codex", str(codex), "--runtime-source", str(runtime), "--output", str(output / "native_roles")], 3600),
             "real_models": ([sys.executable, "tools/release_real_models.py", "--node", str(node), "--codex", str(codex), "--runtime-source", str(runtime), "--output", str(output / "real_models")], 28000),

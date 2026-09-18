@@ -16,6 +16,7 @@ class ArtifactFailureKind(str, Enum):
     """Controller routing class for failures at an agent-artifact boundary."""
 
     LOCAL_WIRE_ERROR = "LOCAL_WIRE_ERROR"
+    CLAIM_CLOSURE_INCOMPLETE = "CLAIM_CLOSURE_INCOMPLETE"
     SEMANTIC_MODEL_CONFLICT = "SEMANTIC_MODEL_CONFLICT"
     INTEGRITY_OR_INFRA_FAILURE = "INTEGRITY_OR_INFRA_FAILURE"
 
@@ -64,6 +65,8 @@ class ArtifactDiagnosticBatch(ArtifactContractError):
             failure_kind = ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE
         elif ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT in kinds:
             failure_kind = ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT
+        elif ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE in kinds:
+            failure_kind = ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE
         else:
             failure_kind = ArtifactFailureKind.LOCAL_WIRE_ERROR
         super().__init__(code=first.code, field=first.field, message=first.message,

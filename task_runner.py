@@ -352,6 +352,56 @@ class HarnessControlledStop(RuntimeError):
     """A correctly routed BLOCKED/decision outcome, not an internal Harness crash."""
 
 
+def terminal_failure_record(error: BaseException) -> dict[str, object | None]:
+    """Public, bounded failure ownership; full exception detail stays private."""
+    if isinstance(error, ReportRecoveryStop):
+        failure_kind = error.failure_kind
+        return {
+            "schema_version": "harness-terminal-failure.v1",
+            "status": "FAIL",
+            "terminal_failure_type": "AGENT_ARTIFACT_FAILURE",
+            "failure_class": "RECOVERABLE_REPORT_ARTIFACT_FAILURE",
+            "error_type": type(error).__name__,
+            "reason_code": error.reason_code,
+            "failure_kind": failure_kind.value,
+            "field": error.field,
+            "correction_attempt": error.correction_attempt,
+        }
+    if isinstance(error, ArtifactContractError):
+        failure_class = (
+            "RECOVERABLE_REPORT_ARTIFACT_FAILURE"
+            if error.failure_kind in {
+                ArtifactFailureKind.LOCAL_WIRE_ERROR,
+                ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE,
+            }
+            else "PRODUCT_OR_MODEL_TASK_FAILURE"
+            if error.failure_kind is ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT
+            else "HARNESS_INFRASTRUCTURE_FAILURE"
+        )
+        return {
+            "schema_version": "harness-terminal-failure.v1",
+            "status": "FAIL",
+            "terminal_failure_type": "AGENT_ARTIFACT_FAILURE",
+            "failure_class": failure_class,
+            "error_type": type(error).__name__,
+            "reason_code": error.code,
+            "failure_kind": error.failure_kind.value,
+            "field": error.field,
+            "correction_attempt": None,
+        }
+    return {
+        "schema_version": "harness-terminal-failure.v1",
+        "status": "FAIL",
+        "terminal_failure_type": "HARNESS_INFRASTRUCTURE_FAILURE",
+        "failure_class": "HARNESS_INFRASTRUCTURE_FAILURE",
+        "error_type": type(error).__name__,
+        "reason_code": "HARNESS_EXCEPTION",
+        "failure_kind": ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE.value,
+        "field": None,
+        "correction_attempt": None,
+    }
+
+
 class RunRecorder:
     def __init__(self, task_id: str) -> None:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -4732,6 +4782,16 @@ def main(argv: list[str] | None = None) -> int:
                             f"Evaluator changed the candidate during {phase}"
                         )
 
+                def evaluator_artifact_failure_recorder(
+                    phase: str, attempt: int, record: dict[str, Any],
+                ) -> None:
+                    raw_artifact = f"evaluator_{evaluation_index:02d}_{phase}_{attempt:02d}.raw.json"
+                    safe_record = dict(record, raw_artifact=raw_artifact)
+                    recorder.write_json(
+                        f"evaluator_{evaluation_index:02d}_{phase}_{attempt:02d}.failure.json",
+                        safe_record,
+                    )
+
                 blind_audit, evaluation = integrity_coordinator.run_read_only(
                     f"EVALUATOR_TURN:{evaluation_index}",
                     lambda: run_evaluator(
@@ -4763,6 +4823,7 @@ def main(argv: list[str] | None = None) -> int:
                             f"evaluator_{evaluation_index:02d}_{phase}_{attempt:02d}.raw.json", raw,
                             visibility=ArtifactVisibility.PRIVATE,
                         ),
+                        on_artifact_failure=evaluator_artifact_failure_recorder,
                         timeout=timeout,
                     ),
                 )
@@ -5390,6 +5451,19 @@ def main(argv: list[str] | None = None) -> int:
             print("RUN_DIR:", recorder.root, file=sys.stderr)
         return 2
     except (RuntimeError, ArtifactContractError, OSError, ValueError) as exc:
+        if recorder is not None:
+            failure = terminal_failure_record(exc)
+            try:
+                recorder.write_json("terminal_failure.json", failure)
+            except (RuntimeError, OSError):
+                pass
+            try:
+                recorder.write_private_json(
+                    "terminal_failure.json",
+                    {**failure, "message": str(exc)},
+                )
+            except (RuntimeError, OSError):
+                pass
         if run_state is not None:
             try:
                 run_state.fail_active_stage(

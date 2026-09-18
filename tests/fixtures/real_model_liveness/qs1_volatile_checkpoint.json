@@ -1,0 +1,13 @@
+{
+  "schema_version": "real-model-failure-fixture.v1",
+  "fixture_id": "qs1-20260918-volatile-jest-scratch",
+  "origin": "captured_real",
+  "source_qualification_run_id": "shr-q-fb852e56ab",
+  "source_case": "suspension-1",
+  "source_run_id": "QS1/20260918-113942-1f2e8d6b",
+  "source_artifact": "controller_private/implementation_report_recovery_f9bdf0c168d7cb6a_00.json",
+  "source_artifact_sha256": "002cdee848d713be09f213108552ef450357d646681c57c9bdb59f047d9c02a",
+  "captured_error_type": "FileNotFoundError",
+  "volatile_locator": ".harness_tmp/planner/session-29e83e2558954c98a4d0ae51ab8c19f9/jest-access-cache/haste-map-82116a3515c9f85408bd9b06cb7e926f-c1bdfa620bae5c2b47e4b7fc02da5965-093514a319ddd23d68db5931d43f2429",
+  "expected_outcome": "UNREGISTERED_VOLATILE_ROLE_SCRATCH_EXCLUDED"
+}

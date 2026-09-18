@@ -6,6 +6,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -23,8 +26,12 @@ from slivin_harness.verification import compile_verification_plan
 from tools.release_mutations import defect_detected
 from tools.release_check import default_output_root
 from tools.release_real_models import (
+    README_DEPLOYMENT_REGION,
+    README_LEGACY_REGION,
     WINDOWS_WORKSPACE_PATH_LIMIT,
+    fixtures,
     qualification_case_layout,
+    verify_fixture_authorities,
 )
 
 
@@ -47,6 +54,60 @@ class ReleaseOrchestrationTests(unittest.TestCase):
         self.assertEqual(len(task_ids), 3)
         self.assertTrue(all(len(str(path.resolve())) <= WINDOWS_WORKSPACE_PATH_LIMIT
                             for path in projected))
+
+    def test_mixed_readme_authority_allows_eligibility_clarification_only(self):
+        fixture = json.loads((Path(__file__).parent / 'fixtures/real_model_liveness/qe2_mixed_readme.json').read_text(encoding='utf-8'))
+        _prompt, files = fixtures('expiry')
+        files['README.md'] = fixture['baseline_readme']
+        with tempfile.TemporaryDirectory(prefix='slivin-qe2-authority-') as temporary:
+            destination = Path(temporary)
+            for relative, content in files.items():
+                path = destination / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding='utf-8')
+            (destination / 'README.md').write_text(fixture['delivered_readme'], encoding='utf-8')
+            self.assertTrue(all(verify_fixture_authorities(destination=destination, files=files).values()))
+
+            readme = destination / 'README.md'
+            actual = readme.read_text(encoding='utf-8')
+            readme.write_text(actual.replace(README_LEGACY_REGION, 'Legacy behavior was changed.'), encoding='utf-8')
+            self.assertFalse(verify_fixture_authorities(destination=destination, files=files)['readme_legacy_region_preserved'])
+            readme.write_text(actual.replace(README_DEPLOYMENT_REGION, 'Deployment navigation removed.'), encoding='utf-8')
+            self.assertFalse(verify_fixture_authorities(destination=destination, files=files)['readme_deployment_region_preserved'])
+            readme.write_text(actual, encoding='utf-8')
+            (destination / 'jest.config.cjs').write_text('module.exports={}\n', encoding='utf-8')
+            self.assertFalse(verify_fixture_authorities(destination=destination, files=files)['frozen_owner_inputs'])
+
+    def test_mixed_document_authority_does_not_replace_product_replay(self):
+        import inspect
+        from tools.release_real_models import verify_delivery
+        source = inspect.getsource(verify_delivery)
+        self.assertIn('mixed_document_unrelated_regions', source)
+        self.assertIn('frozen_assertion_replay', source)
+        self.assertIn('candidate_stable_after_replay', source)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node is required for captured QE2 behavior replay')
+    def test_captured_qe2_product_regression_still_fails_owner_assertion(self):
+        fixture = json.loads((Path(__file__).parent / 'fixtures/real_model_liveness/qe2_mixed_readme.json').read_text(encoding='utf-8'))
+        _prompt, files = fixtures('expiry')
+        with tempfile.TemporaryDirectory(prefix='slivin-qe2-product-') as temporary:
+            destination = Path(temporary)
+            for relative, content in files.items():
+                path = destination / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding='utf-8')
+            for relative, content in fixture['delivered_product_files'].items():
+                (destination / relative).write_text(content, encoding='utf-8')
+            command = [shutil.which('node'), '--test', str(destination / 'tests/content.native.cjs')]
+            self.assertEqual(subprocess.run(
+                command, cwd=destination, capture_output=True, text=True, encoding='utf-8',
+            ).returncode, 0)
+            (destination / 'src/state.cjs').write_text(
+                'module.exports.isReadable = entry => Boolean(entry.active);\n', encoding='utf-8',
+            )
+            self.assertNotEqual(subprocess.run(
+                command, cwd=destination, capture_output=True, text=True, encoding='utf-8',
+            ).returncode, 0)
 
 
 class AdmissionMatrixTests(unittest.TestCase):
@@ -81,11 +142,13 @@ class AdmissionMatrixTests(unittest.TestCase):
         cache.parent.mkdir()
         cache.write_bytes(b'volatile')
         checkpoint = save_report_checkpoint(plane=self.plane, workspace=self.fixture.workspace,
-            name='durable', contract=self.fixture.contract, check_registry_digest='registry')
-        row = next(row for row in checkpoint['evidence'] if row['kind'] == 'UNTRUSTED_ROLE_SCRATCH')
+            name='durable', contract=self.fixture.contract, check_registry_digest='registry',
+            durable_role_evidence=[original])
+        row = next(row for row in checkpoint['evidence'] if row['kind'] == 'REGISTERED_DURABLE_ROLE_EVIDENCE')
         self.assertEqual(row['original_locator'], original.relative_to(self.fixture.workspace).as_posix())
-        self.assertIn(dict(locator=cache.relative_to(self.fixture.workspace).as_posix(),
-                           reason='REPRODUCIBLE_CACHE_OR_RUNTIME'), checkpoint['evidence_exclusions'])
+        self.assertIn(dict(locator='.harness_tmp/planner',
+                           reason='UNREGISTERED_VOLATILE_ROLE_SCRATCH', scope='TREE',
+                           authority='FORENSIC_ONLY'), checkpoint['evidence_exclusions'])
         original.unlink()
         verify_checkpoint_evidence(self.plane, checkpoint)
         durable = self.plane.private_root / row['artifact']
@@ -96,6 +159,113 @@ class AdmissionMatrixTests(unittest.TestCase):
         durable.unlink()
         with self.assertRaisesRegex(RuntimeError, 'MISSING_OR_CHANGED'):
             verify_checkpoint_evidence(self.plane, checkpoint)
+
+    def test_unregistered_volatile_scratch_disappear_rename_and_arbitrary_cache_names_do_not_block(self):
+        session = self.fixture.workspace / '.harness_tmp/planner/session-real'
+        cache = session / 'jest-access-cache'
+        cache.mkdir(parents=True)
+        vanished = cache / ('haste-map-' + 'a' * 96)
+        vanished.write_bytes(b'volatile')
+        renamed = session / 'unexpected-cache-name/cache.bin'
+        renamed.parent.mkdir()
+        renamed.write_bytes(b'old')
+        observe = task_runner.build_candidate_identity
+        observations = 0
+
+        def race_during_snapshot(workspace):
+            nonlocal observations
+            observations += 1
+            if observations == 1:
+                vanished.unlink()
+                renamed.replace(renamed.with_name('cache-renamed.bin'))
+            return observe(workspace)
+
+        with mock.patch('slivin_harness.checkpoint.build_candidate_identity',
+                        side_effect=race_during_snapshot):
+            checkpoint = save_report_checkpoint(
+                plane=self.plane, workspace=self.fixture.workspace,
+                name='volatile', contract=self.fixture.contract,
+            )
+        self.assertEqual(checkpoint['status'], 'SAVED_UNVERIFIED')
+        self.assertFalse(any(row.get('original_locator', '').startswith('.harness_tmp/')
+                             for row in checkpoint['evidence']))
+        self.assertTrue(any(row['reason'] == 'UNREGISTERED_VOLATILE_ROLE_SCRATCH'
+                            for row in checkpoint['evidence_exclusions']))
+
+    def test_registered_controller_and_stamp_evidence_remain_fail_closed(self):
+        session = self.fixture.workspace / '.harness_tmp/implementer/session-proof'
+        session.mkdir(parents=True)
+        durable = session / 'proof.json'
+        durable.write_text('{"proof":true}', encoding='utf-8')
+        durable.unlink()
+        with self.assertRaisesRegex(RuntimeError, 'DURABLE_EVIDENCE_UNAVAILABLE'):
+            save_report_checkpoint(
+                plane=self.plane, workspace=self.fixture.workspace, name='missing-durable',
+                contract=self.fixture.contract, durable_role_evidence=[durable],
+            )
+
+        controller = self.plane.private_root / 'check_registry.json'
+        controller.write_text('{}', encoding='utf-8')
+        original = __import__('slivin_harness.checkpoint', fromlist=['_stable_file_bytes'])._stable_file_bytes
+        def disappear_controller(path, *, reason_code):
+            if path == controller:
+                raise RuntimeError(reason_code)
+            return original(path, reason_code=reason_code)
+        with mock.patch('slivin_harness.checkpoint._stable_file_bytes', side_effect=disappear_controller):
+            with self.assertRaisesRegex(RuntimeError, 'CONTROLLER_EVIDENCE_UNAVAILABLE'):
+                save_report_checkpoint(
+                    plane=self.plane, workspace=self.fixture.workspace,
+                    name='controller-missing', contract=self.fixture.contract,
+                )
+
+        controller.unlink()
+        stamp = session / 'self_verify_stamp.json'
+        stamp.write_text('{"passed":true}', encoding='utf-8')
+        def disappear_stamp(path, *, reason_code):
+            if path == stamp:
+                raise RuntimeError(reason_code)
+            return original(path, reason_code=reason_code)
+        with mock.patch('slivin_harness.checkpoint._stable_file_bytes', side_effect=disappear_stamp):
+            with self.assertRaisesRegex(RuntimeError, 'SELF_VERIFY_STAMP_UNAVAILABLE'):
+                save_report_checkpoint(
+                    plane=self.plane, workspace=self.fixture.workspace,
+                    name='stamp-missing', contract=self.fixture.contract, stamp_path=stamp,
+                )
+
+        original_open = Path.open
+
+        class MutatingStampReader:
+            def __init__(self, source):
+                self.source = source
+
+            def __enter__(self):
+                self.source.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self.source.__exit__(*args)
+
+            def fileno(self):
+                return self.source.fileno()
+
+            def read(self):
+                raw = self.source.read()
+                current = stamp.stat()
+                os.utime(stamp, ns=(current.st_atime_ns, current.st_mtime_ns + 1_000_000_000))
+                return raw
+
+        def mutate_stamp_during_read(path, *args, **kwargs):
+            source = original_open(path, *args, **kwargs)
+            if path == stamp and args and args[0] == 'rb':
+                return MutatingStampReader(source)
+            return source
+
+        with mock.patch.object(Path, 'open', new=mutate_stamp_during_read):
+            with self.assertRaisesRegex(RuntimeError, 'SELF_VERIFY_STAMP_UNAVAILABLE'):
+                save_report_checkpoint(
+                    plane=self.plane, workspace=self.fixture.workspace,
+                    name='stamp-mutated', contract=self.fixture.contract, stamp_path=stamp,
+                )
 
     def test_checkpoint_rejects_outside_locator_and_concurrent_candidate_change(self):
         outside = self.fixture.workspace.parent / 'outside-stamp.json'
@@ -112,6 +282,25 @@ class AdmissionMatrixTests(unittest.TestCase):
                 save_report_checkpoint(plane=self.plane, workspace=self.fixture.workspace,
                     name='race', contract=self.fixture.contract)
         self.assertFalse((self.plane.private_root / 'checkpoints/race.json').exists())
+
+    def test_registered_durable_evidence_rejects_link_or_junction_escape(self):
+        role = self.fixture.workspace / '.harness_tmp/planner/session-link'
+        role.mkdir(parents=True)
+        outside = self.fixture.workspace.parent / (self.fixture.workspace.name + '-outside-evidence')
+        outside.mkdir()
+        self.addCleanup(shutil.rmtree, outside, True)
+        (outside / 'proof.txt').write_text('outside', encoding='utf-8')
+        link = role / 'linked'
+        if os.name == 'nt':
+            subprocess.run(['cmd', '/d', '/c', 'mklink', '/J', str(link), str(outside)],
+                           check=True, capture_output=True)
+        else:
+            link.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, 'EVIDENCE_LINK|DURABLE_EVIDENCE_BOUNDARY'):
+            save_report_checkpoint(
+                plane=self.plane, workspace=self.fixture.workspace, name='link',
+                contract=self.fixture.contract, durable_role_evidence=[link / 'proof.txt'],
+            )
 
     def test_evaluator_origin_duplicate_is_idempotent_new_revision_needs_assessment(self):
         evaluation = dict(findings=[dict(finding_id='F1', category='CONSUMER', title='Independent reader',

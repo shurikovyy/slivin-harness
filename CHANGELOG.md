@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- `0.8.0a36` adds one bounded Evaluator Phase-B closure turn for a
+  status-compatible negative disposition whose already-declared material claim is
+  missing only its final finding or `finding_ids` binding. Status, dispositions,
+  origins, matches, reasons, coverage, candidate and existing findings remain frozen;
+  `PASS` plus a negative disposition and any semantic drift still hard-stop.
+- Checkpoint v2 seals candidate, Controller, self-verify and explicitly registered
+  durable role evidence strictly, while unregistered role scratch is recorded as a
+  forensic tree exclusion and never traversed. Volatile arbitrary caches therefore
+  cannot create a checkpoint TOCTOU dependency; registered evidence, links and
+  candidate drift remain fail-closed.
+- Real-model outer validation now separates exact owner/config authorities from
+  mixed-document authority. The synthetic README may clarify the task-related
+  eligibility section while exact unrelated legacy-label and deployment-navigation
+  regions remain independently required.
+- Sanitized captured QE1/QS1/QE2 liveness incidents replay in the mandatory
+  `real_model_failure_replay` stage before executable boot and every model-backed
+  stage. Public case summaries carry bounded typed failure ownership and safe failed
+  artifact references. This does not imply `RELEASE_QUALIFIED`.
 - `0.8.0a35` makes boundary identity invariant across import, direct script and
   runpy-style `__main__` execution. One Controller-owned resolver derives the
   canonical module from the proven Python source path relative to the Harness

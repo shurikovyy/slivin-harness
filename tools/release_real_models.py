@@ -32,6 +32,12 @@ CASE_LAYOUTS = {
     "expiry-2": ("e2", "QE2"),
 }
 WINDOWS_WORKSPACE_PATH_LIMIT = 240
+README_LEGACY_REGION = (
+    "The legacy label is documented as `current`; it is independent of resource eligibility."
+)
+README_DEPLOYMENT_REGION = (
+    "Documentation navigation refers to [deployment instructions](docs/deployment.md)."
+)
 
 
 def qualification_case_layout(output: Path, label: str) -> tuple[Path, Path, str, str]:
@@ -120,6 +126,39 @@ def run_assertions(workspace: Path, *, node: Path, runtime: Path, output: Path, 
     return results
 
 
+def verify_fixture_authorities(*, destination: Path, files: dict[str, str]) -> dict[str, bool]:
+    """Split immutable owner inputs from related and unrelated README regions."""
+    frozen = [
+        name for name in files
+        if name.startswith("tests/") or name in {
+            "src/legacy-label.cjs", "jest.config.cjs", "package.json",
+        }
+    ]
+    frozen_owner_inputs = all(
+        (destination / name).is_file()
+        and (destination / name).read_text(encoding="utf-8") == files[name]
+        for name in frozen
+    )
+    readme = destination / "README.md"
+    actual = readme.read_text(encoding="utf-8") if readme.is_file() else ""
+    baseline = files.get("README.md", "")
+    baseline_contract_valid = (
+        baseline.count(README_LEGACY_REGION) == 1
+        and baseline.count(README_DEPLOYMENT_REGION) == 1
+    )
+    return {
+        "frozen_owner_inputs": frozen_owner_inputs,
+        "readme_baseline_contract_valid": baseline_contract_valid,
+        "readme_legacy_region_preserved": (
+            baseline_contract_valid and actual.count(README_LEGACY_REGION) == 1
+        ),
+        "readme_deployment_region_preserved": (
+            baseline_contract_valid and actual.count(README_DEPLOYMENT_REGION) == 1
+        ),
+        "deployment_target_still_unresolved": not (destination / "docs/deployment.md").exists(),
+    }
+
+
 def verify_delivery(*, run: Path, folder: Path, workspace_root: Path, repo: Path, baseline: str, task_id: str,
                     files: dict, acceptance: dict, handoff: dict, delivery: dict, node: Path, runtime: Path) -> dict:
     checks = {}
@@ -168,11 +207,14 @@ def verify_delivery(*, run: Path, folder: Path, workspace_root: Path, repo: Path
         checks["artifact_digests"] &= hashlib.sha256(raw).hexdigest() == binding["sha256"] and len(raw) == binding["size"]
     checks['payload_validation'] = validate_stage_payloads(run=run, acceptance=acceptance,
         handoff=handoff, candidate_id=candidate_id, workspace=destination, node=node)
-    frozen = [name for name in files if name.startswith("tests/") or name in
-              {"src/legacy-label.cjs", "jest.config.cjs", "package.json", "README.md"}]
-    checks["frozen_assertions_and_unrelated_files"] = all((destination / name).is_file()
-        and (destination / name).read_text(encoding="utf-8") == files[name] for name in frozen)
-    checks["unrelated_documentation_preserved"] = not (destination / "docs/deployment.md").exists()
+    authorities = verify_fixture_authorities(destination=destination, files=files)
+    checks["frozen_assertions_and_unrelated_files"] = authorities["frozen_owner_inputs"]
+    checks["mixed_document_unrelated_regions"] = (
+        authorities["readme_baseline_contract_valid"]
+        and authorities["readme_legacy_region_preserved"]
+        and authorities["readme_deployment_region_preserved"]
+    )
+    checks["unrelated_documentation_preserved"] = authorities["deployment_target_still_unresolved"]
     follow_ups = handoff.get("follow_ups", [])
     eligible = [row for row in follow_ups if row.get('review_status') == 'CONFIRMED_OUT_OF_SCOPE'
                 and row.get('evidence') and row.get('suggested_next_task')]
@@ -189,7 +231,8 @@ def verify_delivery(*, run: Path, folder: Path, workspace_root: Path, repo: Path
         candidate_id=candidate_id, workspace=destination, node=node)
     checks['artifact_fault_controls'] = fault_controls['status'] == 'PASS'
     return dict(status="PASS" if all(checks.values()) else "FAIL", checks=checks, replay=replay,
-                actual_candidate=candidate.to_dict(), artifact_fault_controls=fault_controls)
+                actual_candidate=candidate.to_dict(), artifact_fault_controls=fault_controls,
+                qualification_authorities=authorities)
 
 
 def validate_stage_payloads(*, run: Path, acceptance: dict, handoff: dict, candidate_id: str, workspace: Path, node: Path) -> bool:
@@ -373,6 +416,73 @@ def stage_payload_fault_controls(*, run: Path, acceptance: dict, handoff: dict,
                 candidate_unchanged=candidate_unchanged)
 
 
+_PUBLIC_FAILURE_KEYS = {
+    "schema_version", "status", "phase", "terminal_failure_type", "failure_class",
+    "error_type", "reason_code", "failure_kind", "field", "correction_attempt",
+    "correctable", "artifact_fingerprint", "sanitized_artifact", "raw_artifact",
+}
+
+
+def _read_public_failure(path: Path) -> dict | None:
+    """Read only bounded Controller-authored public diagnostic fields."""
+    try:
+        if path.stat().st_size > 262_144:
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    bounded = {key: value[key] for key in _PUBLIC_FAILURE_KEYS if key in value}
+    raw_artifact = bounded.get("raw_artifact")
+    if isinstance(raw_artifact, str) and Path(raw_artifact).name != raw_artifact:
+        bounded.pop("raw_artifact")
+    return bounded
+
+
+def case_failure_evidence(*, run: Path, exit_code: int, independent_validation: dict | None) -> dict:
+    """Read only bounded public diagnostics into the qualification package."""
+    if exit_code == 0 and independent_validation and independent_validation.get("status") != "PASS":
+        failed = sorted(
+            key for key, value in independent_validation.get("checks", {}).items()
+            if value is not True
+        )
+        return {
+            "terminal_failure_type": "OUTER_QUALIFICATION_VALIDATOR_FAILURE",
+            "failure_class": "OUTER_QUALIFICATION_VALIDATOR_FAILURE",
+            "reason_code": "OUTER_VALIDATION_FAILED",
+            "failure_kind": "QUALIFICATION_AUTHORITY_MISMATCH",
+            "field": "independent_validation.checks",
+            "correction_attempt": None,
+            "failed_checks": failed,
+        }
+    evaluator_failures = sorted(run.glob("evaluator_*_PHASE_*.failure.json"))
+    evaluator_failure = _read_public_failure(evaluator_failures[-1]) if evaluator_failures else None
+    terminal = _read_public_failure(run / "terminal_failure.json")
+    if terminal is not None:
+        if evaluator_failure is not None:
+            terminal["artifact_failure"] = evaluator_failure
+        return terminal
+    if evaluator_failure is not None:
+        return {
+            **evaluator_failure,
+            "terminal_failure_type": "AGENT_ARTIFACT_FAILURE",
+            "failure_class": (
+                "RECOVERABLE_REPORT_ARTIFACT_FAILURE"
+                if evaluator_failure.get("correctable") is True
+                else "PRODUCT_OR_MODEL_TASK_FAILURE"
+            ),
+        }
+    return {
+        "terminal_failure_type": "PRODUCT_OR_MODEL_TASK_FAILURE",
+        "failure_class": "PRODUCT_OR_MODEL_TASK_FAILURE",
+        "reason_code": "TASK_RUNNER_FAILED_WITHOUT_TYPED_PUBLIC_DETAIL",
+        "failure_kind": None,
+        "field": None,
+        "correction_attempt": None,
+    }
+
+
 def execute_case(*, output: Path, label: str, kind: str, node: Path, codex: Path, runtime: Path) -> dict:
     folder, workspace_root, project_name, task_id = qualification_case_layout(output, label)
     folder.mkdir()
@@ -448,10 +558,37 @@ allow_sensitive_copy = false
             record["independent_validation"] = verify_delivery(run=run, folder=folder, workspace_root=workspace_root, repo=repo, baseline=baseline,
                 task_id=task_id, files=files, acceptance=record["acceptance"], handoff=record["handoff"], delivery=record["delivery"], node=node, runtime=runtime)
             record["status"] = "PASS" if completed.returncode == 0 and record["independent_validation"]["status"] == "PASS" else "FAIL"
+        if record["status"] != "PASS":
+            record["failure_evidence"] = case_failure_evidence(
+                run=run, exit_code=completed.returncode,
+                independent_validation=record.get("independent_validation"),
+            )
+            record["failure_class"] = record["failure_evidence"]["failure_class"]
+        else:
+            record["failure_class"] = None
     record["baseline_assertions"] = initial_assertions
     record["source_unchanged"] = git(repo, "status", "--short") == "" and git(repo, "rev-parse", "HEAD") == baseline
     if not record["source_unchanged"]:
         record["status"] = "FAIL"
+        record["failure_class"] = "HARNESS_INFRASTRUCTURE_FAILURE"
+        record["failure_evidence"] = {
+            "terminal_failure_type": "HARNESS_INFRASTRUCTURE_FAILURE",
+            "failure_class": "HARNESS_INFRASTRUCTURE_FAILURE",
+            "reason_code": "SOURCE_FIXTURE_MUTATED",
+            "failure_kind": "INTEGRITY_OR_INFRA_FAILURE",
+            "field": "source_unchanged",
+            "correction_attempt": None,
+        }
+    if record["status"] != "PASS" and not record.get("failure_class"):
+        record["failure_class"] = "HARNESS_INFRASTRUCTURE_FAILURE"
+        record["failure_evidence"] = {
+            "terminal_failure_type": "HARNESS_INFRASTRUCTURE_FAILURE",
+            "failure_class": "HARNESS_INFRASTRUCTURE_FAILURE",
+            "reason_code": "RUN_DIRECTORY_UNAVAILABLE",
+            "failure_kind": "INTEGRITY_OR_INFRA_FAILURE",
+            "field": None,
+            "correction_attempt": None,
+        }
     (folder / "summary.json").write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print("REAL_MODEL_CASE", label, record["status"], flush=True)
     return record
@@ -471,7 +608,18 @@ def main() -> int:
             cases.append(execute_case(output=args.output, label=label, kind=kind, node=args.node,
                                       codex=args.codex, runtime=args.runtime_source))
         except Exception as error:
-            cases.append(dict(label=label, kind=kind, status="FAIL", error_type=type(error).__name__, reason=str(error)))
+            cases.append(dict(
+                label=label, kind=kind, status="FAIL", error_type=type(error).__name__,
+                reason=str(error), failure_class="HARNESS_INFRASTRUCTURE_FAILURE",
+                failure_evidence={
+                    "terminal_failure_type": "HARNESS_INFRASTRUCTURE_FAILURE",
+                    "failure_class": "HARNESS_INFRASTRUCTURE_FAILURE",
+                    "reason_code": "CASE_EXECUTION_EXCEPTION",
+                    "failure_kind": "INTEGRITY_OR_INFRA_FAILURE",
+                    "field": None,
+                    "correction_attempt": None,
+                },
+            ))
         (args.output / "summary.json").write_text(json.dumps(dict(status="RUNNING", cases=cases), ensure_ascii=False, indent=2), encoding="utf-8")
     unchanged = before == asdict(fingerprint_runtime_tree(args.runtime_source))
     passed = len(cases) == 3 and all(case["status"] == "PASS" for case in cases) and unchanged

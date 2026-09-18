@@ -1,4 +1,4 @@
-# Slivin Harness 0.8.0a35 — Phase 7
+# Slivin Harness 0.8.0a36 — Phase 7
 
 Slivin Harness управляет автономной работой Codex в изолированной Git-worktree и принимает результат только после заданного quality pipeline.
 
@@ -7,7 +7,7 @@ Slivin Harness управляет автономной работой Codex в �
 technical impact radius. Пользователь задаёт observable intent и ограничения;
 перечислять consumers, файлы и regression cases он не обязан.
 
-**Затем прочитайте [журнал решений D-001–D-027](docs/DECISIONS.md)** — причины выбора,
+**Затем прочитайте [журнал решений D-001–D-033](docs/DECISIONS.md)** — причины выбора,
 отвергнутые варианты и границы доказанного; после него — актуальную архитектуру.
 
 Planner/Evaluator используют общий scratch-only permission profile: project, tests,
@@ -17,7 +17,7 @@ dependencies и Git controls остаются read-only, а каждый fresh t
 [native cached-Jest smoke](docs/WINDOWS_SETUP.md#native-scoped-scratch-acceptance),
 отдельно от Controller probes и product correctness.
 
-`0.8.0a35` quality-core требует typed Planner Impact Closure до `READY` в `planner.v6`
+`0.8.0a36` quality-core требует typed Planner Impact Closure до `READY` в `planner.v6`
 и post-patch Implementer Impact Closure до `COMPLETE` в `implementer.v6`.
 Implementer проверяет Planner model по реальному diff, пересматривает consumers,
 добавляет discoveries через Controller expansion и рассматривает каждый changed path.
@@ -39,7 +39,8 @@ Strict recovery собирает независимые evidence errors в од�
 Она требует всех обязательных уровней, включая настоящие Node/Jest, native role sandbox
 и три фиксированных real-model FULL прогона до безопасной выдачи результата. Обязательный
 deterministic replay воспроизводит три sanitized artifact-boundary failures,
-captured Codex transport failures и captured native role-command drift до
+captured Codex transport failures, captured native role-command drift и три
+captured real-model liveness failures до
 `native_roles` и `real_models`. Затем `entrypoint_boot` в exact script mode
 проверяет `task_runner.py`, native smoke и real-model driver без model turns;
 эти PASS не заменяют model qualification.
@@ -54,6 +55,9 @@ cardinality dispositions и нулевым `maxItems` для пустых origin
 classification и source revision выводятся Controller из current catalog, а не повторяются
 моделью. Planner до capability negotiation получает отдельную bounded correction только
 для allowlisted local evidence fields при неизменной semantic model.
+Status-compatible negative Phase-B claim с пропущенным final finding получает один
+отдельный claim-preserving closure turn: status/disposition/origins/coverage и existing
+findings frozen. `PASS` с negative claim, semantic reversal и no-progress hard-fail.
 Blind changed-contract `MATERIAL_GAP` и `MODEL_CONFLICT` допустимы только с
 `REPLAN_REQUIRED`: semantic reset запускает fresh Planner и Implementer. Final material
 finding и concrete reason обязательны.
@@ -109,7 +113,9 @@ Controller authority.
 Discovered `node:test` и Jest checks теперь исполняются через соответствующие trusted
 runners с одинаковыми templates для self-verification, Controller и reconstruction.
 Локальная ошибка evidence отчёта допускает два report-only corrective turns без
-переписывания candidate или потери findings. Подробности и native smoke — в
+переписывания candidate или потери findings. `candidate-checkpoint.v2` строго sealed
+Controller/candidate/registered durable evidence, но не делает произвольный volatile
+role scratch hard dependency. Подробности и native smoke — в
 [Phase 4](docs/PHASE4_EXECUTION.md); rationale — D-025/D-026 в журнале решений.
 
 ## Фундамент Phase 3
@@ -153,7 +159,7 @@ source resolution и обязательный recorded sanitize/rebind. Reconstr
 
 Полный stdout/stderr probes хранится только в Controller-private plane. Public
 artifact содержит typed status, bounded version либо фиксированную failure
-diagnostic. `harness_build_identity.json` связывает run с `0.8.0a35`, exact Git
+diagnostic. `harness_build_identity.json` связывает run с `0.8.0a36`, exact Git
 commit и tracked dirty/archive state без публикации локального пути.
 
 Candidate определяется Controller-private physical baseline, а не mutable Git
@@ -407,7 +413,7 @@ Benchmark запускается в standalone one-commit repository без shar
 Ожидаемый финал:
 
 ```text
-DOCS_SYNC_PASS harness=0.8.0a35 ...
+DOCS_SYNC_PASS harness=0.8.0a36 ...
 HARNESS_SELF_CHECK_PASS
 ```
 
@@ -421,7 +427,7 @@ Manifest пока остаётся `version = 2` для совместимост
 
 ## Границы Phase 7 alpha
 
-`0.8.0a35` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
+`0.8.0a36` завершает согласованный Step 0–7 quality-core, но намеренно **не заявляет готовыми**:
 
 ```text
 universal OS-enforced sandbox для каждого Controller subprocess;

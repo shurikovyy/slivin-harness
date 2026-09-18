@@ -1,4 +1,4 @@
-# Практическая работа с Slivin Harness 0.8.0a35
+# Практическая работа с Slivin Harness 0.8.0a36
 
 ## Установка и self-check
 
@@ -11,8 +11,8 @@ cd ~/Tools/slivin-harness-080a11-phase7
 Ожидаемый финал:
 
 ```text
-0.8.0a35
-DOCS_SYNC_PASS harness=0.8.0a35 ...
+0.8.0a36
+DOCS_SYNC_PASS harness=0.8.0a36 ...
 HARNESS_SELF_CHECK_PASS
 ```
 

@@ -183,7 +183,8 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
             finding["category"] = "MODEL"
         self.verdict.update(status="REPLAN_REQUIRED" if group == "blind_contract_dispositions" else "FINDINGS", findings=[finding], reason="The independently inspected candidate has a material impact gap.")
 
-    def run_phases(self, *, observer=None, persist=None, impact=None, responses=None, on_raw_report=None, run_name="run"):
+    def run_phases(self, *, observer=None, persist=None, impact=None, responses=None,
+                   on_raw_report=None, on_artifact_failure=None, run_name="run"):
         current_impact = impact or self.impact
 
         def as_wire(value):
@@ -224,6 +225,7 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
                 "origin_catalog.json", catalog, visibility=ArtifactVisibility.PRIVATE,
             ),
             on_raw_report=on_raw_report,
+            on_artifact_failure=on_artifact_failure,
         )
         return server, plane, result
 
@@ -718,9 +720,76 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
                     self.validate_b()
                     self.verdict["status"] = "PASS"
                     self.reject_b()
+                    self.verdict["status"] = (
+                        "REPLAN_REQUIRED" if group == "blind_contract_dispositions" else "FINDINGS"
+                    )
                     self.verdict["findings"] = []
                     self.verdict["impact_challenge"][group][0]["finding_ids"] = []
                     self.reject_b("corresponding final finding")
+
+    def test_phase_b_claim_closure_adds_finding_without_changing_semantics(self):
+        self.negative("blind_consumer_dispositions", "MISSING")
+        corrected = copy.deepcopy(self.verdict)
+        invalid = copy.deepcopy(corrected)
+        invalid["findings"] = []
+        invalid["impact_challenge"]["blind_consumer_dispositions"][0]["finding_ids"] = []
+        failures = []
+        server, _, (_, admitted) = self.run_phases(
+            responses=[self.audit, invalid, corrected], run_name="claim-closure",
+            on_artifact_failure=lambda phase, attempt, record: failures.append(record),
+        )
+        self.assertEqual(admitted["status"], "FINDINGS")
+        self.assertEqual(
+            admitted["impact_challenge"]["blind_consumer_dispositions"][0]["disposition"],
+            "MISSING",
+        )
+        self.assertEqual(len(server.prompts), 3)
+        diagnostic = json.loads(server.prompts[-1].splitlines()[-1])
+        self.assertEqual(diagnostic["failure_kind"], "CLAIM_CLOSURE_INCOMPLETE")
+        self.assertEqual(diagnostic["correction_budget"], 1)
+        self.assertEqual(
+            diagnostic["allowed_fields"],
+            ["impact_challenge.blind_consumer_dispositions[0].finding_ids", "findings"],
+        )
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["failure_kind"], "CLAIM_CLOSURE_INCOMPLETE")
+        self.assertEqual(failures[0]["field"], "impact_challenge.blind_consumer_dispositions[0].finding_ids")
+        self.assertEqual(failures[0]["correction_attempt"], 0)
+        self.assertNotIn("reason", failures[0]["sanitized_artifact"]["failed_row"])
+
+    def test_phase_b_claim_closure_rejects_semantic_mutation_and_repetition(self):
+        self.negative("blind_consumer_dispositions", "MISSING")
+        invalid = copy.deepcopy(self.verdict)
+        invalid["findings"] = []
+        invalid["impact_challenge"]["blind_consumer_dispositions"][0]["finding_ids"] = []
+        changed = copy.deepcopy(self.verdict)
+        changed["impact_challenge"]["blind_consumer_dispositions"][0]["disposition"] = "COVERED_IN_SCOPE"
+        for corrected, message in (
+            (changed, "CHANGED_CLAIMS"),
+            (dict(copy.deepcopy(self.verdict), status="PASS"), "CHANGED_CLAIMS"),
+            (invalid, "NO_PROGRESS"),
+        ):
+            with self.subTest(message=message, status=corrected["status"]):
+                with self.assertRaisesRegex(RuntimeError, message):
+                    self.run_phases(
+                        responses=[self.audit, invalid, corrected],
+                        run_name="claim-closure-reject-" + str(id(corrected)),
+                    )
+
+    def test_pass_with_negative_disposition_is_hard_semantic_failure_without_correction(self):
+        self.negative("blind_consumer_dispositions", "MISSING")
+        self.verdict["status"] = "PASS"
+        self.verdict["findings"] = []
+        self.verdict["impact_challenge"]["blind_consumer_dispositions"][0]["finding_ids"] = []
+        turns = []
+        with self.assertRaises(ArtifactContractError) as raised:
+            self.run_phases(
+                responses=[self.audit, self.verdict], run_name="pass-negative-hard-fail",
+                observer=lambda turn, _options: turns.append(turn),
+            )
+        self.assertEqual(raised.exception.code, "PASS_WITH_NEGATIVE_DISPOSITION")
+        self.assertIs(raised.exception.failure_kind, ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT)
+        self.assertEqual(turns, [1, 2])
 
     def test_implementer_discoveries_require_independent_dispositions(self):
         row = copy.deepcopy(self.impact["post_patch_impact"]["in_scope_consumers"][0])
@@ -768,7 +837,7 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
     def test_material_finding_reference_cannot_be_invented(self):
         self.negative("blind_consumer_dispositions", "MISSING")
         self.verdict["impact_challenge"]["blind_consumer_dispositions"][0]["finding_ids"] = ["UNKNOWN"]
-        self.reject_b("existing final findings")
+        self.reject_b("not materialized")
 
     def test_positive_consumer_match_must_reference_actual_in_scope(self):
         row = self.verdict["impact_challenge"]["blind_consumer_dispositions"][0]
@@ -802,7 +871,7 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
                 if status == "REPLAN_REQUIRED":
                     self.validate_b()
                 else:
-                    self.reject_b("PASS requires no findings" if status == "PASS" else "REPLAN_REQUIRED")
+                    self.reject_b("PASS forbids negative" if status == "PASS" else "REPLAN_REQUIRED")
 
     def test_model_conflict_status_matrix_requires_only_replan(self):
         self.assert_blind_contract_status_matrix("MODEL_CONFLICT")

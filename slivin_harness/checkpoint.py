@@ -7,8 +7,9 @@ import hashlib
 import os
 import json
 import re
+import stat
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from . import __version__
 from .control_plane import ArtifactVisibility, ControllerPlane, is_within
@@ -18,54 +19,110 @@ from .build_identity import source_manifest
 from .execution import EXECUTION_BROKER_VERSION, ROLE_EXECUTION_CONTEXT_VERSION
 from .control_plane import CONTROL_PLANE_VERSION, SELF_VERIFY_RECEIPT_VERSION, safe_artifact_name
 
-CHECKPOINT_VERSION = "candidate-checkpoint.v1"
+CHECKPOINT_VERSION = "candidate-checkpoint.v2"
 
 # Controller-owned artifacts only. Never enumerate/copy the receipt key, local
 # configuration or environment. Role caches/runtime copies are reproducible
 # inputs, while authored proof scripts/results are sealed before scratch reset.
 _CONTROLLER_EVIDENCE = re.compile(r"(?:check_registry|verification_plan(?:_\d+)?|execution_policy|project_runtime(?:_replan)?_\d+|runtime_evidence_\d+|contract_closure_\d+|planner_tool_evidence_\d+|self_verify_receipt.*)\.json\Z")
-_SCRATCH_EXCLUDES = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", "cache", "npm", "npm-cache", "jest-cache"}
-_JEST_CACHE_FILE = re.compile(r"(?:haste-map|perf-cache)-[0-9a-f-]+\Z")
 _SENSITIVE_NAMES = {".env", ".receipt_key", "credentials", "credentials.json", "auth.json", "config.toml", "id_rsa", "id_ed25519"}
 
 
-def seal_evidence(*, plane: ControllerPlane, workspace: Path) -> tuple[list[dict], list[dict]]:
-    evidence, excluded = [], []
-    def seal(path: Path, kind: str, locator: str):
-        if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+def _link_or_junction(path: Path) -> bool:
+    return path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction())
+
+
+def _stable_file_bytes(path: Path, *, reason_code: str) -> bytes:
+    """Read strict authoritative/registered evidence without accepting path replacement."""
+    try:
+        before = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode) or _link_or_junction(path):
+            raise RuntimeError(reason_code)
+        with path.open("rb") as source:
+            opened_before = os.fstat(source.fileno())
+            raw = source.read()
+            opened_after = os.fstat(source.fileno())
+        after = path.stat(follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise RuntimeError(reason_code) from exc
+    identity = lambda value: (
+        value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns,
+    )
+    if (identity(before) != identity(opened_before)
+            or identity(opened_before) != identity(opened_after)
+            or identity(opened_after) != identity(after)
+            or len(raw) != after.st_size):
+        raise RuntimeError(reason_code)
+    return raw
+
+
+def _registered_role_path(*, workspace: Path, path: Path) -> tuple[Path, str]:
+    scratch = (workspace / ".harness_tmp").resolve()
+    candidate = path if path.is_absolute() else workspace / path
+    absolute = candidate.absolute()
+    try:
+        relative = absolute.relative_to(workspace.absolute())
+    except ValueError as exc:
+        raise RuntimeError("CHECKPOINT_DURABLE_EVIDENCE_BOUNDARY") from exc
+    if relative.parts[:1] != (".harness_tmp",) or len(relative.parts) < 4:
+        raise RuntimeError("CHECKPOINT_DURABLE_EVIDENCE_BOUNDARY")
+    if relative.parts[1] not in {"planner", "implementer", "evaluator"}:
+        raise RuntimeError("CHECKPOINT_DURABLE_EVIDENCE_BOUNDARY")
+    current = workspace.absolute()
+    for part in relative.parts:
+        current = current / part
+        if current.exists() and _link_or_junction(current):
             raise RuntimeError("CHECKPOINT_EVIDENCE_LINK")
-        raw = path.read_bytes()
+    try:
+        resolved = absolute.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError("CHECKPOINT_DURABLE_EVIDENCE_UNAVAILABLE") from exc
+    if not is_within(scratch, resolved) or not resolved.is_file():
+        raise RuntimeError("CHECKPOINT_DURABLE_EVIDENCE_BOUNDARY")
+    name = resolved.name.lower()
+    if (name in _SENSITIVE_NAMES or name.startswith(".env.")
+            or resolved.suffix.lower() in {".key", ".pem", ".pfx", ".p12"}):
+        raise RuntimeError("CHECKPOINT_DURABLE_EVIDENCE_SENSITIVE")
+    return resolved, resolved.relative_to(workspace.resolve()).as_posix()
+
+
+def seal_evidence(
+    *, plane: ControllerPlane, workspace: Path,
+    durable_role_evidence: Sequence[Path] = (),
+) -> tuple[list[dict], list[dict]]:
+    evidence, excluded = [], []
+    def seal(path: Path, kind: str, locator: str, *, strict_code: str):
+        if _link_or_junction(path):
+            raise RuntimeError("CHECKPOINT_EVIDENCE_LINK")
+        raw = _stable_file_bytes(path, reason_code=strict_code)
         digest = hashlib.sha256(raw).hexdigest()
         artifact = f"checkpoints/evidence/{digest}"
         plane.write_bytes(artifact, raw, visibility=ArtifactVisibility.PRIVATE)
         evidence.append(dict(kind=kind, original_locator=locator, artifact=artifact, sha256=digest, size=len(raw)))
     for path in sorted(plane.private_root.glob("*.json")):
         if _CONTROLLER_EVIDENCE.fullmatch(path.name):
-            seal(path, "CONTROLLER_EVIDENCE", path.name)
+            seal(path, "CONTROLLER_EVIDENCE", path.name,
+                 strict_code="CHECKPOINT_CONTROLLER_EVIDENCE_UNAVAILABLE")
     for role in ("planner", "implementer", "evaluator"):
         root = workspace / ".harness_tmp" / role
         if not root.exists():
             continue
-        if not is_within(workspace / ".harness_tmp", root) or root.is_symlink() or (hasattr(root, "is_junction") and root.is_junction()):
+        if not is_within(workspace / ".harness_tmp", root) or _link_or_junction(root):
             raise RuntimeError("CHECKPOINT_SCRATCH_BOUNDARY")
-        for parent, directories, filenames in os.walk(root, followlinks=False):
-            for name in list(directories):
-                path = Path(parent) / name
-                if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
-                    raise RuntimeError("CHECKPOINT_EVIDENCE_LINK")
-                if name in _SCRATCH_EXCLUDES:
-                    directories.remove(name)
-                    excluded.append(dict(locator=path.relative_to(workspace).as_posix(), reason="REPRODUCIBLE_CACHE_OR_RUNTIME"))
-            for name in sorted(filenames):
-                path = Path(parent) / name
-                locator = path.relative_to(workspace).as_posix()
-                if Path(parent).name == "jest" and _JEST_CACHE_FILE.fullmatch(name):
-                    excluded.append(dict(locator=locator, reason="REPRODUCIBLE_CACHE_OR_RUNTIME"))
-                    continue
-                if name in _SENSITIVE_NAMES or name.startswith(".env.") or path.suffix.lower() in {".key", ".pem", ".pfx", ".p12"}:
-                    excluded.append(dict(locator=locator, reason="SENSITIVE_MATERIAL_NOT_READ"))
-                    continue
-                seal(path, "UNTRUSTED_ROLE_SCRATCH", locator)
+        excluded.append({
+            "locator": root.relative_to(workspace).as_posix(),
+            "reason": "UNREGISTERED_VOLATILE_ROLE_SCRATCH",
+            "scope": "TREE",
+            "authority": "FORENSIC_ONLY",
+        })
+    seen: set[Path] = set()
+    for requested in durable_role_evidence:
+        path, locator = _registered_role_path(workspace=workspace, path=Path(requested))
+        if path in seen:
+            raise RuntimeError("CHECKPOINT_DURABLE_EVIDENCE_DUPLICATE")
+        seen.add(path)
+        seal(path, "REGISTERED_DURABLE_ROLE_EVIDENCE", locator,
+             strict_code="CHECKPOINT_DURABLE_EVIDENCE_UNAVAILABLE")
     return evidence, excluded
 
 
@@ -83,7 +140,8 @@ def verify_checkpoint_evidence(plane: ControllerPlane, checkpoint: dict) -> None
 @boundary("B17")
 def save_report_checkpoint(*, plane: ControllerPlane, workspace: Path, name: str,
                            contract: dict, run_state=None, stamp_path: Path | None = None,
-                           check_registry_digest: str | None = None) -> dict:
+                           check_registry_digest: str | None = None,
+                           durable_role_evidence: Sequence[Path] = ()) -> dict:
     """Seal changed physical bytes and known evidence before report validation.
 
     Baseline SHA plus file blobs/deletions reconstruct the observed candidate.
@@ -116,7 +174,10 @@ def save_report_checkpoint(*, plane: ControllerPlane, workspace: Path, name: str
         elif item["state"] != "deleted":
             raise RuntimeError("CHECKPOINT_UNSUPPORTED_ENTRY")
         entries.append(entry)
-    evidence, exclusions = seal_evidence(plane=plane, workspace=workspace)
+    evidence, exclusions = seal_evidence(
+        plane=plane, workspace=workspace,
+        durable_role_evidence=durable_role_evidence,
+    )
     contract_raw = json.dumps(contract, ensure_ascii=False, sort_keys=True).encode("utf-8")
     contract_digest = hashlib.sha256(contract_raw).hexdigest()
     contract_artifact = f"checkpoints/evidence/{contract_digest}"
@@ -127,7 +188,9 @@ def save_report_checkpoint(*, plane: ControllerPlane, workspace: Path, name: str
         # arbitrary report evidence string is interpreted as a filesystem path.
         if not is_within(workspace / ".harness_tmp", stamp_path) or not stamp_path.is_file():
             raise RuntimeError("CHECKPOINT_STAMP_BOUNDARY")
-        raw = stamp_path.read_bytes()
+        raw = _stable_file_bytes(
+            stamp_path, reason_code="CHECKPOINT_SELF_VERIFY_STAMP_UNAVAILABLE",
+        )
         digest = hashlib.sha256(raw).hexdigest()
         artifact = f"checkpoints/evidence/{digest}.json"
         plane.write_bytes(artifact, raw, visibility=ArtifactVisibility.PRIVATE)

@@ -1,8 +1,8 @@
-# Архитектура Slivin Harness 0.8.0a35 — Phase 7
+# Архитектура Slivin Harness 0.8.0a36 — Phase 7
 
 ## Назначение
 
-`0.8.0a35` требует typed impact closure в `planner.v6` до `READY`, сохраняет
+`0.8.0a36` требует typed impact closure в `planner.v6` до `READY`, сохраняет
 согласованный Step 0–7 quality-core, strict Structured Outputs validation до
 App Server `turn/start` и Planner proof только через подтверждённые executors.
 Нормативная ответственность пользователя и агента определена в
@@ -39,7 +39,7 @@ Step 7 — Final Gate / result handoff / hidden benchmark exam
 ## Версионные слои
 
 ```text
-Harness                     0.8.0a35
+Harness                     0.8.0a36
 Manifest                    version = 2
 Workflow                    workflow.v7
 Run State                   run-state.v1
@@ -231,7 +231,7 @@ semantic baseline/agent stages. Полный probe output записываетс
 diagnostic.
 
 До workspace/agent stages Controller также записывает
-`harness-build-identity.v1`: package version `0.8.0a35`, exact Git HEAD и tracked
+`harness-build-identity.v1`: package version `0.8.0a36`, exact Git HEAD и tracked
 dirty state (`--untracked-files=no`). В архиве или без Git поля commit/dirty
 остаются `null`, а `source_kind=ARCHIVE_OR_UNKNOWN`; absolute Harness path в
 artifact не входит.
@@ -457,8 +457,13 @@ arrays имеют exact Controller cardinality, а пустые origin/match gro
 Controller canonicalize admitted handles в current metadata; fuzzy matching отсутствует, stale
 revision нельзя изготовить по construction. Unknown/incompatible handle может получить
 bounded correction только exact handle field при неизменных disposition/reason/findings.
-Каждый negative disposition требует final
-finding_ids и запрещает PASS. Каждый blind finding retained либо dismissed с evidence.
+Каждый negative disposition требует final finding и `finding_ids` и запрещает PASS.
+Если status уже совместим с отрицательным disposition, но модель не materialized
+только этот уже объявленный claim, допускается один отдельный Phase-B closure turn:
+status, dispositions, origins, matches, reasons, coverage, candidate и existing
+findings frozen; разрешены только appended material finding и exact ID binding.
+Semantic reversal, no-progress и `PASS` с отрицательным disposition hard-fail.
+Каждый blind finding retained либо dismissed с evidence.
 Blind changed-contract MATERIAL_GAP и MODEL_CONFLICT требуют только REPLAN_REQUIRED,
 concrete reason и final finding; PASS/FINDINGS/BLOCKED/NEEDS_USER_DECISION отклоняются.
 Используется существующий semantic reset с fresh Planner/Contract/Implementer.
@@ -645,7 +650,7 @@ ADVISORY
 UNAVAILABLE
 ```
 
-`0.8.0a35` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
+`0.8.0a36` не утверждает универсальный OS-enforced sandbox для любого Controller subprocess. Owner-configured external wrappers обязаны сами иметь scoped credential/environment boundary.
 
 Planner/Evaluator используют один `RoleExecutionContext` (`role-execution-context.v1`)
 из `ExecutionBroker.prepare_readonly_role()`. Project root остаётся контекстом repository,
@@ -710,7 +715,12 @@ root в dotted module и добавляет normalized lexical qualname; static 
 и типы принадлежат `slivin_harness.native_role_admission`; smoke script только
 связывает package admission с native validator и execution loop.
 
-Перед любым model-backed release stage `entrypoint_boot` выполняет exact script-mode
+До model-backed release stages captured `real_model_failure_replay` воспроизводит
+QE1 claim closure, QS1 volatile scratch race и QE2 mixed-document authority через
+те же production admission/checkpoint/outer-validator paths. Fixture origin, source
+run, expected/actual outcome и SHA-256 сохраняются machine-readably; replay не
+заменяет fixed real-model cases.
+После replay `entrypoint_boot` выполняет exact script-mode
 `--boot-check` для `task_runner.py`, native smoke и real-model driver. Каждый
 executable возвращает `release-entrypoint-boot.v1` с canonical source/module,
 runtime boundary identities и `model_execution=NOT_RUN`; import/decorator или CLI
