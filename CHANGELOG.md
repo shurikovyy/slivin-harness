@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `0.8.0a39` closes the captured QE2 Evaluator Phase-A
+  `IMPACT_PATH_MISSING` recovery gap. Controller now admits missing repository
+  paths only as pruning: the corrected array must equal the original array minus
+  the exact diagnosed missing indexes, with every surviving path and semantic
+  sibling frozen. Multiple missing leaves are batched; an all-missing list,
+  replacement, addition, valid-path removal, reorder or unsafe path fails closed.
+- Planner and Evaluator use the same pruning-only invariant. The sanitized
+  `shr-q-b181436a98` QE2 artifact is bound into `real_model_failure_replay.v2`
+  and exercises production Phase-A validation plus bounded report recovery.
+  This version does not claim `RELEASE_QUALIFIED`.
 - `0.8.0a38` makes Controller-owned Codex `model` and
   `model_reasoning_effort` overrides safe through the native Windows
   `list2cmdline → cmd.exe /c → .cmd` launch chain. Overrides use validated TOML

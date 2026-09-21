@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a38
+# Документация Slivin Harness 0.8.0a39
 
-Актуальная версия: **0.8.0a38 — Windows Codex Model Override Transport**.
+Актуальная версия: **0.8.0a39 — Claim-Preserving Missing Impact Path Recovery**.
 
 Основные документы:
 

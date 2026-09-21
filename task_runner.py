@@ -2245,7 +2245,7 @@ def run_implementer_report(codex: CodexAppServer, **kwargs) -> dict:
                 print(f"IMPLEMENTER_REPORT_CORRECTED: {attempt}")
             return result
         except ArtifactContractError as exc:
-            fields = correction_fields(exc)
+            fields = correction_fields(exc, report=correction.original)
             private = {"schema_version": "implementation-report-recovery.v1", "status": "INVALID",
                        "correction_attempt": attempt, "candidate_id": frozen_candidate,
                        "raw_artifact": name + ".raw.json", "diagnostic": exc.feedback(),

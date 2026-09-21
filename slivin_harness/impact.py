@@ -40,26 +40,30 @@ def safe_impact_path(raw: str, *, field: str) -> str:
     return relative
 
 
+def _impact_path(raw: str, *, field: str, workspace: Path, allow_missing: bool) -> str:
+    """Validate one exact repository-evidence leaf without hiding sibling errors."""
+    root = workspace.resolve()
+    relative = safe_impact_path(raw, field=field)
+    try:
+        resolved = (root / relative).resolve()
+        inside = resolved.is_relative_to(root)
+        exists = inside and resolved.is_file()
+        missing = inside and not (root / relative).exists() and not (root / relative).is_symlink()
+    except (OSError, RuntimeError, ValueError):
+        inside = exists = missing = False
+    if not inside:
+        impact_error("UNSAFE_PATH", field=field, message="Impact evidence path escapes workspace", actual=raw)
+    if not exists and not (allow_missing and missing):
+        impact_error("IMPACT_PATH_MISSING", field=field, message="Impact evidence requires an existing repository file", actual=raw)
+    return relative
+
+
 def impact_paths(values: list[str], *, field: str, workspace: Path, allow_missing: bool = False) -> list[str]:
     """Validate file evidence; allow_missing is only for Controller-known deletions."""
-    root = workspace.resolve()
-    normalized: list[str] = []
-    for index, raw in enumerate(values):
-        path_field = f"{field}[{index}]"
-        relative = safe_impact_path(raw, field=path_field)
-        try:
-            resolved = (root / relative).resolve()
-            inside = resolved.is_relative_to(root)
-            exists = inside and resolved.is_file()
-            missing = inside and not (root / relative).exists() and not (root / relative).is_symlink()
-        except (OSError, RuntimeError, ValueError):
-            inside = exists = missing = False
-        if not inside:
-            impact_error("UNSAFE_PATH", field=path_field, message="Impact evidence path escapes workspace", actual=raw)
-        if not exists and not (allow_missing and missing):
-            impact_error("IMPACT_PATH_MISSING", field=path_field, message="Impact evidence requires an existing repository file", actual=raw)
-        normalized.append(relative)
-    return normalized
+    return [
+        _impact_path(raw, field=f"{field}[{index}]", workspace=workspace, allow_missing=allow_missing)
+        for index, raw in enumerate(values)
+    ]
 
 
 def validate_impact_structure(value: object, *, schema: Mapping[str, Any],
@@ -111,7 +115,11 @@ def validate_impact_structure(value: object, *, schema: Mapping[str, Any],
             for entry in node:
                 capture(lambda entry=entry: impact_text(entry, field=location))
             if key in {"paths", "evidence_paths"}:
-                capture(lambda: impact_paths(node, field=location, workspace=workspace))
+                for index, entry in enumerate(node):
+                    capture(lambda entry=entry, index=index: _impact_path(
+                        entry, field=f"{location}[{index}]", workspace=workspace,
+                        allow_missing=False,
+                    ))
             if key in {"symbols", "evidence_symbols"} and any(any(char.isspace() for char in entry)
                     or not any(char.isalnum() for char in entry) for entry in node):
                 capture(lambda: impact_error("IMPACT_SYMBOL_GENERIC", field=location,

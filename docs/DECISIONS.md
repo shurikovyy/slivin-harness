@@ -63,7 +63,7 @@
 | [D-026](#d-026) | Bounded report-only evidence correction | IMPLEMENTED в 0.8.0a30 |
 | [D-027](#d-027) | Immutable origins, recovery с progress и обязательная квалификация сборки | IMPLEMENTED в 0.8.0a31; qualification определяется отдельным release record |
 | [D-028](#d-028) | Owner check inputs и production toolchain остаются властью Controller | IMPLEMENTED; qualification конкретного SHA ещё требуется |
-| [D-029](#d-029) | Model wire ссылается на Controller origins, local correction отделена от semantics | IMPLEMENTED в 0.8.0a32; qualification конкретного SHA ещё требуется |
+| [D-029](#d-029) | Model wire ссылается на Controller origins, local correction отделена от semantics | IMPLEMENTED в 0.8.0a32; missing-path pruning уточнён в 0.8.0a39; qualification конкретного SHA ещё требуется |
 | [D-030](#d-030) | Controller canonicalizes Codex command transport до evidence consumers | IMPLEMENTED в 0.8.0a33; native/full qualification конкретного SHA ещё требуется |
 | [D-031](#d-031) | Controller владеет opaque native probe configuration и bounded command recovery | IMPLEMENTED в 0.8.0a34; native/full qualification конкретного SHA ещё требуется |
 | [D-032](#d-032) | Boundary identity принадлежит source tree; model executables проходят exact boot | IMPLEMENTED в 0.8.0a35; native/full qualification конкретного SHA ещё требуется |
@@ -918,9 +918,11 @@ counterexample, узкого allowlist и проверки сохранност�
 
 ## D-029. Model artifact admission использует Controller origins и typed failure ownership
 
-**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в `0.8.0a32`; real-model
-qualification нового SHA не выполнялась и определяется отдельным `qualification.json`.
-**Дата регистрации:** 2026-09-12. **Связанные решения:** D-002, D-019, D-026,
+**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в `0.8.0a32`; missing-path
+pruning уточнён в `0.8.0a39`; real-model qualification нового SHA не выполнялась
+и определяется отдельным `qualification.json`.
+**Дата регистрации:** 2026-09-12. **Последнее уточнение:** 2026-09-21.
+**Связанные решения:** D-002, D-019, D-026,
 D-027, D-028.
 
 **Проблема и проверенные основания.** Обязательная qualification сборки `2742aad`
@@ -951,6 +953,15 @@ transcript replay stage перед всеми model-backed stages: `native_roles
 При нулевых допустимых origins невозможная строка fail closed как semantic conflict,
 не запрашивая безрезультатную local correction.
 
+Qualification `shr-q-b181436a98` выявила внутреннее расхождение этой политики:
+Evaluator Phase A корректно классифицировал отсутствующий repository evidence path как
+`IMPACT_PATH_MISSING`/`LOCAL_WIRE_ERROR`, но generic field allowlist не допускал
+bounded recovery. В `0.8.0a39` path correction не получает authority переписывать
+весь массив. Controller собирает точные missing leaf indexes и принимает только
+`original paths - diagnosed missing indexes`, сохраняя surviving order и все semantic
+siblings. Несколько missing leaves удаляются одним batch; если survivors не остаются,
+correction не запрашивается. Planner использует тот же invariant.
+
 **Почему.** Identity, classification и revision являются функцией current authoritative
 Controller state, а не semantic claim модели. Их повторное авторство расширяло invalid
 state space без независимого evidence. Handle сохраняет модельное решение о disposition,
@@ -965,6 +976,10 @@ invalid state и semantic mutation сохраняются; fuzzy matching model 
 нарушается freshness; удалить validation — допускаются missing/duplicate/wrong-authority
 dispositions; ослабить Phase-B independence — зелёные prior claims подменяют audit;
 обучить prompts трём qualification answers — это leakage и не закрывает системный класс.
+Также REJECTED: просто добавить `.paths` в общий regex — это разрешило бы заменять,
+добавлять, удалять valid evidence или менять порядок; считать отсутствующий path
+существующим — ослабляет repository evidence; увеличивать retry budget — не добавляет
+Controller authority и не устраняет semantic mutation.
 
 **Последствия и цена.** `evaluator.v8` несовместим с прежним Phase-B wire; canonical
 admitted artifact сохраняет downstream semantics. Dynamic schema и catalog fingerprint
@@ -979,6 +994,9 @@ fixed prompts/tasks/count/order трёх FULL cases и отсутствие hidd
 `tools/replay_model_artifact_transcripts.py`. Sanitized QE1/QS1/QE2 fixtures проходят
 production admission entrypoints; negative tests проверяют unknown/wrong-type handles,
 semantic mutation, duplicate/missing dispositions, catalog tamper и correction budgets.
+Captured QE2 `shr-q-b181436a98` Phase-A artifact дополнительно проходит production
+`validate_blind_audit` + `ReportCorrectionState` в `real_model_failure_replay.v2`;
+adversarial tests фиксируют replacement/add/remove/reorder/all-missing/unsafe controls.
 Deterministic PASS доказывает только закрытие известных artifact-boundary regressions,
 не model quality и не `RELEASE_QUALIFIED`.
 

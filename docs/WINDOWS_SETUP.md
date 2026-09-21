@@ -253,6 +253,9 @@ the original mismatch retained.
 Captured `shr-q-fb852e56ab` QE1/QS1/QE2 liveness fixtures затем проходят
 `real_model_failure_replay`: Phase-B claim closure, volatile checkpoint scratch и
 mixed-document qualification authority проверяются production paths без model turns.
+Captured `shr-q-b181436a98` QE2 Phase-A wire также доказывает pruning-only recovery
+для missing repository path: Controller удаляет только diagnosed missing indexes,
+сохраняя survivor order и semantic row fields.
 После replay `entrypoint_boot` запускает explicit `--boot-check` contracts для
 `task_runner.py`, `tools/smoke_readonly_scratch.py` и
 `tools/release_real_models.py` в exact script mode. Это import/decorator/CLI boot

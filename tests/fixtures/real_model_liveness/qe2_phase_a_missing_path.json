@@ -1,0 +1,130 @@
+{
+  "schema_version": "real-model-failure-fixture.v1",
+  "fixture_id": "qe2-20260921-phase-a-missing-impact-path",
+  "origin": "captured_real",
+  "source_qualification_run_id": "shr-q-b181436a98",
+  "source_case": "expiry-2",
+  "source_run_id": "QE2/20260921-171632-2d435639",
+  "source_artifact": "controller_private/evaluator_01_PHASE_A_00.raw.json",
+  "source_artifact_sha256": "cd41b336cdac3d234b17e98faddaa179c5071fdc66d4c364d097530c673d3dff",
+  "sanitization": "Selected complete captured rows preserve the PHASE_A wire shape and exact failing row/index; unrelated duplicate coverage rows and prose were omitted.",
+  "observed_structure": {
+    "phase": "PHASE_A",
+    "failure_kind": "LOCAL_WIRE_ERROR",
+    "reason_code": "IMPACT_PATH_MISSING",
+    "field": "impact_analysis.related_out_of_scope[1].paths[1]",
+    "missing_value": "docs/deployment.md",
+    "surviving_paths": ["README.md"],
+    "independently_corrected_symbols": ["docs/deployment.md"]
+  },
+  "changed_paths": [
+    "src/access.cjs",
+    "src/state.cjs",
+    "tests/content-boundary.native.cjs",
+    "tests/expiration-boundary.jest.cjs"
+  ],
+  "captured_wire": {
+    "protocol_version": "blind-audit.v2",
+    "candidate_id": "f5b0d9f4d74188fa0b3a0bd319a12ba52f8891c4e34567a744a72148ba1eceb8",
+    "summary": "Кандидат корректно запрещает чтение и учёт записей при expiresAt <= now, сохраняя доступ при active === true и expiresAt > now.",
+    "impact_analysis": {
+      "applicable": true,
+      "changed_contracts": [
+        {
+          "impact_id": "CONTRACT-1",
+          "name": "Availability eligibility contract",
+          "before": "available(entry) зависел только от truthiness entry.active.",
+          "after": "available(entry) возвращает true только при active и expiresAt > now.",
+          "paths": ["src/access.cjs"],
+          "symbols": ["available", "entry.active", "entry.expiresAt", "entry.now"],
+          "evidence": ["src/access.cjs содержит activity-and-expiration predicate."]
+        }
+      ],
+      "affected_consumers": [
+        {
+          "impact_id": "CONSUMER-1",
+          "name": "Content reader",
+          "relation": "content.read непосредственно использует изменённый state.isReadable.",
+          "required_behavior": "Не возвращать value для inactive или expiresAt <= now; возвращать value для active и expiresAt > now.",
+          "paths": ["src/content.cjs"],
+          "symbols": ["read", "isReadable"],
+          "evidence": ["src/content.cjs делегирует решение isReadable."]
+        }
+      ],
+      "not_affected_consumers": [
+        {
+          "impact_id": "NOT-AFFECTED-1",
+          "name": "Legacy label feature",
+          "why_considered": "Фича и её тест обнаружены при полном repository sweep.",
+          "reason": "legacy-label.label не импортирует eligibility symbols и не участвует в чтении, availability или count.",
+          "paths": ["src/legacy-label.cjs", "tests/legacy.jest.cjs", "README.md"],
+          "symbols": ["label"],
+          "evidence": ["Legacy label использует независимую статическую строку."]
+        }
+      ],
+      "related_out_of_scope": [
+        {
+          "impact_id": "RELATED-1",
+          "name": "Pre-existing legacy-label inconsistency",
+          "relation": "Обнаружено полным Jest regression run после проверки candidate tests.",
+          "reason": "Legacy label chain независима от eligibility и не изменена кандидатом.",
+          "suggested_follow_up": "Отдельно согласовать canonical legacy label.",
+          "paths": ["src/legacy-label.cjs", "tests/legacy.jest.cjs", "README.md"],
+          "symbols": ["label"],
+          "evidence": ["Baseline legacy-label inconsistency не внесена candidate diff."]
+        },
+        {
+          "impact_id": "RELATED-2",
+          "name": "Dangling deployment documentation link",
+          "relation": "Обнаружено при canonical-doc sweep.",
+          "reason": "README ссылается на отсутствующий tracked path; ссылка не связана с eligibility behavior и не затронута кандидатом.",
+          "suggested_follow_up": "В отдельной docs-задаче добавить docs/deployment.md либо удалить или исправить ссылку.",
+          "paths": ["README.md", "docs/deployment.md"],
+          "symbols": [],
+          "evidence": [
+            "README.md ссылается на docs/deployment.md.",
+            "Repository file inventory не обнаружил docs/deployment.md."
+          ]
+        }
+      ],
+      "changed_path_review": [
+        {
+          "path": "src/access.cjs",
+          "observed_role": "Decision point для availability и downstream count.",
+          "impact": "UNDERSTOOD: добавляет activity-and-expiration predicate.",
+          "evidence": ["src/access.cjs reviewed."]
+        },
+        {
+          "path": "src/state.cjs",
+          "observed_role": "Decision point для фактического content read.",
+          "impact": "UNDERSTOOD: запрещает чтение expired states.",
+          "evidence": ["src/state.cjs reviewed."]
+        },
+        {
+          "path": "tests/content-boundary.native.cjs",
+          "observed_role": "Новый public-consumer regression test для content.read.",
+          "impact": "UNDERSTOOD: assertions проверяют expiration boundary.",
+          "evidence": ["Native boundary assertions reviewed."]
+        },
+        {
+          "path": "tests/expiration-boundary.jest.cjs",
+          "observed_role": "Новый regression test для availability и sibling aggregation consumer.",
+          "impact": "UNDERSTOOD: assertions покрывают expired, equality и active-unexpired.",
+          "evidence": ["Jest boundary assertions reviewed."]
+        }
+      ],
+      "search_evidence": [
+        {
+          "target": "Canonical docs и unrelated feature boundaries",
+          "method": "Прочитан README и выполнен repository-wide поиск eligibility и deployment navigation.",
+          "conclusion": "README eligibility statement согласован с candidate; дополнительно выявлена dangling deployment link.",
+          "evidence_paths": ["README.md", "src/legacy-label.cjs", "tests/legacy.jest.cjs"]
+        }
+      ],
+      "closure_summary": "Outward sweep закрывает изменённый semantic contract, production consumer, changed paths, canonical documentation и независимую legacy-ветку."
+    },
+    "findings": [],
+    "advisories": ["Eligibility predicates должны сохраняться синхронными."]
+  },
+  "expected_outcome": "MISSING_PATH_PRUNE_PASS"
+}

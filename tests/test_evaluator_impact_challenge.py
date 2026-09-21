@@ -260,6 +260,60 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
         self.assertEqual(verdict["status"], "PASS")
         self.assertEqual([(phase, attempt) for phase, attempt, _ in raw_records], [("PHASE_A", 0), ("PHASE_A", 1), ("PHASE_B", 0)])
 
+    def test_phase_a_missing_path_uses_same_thread_pruning_only_correction(self):
+        invalid = copy.deepcopy(self.audit)
+        invalid["impact_analysis"]["related_out_of_scope"][0]["paths"].append(
+            "docs/deployment.md"
+        )
+        failures = []
+        server, _, (audit, verdict) = self.run_phases(
+            responses=[invalid, self.audit, self.verdict],
+            run_name="phase-a-missing-path-correction",
+            on_artifact_failure=lambda phase, attempt, record: failures.append(record),
+        )
+        self.assertEqual(audit, self.audit)
+        self.assertEqual(verdict["status"], "PASS")
+        self.assertEqual(len(server.prompts), 3)
+        self.assertEqual({thread["execution_role"].value for thread in server.threads}, {"evaluator"})
+        self.assertEqual(failures[0]["phase"], "PHASE_A")
+        self.assertEqual(failures[0]["reason_code"], "IMPACT_PATH_MISSING")
+        self.assertTrue(failures[0]["correctable"])
+        diagnostic = json.loads(server.prompts[1].splitlines()[-1])
+        self.assertEqual(
+            diagnostic["allowed_fields"],
+            ["impact_analysis.related_out_of_scope[0].paths"],
+        )
+
+    def test_phase_a_repeated_missing_path_correction_stops_on_no_progress(self):
+        invalid = copy.deepcopy(self.audit)
+        invalid["impact_analysis"]["related_out_of_scope"][0]["paths"].append(
+            "docs/deployment.md"
+        )
+        with self.assertRaisesRegex(RuntimeError, "REPORT_CORRECTION_NO_PROGRESS"):
+            self.run_phases(
+                responses=[invalid, copy.deepcopy(invalid)],
+                run_name="phase-a-missing-path-no-progress",
+            )
+
+    def test_phase_a_collects_multiple_missing_path_leaf_indexes(self):
+        invalid = copy.deepcopy(self.audit)
+        invalid["impact_analysis"]["related_out_of_scope"][0]["paths"].extend([
+            "docs/first-missing.md", "docs/second-missing.md",
+        ])
+        with self.assertRaises(ArtifactContractError) as raised:
+            validate_blind_audit(
+                invalid, workspace=self.workspace, candidate_id=self.candidate_id,
+                changed_paths=self.changed_paths,
+            )
+        diagnostics = getattr(raised.exception, "diagnostics", ())
+        self.assertEqual(
+            [item.field for item in diagnostics if item.code == "IMPACT_PATH_MISSING"],
+            [
+                "impact_analysis.related_out_of_scope[0].paths[1]",
+                "impact_analysis.related_out_of_scope[0].paths[2]",
+            ],
+        )
+
     def test_phase_b_corrects_unknown_origin_ref_in_one_bounded_turn(self):
         corrected = phase_b_wire(
             evaluation=self.verdict, blind_audit=self.audit,

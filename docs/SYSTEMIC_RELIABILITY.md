@@ -170,11 +170,14 @@ machine-readable summary. Mutation gate
 требует unmutated PASS, затем конкретный typed failure и исполнение mutated target
 на disposable source copy. Infrastructure ERROR не считается обнаружением дефекта.
 
-`real_model_failure_replay` использует sanitized captured evidence qualification
+`real_model_failure_replay.v2` использует sanitized captured evidence qualification
 `shr-q-fb852e56ab`: QE1 проверяет hard conflict для exact captured `PASS`+negative и
 bounded closure для status-compatible claim, QS1 — отсутствие checkpoint зависимости
 от исчезнувшего `jest-access-cache/haste-map-*`, QE2 — mixed README authority.
-Каждый result связывает fixture bytes и retained source artifact SHA-256.
+Captured `shr-q-b181436a98` QE2 Phase-A fixture дополнительно проверяет, что
+`IMPACT_PATH_MISSING` допускает только удаление точных Controller-diagnosed indexes:
+survivors не заменяются, не удаляются и не переупорядочиваются; пустой survivor set
+остаётся terminal. Каждый result связывает fixture bytes и retained source artifact SHA-256.
 
 FULL fixtures фиксированы в `tools/release_real_models.py`: expiry, suspension,
 повтор expiry; 900 секунд на turn, два fix и два replan cycles. Direct diagnostic

@@ -99,7 +99,7 @@ class PlannerCapabilityNegotiationTests(unittest.TestCase):
     def test_local_evidence_path_and_type_errors_are_correctable(self) -> None:
         variants = (
             ("empty evidence", lambda plan: plan["impact_closure"]["in_scope_consumers"][0].update(evidence=[])),
-            ("missing path", lambda plan: plan["impact_closure"]["in_scope_consumers"][0].update(paths=["missing.py"])),
+            ("missing path", lambda plan: plan["impact_closure"]["in_scope_consumers"][0].update(paths=["reader.py", "missing.py"])),
             ("wrong list type", lambda plan: plan["impact_closure"]["in_scope_consumers"][0].update(paths="reader.py")),
             ("missing local field", lambda plan: plan["impact_closure"]["in_scope_consumers"][0].pop("symbols")),
         )
@@ -110,6 +110,24 @@ class PlannerCapabilityNegotiationTests(unittest.TestCase):
                 codex = _FakeCodex([invalid, corrected])
                 self.assertEqual(self._run(codex, ["DOCS_SYNC", "GIT"]), corrected)
                 self.assertEqual(len(codex.turns), 2)
+
+    def test_planner_missing_path_cannot_be_replaced_during_local_correction(self) -> None:
+        invalid = valid_plan()
+        invalid["impact_closure"]["in_scope_consumers"][0]["paths"] = [
+            "reader.py", "missing.py",
+        ]
+        replaced = valid_plan()
+        replaced["impact_closure"]["in_scope_consumers"][0]["paths"] = ["target.txt"]
+        with self.assertRaisesRegex(ReportRecoveryStop, "CHANGED_CLAIMS"):
+            self._run(_FakeCodex([invalid, replaced]), ["DOCS_SYNC", "GIT"])
+
+    def test_planner_all_missing_path_list_fails_closed_without_correction(self) -> None:
+        invalid = valid_plan()
+        invalid["impact_closure"]["in_scope_consumers"][0]["paths"] = ["missing.py"]
+        codex = _FakeCodex([invalid])
+        with self.assertRaisesRegex(ReportRecoveryStop, "REPORT_INVALID"):
+            self._run(codex, ["DOCS_SYNC", "GIT"])
+        self.assertEqual(len(codex.turns), 1)
 
     def test_local_correction_no_progress_and_exhaustion_are_bounded(self) -> None:
         invalid = valid_plan()

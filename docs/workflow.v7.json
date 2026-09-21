@@ -139,7 +139,7 @@
           "CAPABILITY_CORRECTION",
           "INVALID_STOP"
         ],
-        "recovery_contract": "Before capability negotiation, up to two no-progress-protected local-wire corrections may change only exact evidence leaf fields while all semantic claims stay frozen. A later separate capability correction may revise only the proof route; no infinite loop.",
+        "recovery_contract": "Before capability negotiation, up to two no-progress-protected local-wire corrections may change only exact evidence leaf fields while all semantic claims stay frozen. IMPACT_PATH_MISSING may only prune Controller-proven missing indexes while preserving every surviving path in order; an all-missing list is terminal. A later separate capability correction may revise only the proof route; no infinite loop.",
         "checkpoint_contract": "Admitted Planner artifact precedes Controller source inventory and Contract; rejected model stays separate.",
         "families": {
           "input": {
@@ -172,6 +172,8 @@
             "expectation": "Feasible correction progresses; repeated infeasible READY stops before compiler.",
             "unittest_ids": [
               "test_planner.PlannerCapabilityNegotiationTests.test_local_symbol_correction_preserves_semantics",
+              "test_planner.PlannerCapabilityNegotiationTests.test_planner_missing_path_cannot_be_replaced_during_local_correction",
+              "test_planner.PlannerCapabilityNegotiationTests.test_planner_all_missing_path_list_fails_closed_without_correction",
               "test_planner.PlannerCapabilityNegotiationTests.test_local_correction_rejects_planner_semantic_mutation",
               "test_planner.PlannerCapabilityNegotiationTests.test_local_correction_no_progress_and_exhaustion_are_bounded",
               "test_planner.PlannerCapabilityNegotiationTests.test_one_corrective_turn_reuses_thread_and_accepts_feasible_plan",
@@ -571,7 +573,7 @@
           "A_ONLY_CORRECTION",
           "INVALID_OR_PERSISTENCE_STOP"
         ],
-        "recovery_contract": "Local A evidence correction stays blind in same thread; persistence failure prevents B; repair starts fresh A.",
+        "recovery_contract": "Local A evidence correction stays blind in same thread; IMPACT_PATH_MISSING may only prune exact Controller-proven missing indexes while preserving surviving order and semantic row fields; persistence failure prevents B; repair starts fresh A.",
         "checkpoint_contract": "write_once A artifact precedes B disclosure; raw role reports private.",
         "families": {
           "input": {
@@ -602,6 +604,8 @@
             "expectation": "Batch A correction cannot reveal B; failed persistence suppresses B.",
             "unittest_ids": [
               "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_a_batch_correction_never_discloses_phase_b_early",
+              "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_a_missing_path_uses_same_thread_pruning_only_correction",
+              "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_a_repeated_missing_path_correction_stops_on_no_progress",
               "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_is_not_run_when_blind_persistence_fails"
             ],
             "required": true
@@ -1315,7 +1319,7 @@
       }
     ]
   },
-  "harness_version": "0.8.0a38",
+  "harness_version": "0.8.0a39",
   "phase": "phase7-final-gate-delivery-benchmark",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",

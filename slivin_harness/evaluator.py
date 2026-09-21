@@ -1203,7 +1203,7 @@ def run_evaluator(
             except ArtifactContractError as error:
                 locally_correctable = (
                     error.failure_kind is ArtifactFailureKind.LOCAL_WIRE_ERROR
-                    and correction_fields(error) is not None
+                    and correction_fields(error, report=report) is not None
                 )
                 closure_correctable = (
                     phase == "PHASE_B"

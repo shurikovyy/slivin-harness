@@ -15,18 +15,28 @@ from tools.replay_real_model_failures import (
     replay_qe1,
     replay_qs1,
     replay_qe2,
+    replay_qe2_missing_path,
 )
 
 
 class RealModelFailureReplayTests(unittest.TestCase):
     def test_captured_qe1_qs1_qe2_replays_pass(self):
-        results = [replay_qe1(), replay_qs1(), replay_qe2()]
-        self.assertEqual([row['status'] for row in results], ['PASS', 'PASS', 'PASS'])
-        self.assertEqual([row['fixture_origin'] for row in results], ['captured_real'] * 3)
-        self.assertEqual({row['source_qualification_run_id'] for row in results}, {'shr-q-fb852e56ab'})
+        results = [replay_qe1(), replay_qs1(), replay_qe2(), replay_qe2_missing_path()]
+        self.assertEqual([row['status'] for row in results], ['PASS'] * 4)
+        self.assertEqual([row['fixture_origin'] for row in results], ['captured_real'] * 4)
+        self.assertEqual(
+            [row['source_qualification_run_id'] for row in results],
+            ['shr-q-fb852e56ab'] * 3 + ['shr-q-b181436a98'],
+        )
         self.assertEqual(results[0]['compatible_status_classification'], 'CLAIM_CLOSURE_INCOMPLETE')
         self.assertEqual(results[0]['compatible_status_recovery'], 'CLAIM_CLOSURE_PASS')
         self.assertTrue(all(results[2]['authorities'].values()))
+        self.assertEqual(results[3]['actual_outcome'], 'MISSING_PATH_PRUNE_PASS')
+        self.assertEqual(
+            results[3]['initial_outcome'],
+            'LOCAL_WIRE_ERROR:IMPACT_PATH_MISSING:'
+            'impact_analysis.related_out_of_scope[1].paths[1]',
+        )
 
     def test_fixture_bytes_are_bound_to_replay_provenance(self):
         for path in sorted(FIXTURE_ROOT.glob('*.json')):
@@ -37,6 +47,7 @@ class RealModelFailureReplayTests(unittest.TestCase):
                 'qe1_negative_closure.json': replay_qe1,
                 'qs1_volatile_checkpoint.json': replay_qs1,
                 'qe2_mixed_readme.json': replay_qe2,
+                'qe2_phase_a_missing_path.json': replay_qe2_missing_path,
             }[path.name]()
             self.assertEqual(replay['fixture_sha256'], digest)
             self.assertEqual(replay['source_artifact_sha256'], value['source_artifact_sha256'])

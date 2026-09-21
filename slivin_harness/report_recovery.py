@@ -23,6 +23,16 @@ _PLANNER_LOCAL_FIELD = re.compile(
     r"related_out_of_scope|search_evidence)\[\d+\]\."
     r"(?:paths|symbols|evidence|evidence_paths|evidence_symbols)(?:\[\d+\])?$"
 )
+_PATH_ARRAY_FIELD = re.compile(
+    r"(?:"
+    r"(?:post_patch_impact|impact_analysis)\.(?:changed_contracts|in_scope_consumers|affected_consumers|"
+    r"not_affected_consumers|related_out_of_scope|new_risks|search_evidence|source_assessments)\[\d+\]\."
+    r"(?:paths|evidence_paths)"
+    r"|impact_closure\.(?:changed_contracts|in_scope_consumers|not_affected_consumers|"
+    r"related_out_of_scope|search_evidence)\[\d+\]\.(?:paths|evidence_paths)"
+    r")$"
+)
+_MISSING_PATH_LEAF = re.compile(_PATH_ARRAY_FIELD.pattern[:-1] + r"\[\d+\]$")
 _ORIGIN_REF_FIELD = re.compile(
     r"impact_challenge\.(?:blind_contract_dispositions|blind_consumer_dispositions|"
     r"planner_consumer_dispositions|implementer_consumer_dispositions|"
@@ -58,15 +68,20 @@ class ReportCorrectionState:
     allowed_fields: list[str] = field(default_factory=list)
     original: dict | None = None
     previous_diagnostics: tuple | None = None
+    path_prune_expectations: dict[str, list[Any]] = field(default_factory=dict)
 
     def observe(self, report: dict) -> None:
         if self.original is None:
             self.original = copy.deepcopy(report)
         elif not preserves_report_claims(self.original, report, fields=self.allowed_fields):
             raise ReportRecoveryStop("REPORT_CORRECTION_CHANGED_CLAIMS")
+        elif report != self.original and not preserves_missing_path_prunes(
+            report, expectations=self.path_prune_expectations,
+        ):
+            raise ReportRecoveryStop("REPORT_CORRECTION_CHANGED_CLAIMS")
 
     def next_fields(self, error: ArtifactContractError, *, attempt: int) -> list[str]:
-        fields = correction_fields(error)
+        fields = correction_fields(error, report=self.original)
         if fields is None:
             raise ReportRecoveryStop("REPORT_INVALID")
         diagnostics = getattr(error, "diagnostics", (error,))
@@ -76,6 +91,14 @@ class ReportCorrectionState:
         self.previous_diagnostics = signature
         if attempt >= MAX_REPORT_CORRECTIONS:
             raise ReportRecoveryStop("REPORT_CORRECTION_EXHAUSTED")
+        expectations = missing_path_prune_expectations(self.original, error)
+        if expectations is None:
+            raise ReportRecoveryStop("REPORT_INVALID")
+        for name, expected in expectations.items():
+            previous = self.path_prune_expectations.get(name)
+            if previous is not None and previous != expected:
+                raise ReportRecoveryStop("REPORT_INVALID")
+            self.path_prune_expectations[name] = expected
         for name in fields:
             if name not in self.allowed_fields:
                 self.allowed_fields.append(name)
@@ -145,7 +168,11 @@ def correctable_report_field(error: ArtifactContractError) -> str | None:
     if error.code == "MISSING_FIELDS" and isinstance(error.actual, list) and len(error.actual) == 1:
         candidate = error.field + "." + str(error.actual[0])
         return candidate if (_LOCAL_FIELD.fullmatch(candidate) or _PLANNER_LOCAL_FIELD.fullmatch(candidate)) else None
-    if error.code not in {"IMPACT_EVIDENCE_EMPTY", "IMPACT_SYMBOL_GENERIC", "TYPE_MISMATCH", "IMPACT_PATH_MISSING"}:
+    if error.code == "IMPACT_PATH_MISSING":
+        if not _MISSING_PATH_LEAF.fullmatch(error.field):
+            return None
+        return re.sub(r"\[\d+\]$", "", error.field)
+    if error.code not in {"IMPACT_EVIDENCE_EMPTY", "IMPACT_SYMBOL_GENERIC", "TYPE_MISMATCH"}:
         return None
     if not (_LOCAL_FIELD.fullmatch(error.field) or _PLANNER_LOCAL_FIELD.fullmatch(error.field)):
         return None
@@ -154,7 +181,7 @@ def correctable_report_field(error: ArtifactContractError) -> str | None:
     return re.sub(r"\[\d+\]$", "", error.field)
 
 
-def correction_fields(error: ArtifactContractError) -> list[str] | None:
+def correction_fields(error: ArtifactContractError, *, report: dict | None = None) -> list[str] | None:
     """One ownership policy for the whole package; unsafe siblings forbid retry."""
     diagnostics = error.diagnostics if isinstance(error, ArtifactDiagnosticBatch) else (error,)
     fields = []
@@ -171,6 +198,9 @@ def correction_fields(error: ArtifactContractError) -> list[str] | None:
                 return None
             if field not in fields:
                 fields.append(field)
+    if any(item.code == "IMPACT_PATH_MISSING" for item in diagnostics):
+        if report is None or missing_path_prune_expectations(report, error) is None:
+            return None
     return fields
 
 
@@ -198,6 +228,54 @@ def _field_value(report: dict[str, Any], field_name: str) -> Any:
     for part in re.findall(r"[^.\[\]]+", field_name):
         node = node[int(part)] if isinstance(node, list) else node[part]
     return node
+
+
+def missing_path_prune_expectations(
+    report: dict | None, error: ArtifactContractError,
+) -> dict[str, list[Any]] | None:
+    """Derive the only admissible path arrays from Controller-proven missing leaves."""
+    if report is None:
+        return None
+    diagnostics = error.diagnostics if isinstance(error, ArtifactDiagnosticBatch) else (error,)
+    missing = [item for item in diagnostics if item.code == "IMPACT_PATH_MISSING"]
+    if not missing:
+        return {}
+    indexes: dict[str, set[int]] = {}
+    for diagnostic in missing:
+        match = re.fullmatch(r"(.+)\[(\d+)\]", diagnostic.field)
+        if (diagnostic.failure_kind is not ArtifactFailureKind.LOCAL_WIRE_ERROR
+                or match is None or not _PATH_ARRAY_FIELD.fullmatch(match.group(1))):
+            return None
+        parent, raw_index = match.groups()
+        try:
+            values = _field_value(report, parent)
+            index = int(raw_index)
+            if (not isinstance(values, list) or index >= len(values)
+                    or values[index] != diagnostic.actual):
+                return None
+        except (KeyError, IndexError, TypeError, ValueError):
+            return None
+        indexes.setdefault(parent, set()).add(index)
+    expected: dict[str, list[Any]] = {}
+    for parent, removed in indexes.items():
+        values = _field_value(report, parent)
+        survivors = [copy.deepcopy(value) for index, value in enumerate(values) if index not in removed]
+        if not survivors:
+            return None
+        expected[parent] = survivors
+    return expected
+
+
+def preserves_missing_path_prunes(
+    corrected: dict, *, expectations: dict[str, list[Any]],
+) -> bool:
+    for name, expected in expectations.items():
+        try:
+            if _field_value(corrected, name) != expected:
+                return False
+        except (KeyError, IndexError, TypeError, ValueError):
+            return False
+    return True
 
 
 def preserves_evaluator_closure(original: dict, corrected: dict, *, fields: list[str]) -> bool:
@@ -247,6 +325,11 @@ def correction_prompt(error: ArtifactContractError, *, fields: list[str], role: 
         "allowed_fields": fields,
         "diagnostics": [{"code": item.code, "field": item.field} for item in
                         (error.diagnostics if isinstance(error, ArtifactDiagnosticBatch) else (error,))],
+        "missing_path_pruning": [
+            {"field": item.field, "remove_exact_value": item.actual}
+            for item in (error.diagnostics if isinstance(error, ArtifactDiagnosticBatch) else (error,))
+            if item.code == "IMPACT_PATH_MISSING"
+        ],
     }
     role_policy = (
         "Preserve diagnosis, root cause, technical contract, task alignment, impact classifications, "
@@ -258,6 +341,8 @@ def correction_prompt(error: ArtifactContractError, *, fields: list[str], role: 
         f"REPORT-ONLY CORRECTION. Return the complete corrected {role} report in this same thread.\n"
         + role_policy +
         "Do not remove/reorder findings, consumers, obligations or checks; preserve every other field. "
+        "For IMPACT_PATH_MISSING, remove only the exact diagnosed nonexistent path entries. "
+        "Do not add or replace paths, remove or reorder surviving paths, or change semantic row fields. "
         "Only clarify the identified evidence fields using the existing candidate. For documentation, "
         "real link targets or heading anchors such as README.md#usage are concrete identifiers; "
         "do not invent code symbols or drop evidence. Existing assertions and trusted verification remain mandatory.\n"

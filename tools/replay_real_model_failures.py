@@ -17,13 +17,13 @@ sys.path.insert(0, str(ROOT))
 
 from slivin_harness.checkpoint import save_report_checkpoint
 from slivin_harness.control_plane import ControllerPlane
-from slivin_harness.evaluator import detect_evaluator_claim_closure
+from slivin_harness.evaluator import detect_evaluator_claim_closure, validate_blind_audit
 from slivin_harness.protocol import ArtifactContractError, ArtifactFailureKind
-from slivin_harness.report_recovery import EvaluatorClosureCorrectionState
+from slivin_harness.report_recovery import EvaluatorClosureCorrectionState, ReportCorrectionState
 from tools.release_real_models import fixtures, verify_fixture_authorities
 
 FIXTURE_ROOT = ROOT / "tests" / "fixtures" / "real_model_liveness"
-ADAPTER_VERSION = "real-model-failure-replay.v1"
+ADAPTER_VERSION = "real-model-failure-replay.v2"
 
 
 def _fixture(name: str) -> tuple[dict, str]:
@@ -188,12 +188,82 @@ def replay_qe2() -> dict:
     return result
 
 
+def replay_qe2_missing_path() -> dict:
+    """Replay the captured PHASE_A wire through production validation/recovery."""
+    fixture, digest = _fixture("qe2_phase_a_missing_path.json")
+    report = copy.deepcopy(fixture["captured_wire"])
+    observed = fixture["observed_structure"]
+    missing_value = observed["missing_value"]
+    with tempfile.TemporaryDirectory(prefix="slivin-qe2-path-replay-") as temporary:
+        workspace = Path(temporary)
+        evidence_paths: set[str] = set(fixture["changed_paths"])
+        analysis = report["impact_analysis"]
+        for group in (
+            "changed_contracts", "affected_consumers", "not_affected_consumers",
+            "related_out_of_scope", "search_evidence",
+        ):
+            for row in analysis[group]:
+                evidence_paths.update(row.get("paths", []))
+                evidence_paths.update(row.get("evidence_paths", []))
+        for relative in sorted(evidence_paths - {missing_value}):
+            path = workspace / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("captured synthetic repository evidence\n", encoding="utf-8")
+
+        validator = lambda value: validate_blind_audit(
+            value, workspace=workspace, candidate_id=report["candidate_id"],
+            changed_paths=fixture["changed_paths"], owner_allowed_paths=[],
+        )
+        state = ReportCorrectionState()
+        initial = "UNEXPECTED_ACCEPT"
+        recovery = "NOT_ATTEMPTED"
+        fields: list[str] = []
+        try:
+            validator(report)
+        except ArtifactContractError as error:
+            initial = f"{error.failure_kind.value}:{error.code}:{error.field}"
+            state.observe(report)
+            fields = state.next_fields(error, attempt=0)
+            corrected = copy.deepcopy(report)
+            corrected["impact_analysis"]["related_out_of_scope"][1]["paths"] = list(
+                observed["surviving_paths"]
+            )
+            corrected["impact_analysis"]["related_out_of_scope"][1]["symbols"] = list(
+                observed["independently_corrected_symbols"]
+            )
+            state.observe(corrected)
+            try:
+                validator(corrected)
+            except ArtifactContractError as corrected_error:
+                recovery = (
+                    f"{corrected_error.failure_kind.value}:"
+                    f"{corrected_error.code}:{corrected_error.field}"
+                )
+            else:
+                recovery = "MISSING_PATH_PRUNE_PASS"
+    passed = (
+        initial == (
+            "LOCAL_WIRE_ERROR:IMPACT_PATH_MISSING:"
+            "impact_analysis.related_out_of_scope[1].paths[1]"
+        )
+        and fields == [
+            "impact_analysis.related_out_of_scope[1].paths",
+            "impact_analysis.related_out_of_scope[1].symbols",
+        ]
+        and recovery == fixture["expected_outcome"]
+    )
+    result = _result(fixture, digest, actual=recovery, passed=passed)
+    result["initial_outcome"] = initial
+    result["allowed_fields"] = fields
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    results = [replay_qe1(), replay_qs1(), replay_qe2()]
+    results = [replay_qe1(), replay_qs1(), replay_qe2(), replay_qe2_missing_path()]
     passed = all(row["status"] == "PASS" for row in results)
     summary = {
         "schema_version": ADAPTER_VERSION,
