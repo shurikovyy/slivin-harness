@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import os
 import copy
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from slivin_harness.app_server import CodexAppServer, TurnTimeoutError
 from slivin_harness.execution import ExecutionBroker, ExecutionRole, ScopedExecutionPolicyError
@@ -146,6 +150,86 @@ class ScopedRoleAppServerTests(unittest.TestCase):
 
 
 class AppServerTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows cmd/batch argv transport")
+    def test_windows_cmd_launcher_preserves_toml_literal_model_overrides(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="slivin-codex-argv-") as temporary:
+            root = Path(temporary)
+            launcher = root / "codex-capture.cmd"
+            capture_script = root / "capture_argv.py"
+            capture_script.write_text(
+                "import json, os, pathlib, sys\n"
+                "pathlib.Path(os.environ['SLIVIN_CODEX_ARGV_CAPTURE']).write_text("
+                "json.dumps(sys.argv[1:]), encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            launcher.write_text(
+                "@echo off\r\n"
+                ">\"%SLIVIN_CODEX_RAW_CAPTURE%\" echo(%*\r\n"
+                "\"%SLIVIN_CODEX_CAPTURE_PYTHON%\" "
+                "\"%SLIVIN_CODEX_CAPTURE_SCRIPT%\" %*\r\n"
+                "exit /b %errorlevel%\r\n",
+                encoding="utf-8",
+                newline="",
+            )
+
+            def execute(server: CodexAppServer, name: str) -> tuple[list[str], str]:
+                capture = root / f"{name}.argv.json"
+                raw_capture = root / f"{name}.raw.txt"
+                environment = dict(
+                    os.environ,
+                    SLIVIN_CODEX_ARGV_CAPTURE=str(capture),
+                    SLIVIN_CODEX_RAW_CAPTURE=str(raw_capture),
+                    SLIVIN_CODEX_CAPTURE_PYTHON=sys.executable,
+                    SLIVIN_CODEX_CAPTURE_SCRIPT=str(capture_script),
+                )
+                subprocess.run(
+                    server._command(), cwd=root, env=environment,
+                    check=True, timeout=30,
+                )
+                return (
+                    json.loads(capture.read_text(encoding="utf-8")),
+                    raw_capture.read_text(encoding="utf-8"),
+                )
+
+            for model, effort in (
+                ("gpt-5.6-terra", "medium"),
+                ("gpt-5.6-sol", "high"),
+            ):
+                with self.subTest(model=model, effort=effort):
+                    server = CodexAppServer(
+                        launcher, model=model, model_reasoning_effort=effort,
+                    )
+                    received, raw = execute(server, model)
+                    self.assertEqual(received, [
+                        "app-server", "--strict-config",
+                        "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+                        "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+                        "-c", f"model='{model}'",
+                        "-c", f"model_reasoning_effort='{effort}'",
+                        "--stdio",
+                    ])
+                    self.assertIn(f"model='{model}'", raw)
+                    self.assertIn(f"model_reasoning_effort='{effort}'", raw)
+                    self.assertNotIn('\\"', raw)
+
+                    legacy = (
+                        f'model="{model}"',
+                        f'model_reasoning_effort="{effort}"',
+                    )
+                    with mock.patch(
+                        "slivin_harness.app_server.codex_config_overrides",
+                        return_value=legacy,
+                    ):
+                        legacy_received, legacy_raw = execute(
+                            CodexAppServer(
+                                launcher, model=model,
+                                model_reasoning_effort=effort,
+                            ),
+                            model + "-legacy",
+                        )
+                    self.assertNotEqual(legacy_received, received)
+                    self.assertIn('\\"', legacy_raw)
+
     def test_approval_requests_are_declined(self) -> None:
         server = CodexAppServer(Path("codex"))
         sent: list[dict] = []
@@ -331,10 +415,15 @@ class AppServerTests(unittest.TestCase):
     def test_non_windows_command_is_direct(self) -> None:
         if os.name == "nt":
             self.skipTest("POSIX-specific command shape")
-        server = CodexAppServer(Path("/tmp/codex"))
+        server = CodexAppServer(
+            Path("/tmp/codex"), model="gpt-5.6-terra",
+            model_reasoning_effort="medium",
+        )
         command = server._command()
         self.assertEqual(command[0], "/tmp/codex")
         self.assertIn("app-server", command)
+        self.assertIn("model='gpt-5.6-terra'", command)
+        self.assertIn("model_reasoning_effort='medium'", command)
         self.assertIn("--stdio", command)
 
 

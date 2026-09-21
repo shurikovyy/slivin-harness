@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `0.8.0a38` makes Controller-owned Codex `model` and
+  `model_reasoning_effort` overrides safe through the native Windows
+  `list2cmdline → cmd.exe /c → .cmd` launch chain. Overrides use validated TOML
+  literal strings, so batch transport cannot turn embedded double quotes into
+  `\"` model-name material or split/truncate the semantic value.
+- A Windows-only regression now executes a disposable `.cmd`, captures its raw
+  `%*`, forwards it to a child argv recorder, and proves exact Terra/medium and
+  Sol/high values. The legacy double-quoted representation remains a negative
+  control. Qualification profiles, case sets and release eligibility are unchanged.
 - `0.8.0a37` introduces explicit `dev` and `release` qualification profiles.
   Both retain every deterministic gate and mandatory native-role acceptance while
   pinning model identity through Controller-owned Codex CLI overrides. Dev runs only

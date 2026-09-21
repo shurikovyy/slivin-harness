@@ -217,6 +217,10 @@ model/effort поля обязательны в каждом real-model case sum
 `codex.cmd`, фактически выбранный им Node, `codex.js`, package metadata,
 native vendor payload со всеми helpers и command processor. Resolution и hashes
 повторяются после прогона; неизвестный wrapper не получает qualification.
+На Windows Controller кодирует `model` и `model_reasoning_effort` как validated
+TOML literal strings (`model='…'`). Deterministic argv test проходит настоящий
+`subprocess.list2cmdline → cmd.exe /c → disposable .cmd → child executable`, отдельно
+фиксирует raw `%*` и final child argv и запрещает `\"`, split или truncation.
 Native summary связывает hashes launch requests, role contexts и actual canary
 results с этой сборкой. Изменение sources/executables во время прогона
 запрещает RELEASE_QUALIFIED. Обязательный NOT_RUN/SKIP/FAIL запрещает qualification.

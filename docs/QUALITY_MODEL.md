@@ -1,4 +1,4 @@
-# Модель качества Slivin Harness 0.8.0a37 — Phase 7
+# Модель качества Slivin Harness 0.8.0a38 — Phase 7
 
 Квалификация сборки требует safety и завершения корректных задач. Единый
 [release gate](SYSTEMIC_RELIABILITY.md) выполняет boundary families, stateful faults,

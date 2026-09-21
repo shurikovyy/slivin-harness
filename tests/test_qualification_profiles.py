@@ -7,6 +7,7 @@ import task_runner
 from slivin_harness.app_server import CodexAppServer
 from slivin_harness.qualification import (
     REAL_MODEL_CASES,
+    codex_config_overrides,
     qualification_profile,
     validate_real_model_selection,
 )
@@ -110,6 +111,16 @@ class QualificationProfileTests(unittest.TestCase):
         self.assertIn("gpt-5.6-terra", command)
         self.assertIn("model_reasoning_effort", command)
         self.assertNotIn("ambient-model", command)
+
+    def test_model_overrides_use_transport_safe_toml_literals(self):
+        self.assertEqual(
+            codex_config_overrides("gpt-5.6-terra", "medium"),
+            ("model='gpt-5.6-terra'", "model_reasoning_effort='medium'"),
+        )
+        self.assertEqual(
+            codex_config_overrides("gpt-5.6-sol", "high"),
+            ("model='gpt-5.6-sol'", "model_reasoning_effort='high'"),
+        )
 
     def test_direct_selection_contract_rejects_profile_drift(self):
         self.assertTrue(validate_real_model_selection(

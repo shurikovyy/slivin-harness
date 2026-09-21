@@ -264,6 +264,10 @@ feedback используется `--qualification dev`: deterministic/native st
 обязательными, но real-model driver запускает только `expiry-1` с
 `gpt-5.6-terra`/`medium` и fail-fast. `DEV_QUALIFICATION_PASS` не является
 `RELEASE_QUALIFIED`; global `~/.codex/config.toml` не изменяется.
+Controller передаёт обе настройки как TOML literal CLI overrides. Это намеренно
+избегает embedded double quotes: Windows launch идёт через
+`subprocess.list2cmdline → cmd.exe /c → codex.cmd`, и deterministic regression
+проверяет exact final child argv для обоих qualification profiles.
 Peer checks also target the granted scratch of another active role in both directions;
 an ungranted sibling directory alone does not prove per-thread isolation.
 Continuations check the same policy; fresh Planner follows scratch cleanup. Existing

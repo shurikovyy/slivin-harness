@@ -1315,7 +1315,7 @@
       }
     ]
   },
-  "harness_version": "0.8.0a37",
+  "harness_version": "0.8.0a38",
   "phase": "phase7-final-gate-delivery-benchmark",
   "controller_foundation": {
     "control_plane": "controller-plane.v1",

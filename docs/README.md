@@ -1,6 +1,6 @@
-# Документация Slivin Harness 0.8.0a37
+# Документация Slivin Harness 0.8.0a38
 
-Актуальная версия: **0.8.0a37 — Explicit Qualification Profiles**.
+Актуальная версия: **0.8.0a38 — Windows Codex Model Override Transport**.
 
 Основные документы:
 

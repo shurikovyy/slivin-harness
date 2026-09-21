@@ -93,9 +93,9 @@ def validate_real_model_selection(
 
 
 def codex_config_overrides(model: str, effort: str) -> tuple[str, ...]:
-    """Exact TOML CLI overrides; ambient user config cannot replace them."""
+    """Exact TOML literal overrides safe through Windows cmd/batch argv transport."""
     validate_model_identity(model, effort)
     return (
-        f'model="{model}"',
-        f'model_reasoning_effort="{effort}"',
+        f"model='{model}'",
+        f"model_reasoning_effort='{effort}'",
     )

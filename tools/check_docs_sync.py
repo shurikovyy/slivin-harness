@@ -57,7 +57,11 @@ from slivin_harness.protocol import (
     MANIFEST_VERSION,
     PLANNER_PROTOCOL_VERSION,
 )
-from slivin_harness.qualification import REAL_MODEL_CASES, qualification_profile
+from slivin_harness.qualification import (
+    REAL_MODEL_CASES,
+    codex_config_overrides,
+    qualification_profile,
+)
 from task_runner import (
     load_manifest,
     split_checks,
@@ -122,7 +126,7 @@ def _check_one_h1(path: Path) -> None:
 
 
 def main() -> int:
-    _assert(__version__ == "0.8.0a37", f"Unexpected Harness version: {__version__}")
+    _assert(__version__ == "0.8.0a38", f"Unexpected Harness version: {__version__}")
     _assert(MANIFEST_VERSION == 2, f"Unexpected manifest version: {MANIFEST_VERSION}")
     _assert(PLANNER_PROTOCOL_VERSION == "planner.v6", PLANNER_PROTOCOL_VERSION)
     _assert(IMPLEMENTATION_CONTRACT_VERSION == "implementation-contract.v4", IMPLEMENTATION_CONTRACT_VERSION)
@@ -174,6 +178,11 @@ def main() -> int:
             release_qualification.release_qualifying,
         ) == ("gpt-5.6-sol", "high", REAL_MODEL_CASES, False, True),
         "Release qualification profile drifted",
+    )
+    _assert(
+        codex_config_overrides("gpt-5.6-terra", "medium")
+        == ("model='gpt-5.6-terra'", "model_reasoning_effort='medium'"),
+        "Codex model overrides must use Windows cmd-safe TOML literals",
     )
     validate_workflow_definition()
 
@@ -249,7 +258,7 @@ def main() -> int:
         for path in [ROOT / "README.md", docs_dir / "ARCHITECTURE.md", docs_dir / "QUALITY_MODEL.md"]
     )
     for marker in (
-        "0.8.0a37",
+        "0.8.0a38",
         "version = 2",
         "task-contract.v1",
         "planner.v6",

@@ -68,7 +68,7 @@
 | [D-031](#d-031) | Controller владеет opaque native probe configuration и bounded command recovery | IMPLEMENTED в 0.8.0a34; native/full qualification конкретного SHA ещё требуется |
 | [D-032](#d-032) | Boundary identity принадлежит source tree; model executables проходят exact boot | IMPLEMENTED в 0.8.0a35; native/full qualification конкретного SHA ещё требуется |
 | [D-033](#d-033) | Claim closure, checkpoint evidence и qualification authority разделены по ownership | IMPLEMENTED в 0.8.0a36; full qualification конкретного SHA ещё требуется |
-| [D-034](#d-034) | Qualification mode и model identity принадлежат Controller | IMPLEMENTED в 0.8.0a37; full qualification конкретного SHA ещё требуется |
+| [D-034](#d-034) | Qualification mode и model identity принадлежат Controller | IMPLEMENTED в 0.8.0a37; Windows `.cmd` transport исправлен в 0.8.0a38; full qualification конкретного SHA ещё требуется |
 
 <a id="d-001"></a>
 
@@ -1238,8 +1238,9 @@ semantics и отдельными regressions на каждую unrelated region
 
 ## D-034. Qualification mode и model identity принадлежат Controller
 
-**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в `0.8.0a37`; full qualification
-этого SHA ещё не выполнялась. **Дата регистрации:** 2026-09-18.
+**Статус:** ACCEPTED. **Реализация:** IMPLEMENTED в `0.8.0a37`; Windows `.cmd`
+transport исправлен в `0.8.0a38`; full qualification этого SHA ещё не выполнялась.
+**Дата регистрации:** 2026-09-18. **Последнее уточнение:** 2026-09-21.
 **Связанные решения:** D-013, D-030, D-032, D-033.
 
 **Проблема и проверенные основания.** Единственный прежний real-model driver всегда
@@ -1259,7 +1260,13 @@ suspension-1, expiry-2 в прежнем порядке и продолжает 
 только он может выдать `RELEASE_QUALIFIED`.
 
 Selected model/effort передаются каждому qualification App Server как exact Codex CLI
-`-c` overrides. Real-model fixture config переносит ту же identity во вложенный
+`-c` overrides. На Windows значения кодируются как validated TOML literal strings,
+потому что basic strings с embedded double quotes превращаются `list2cmdline` в
+backslash-escaped material, которое `.cmd` boundary не обязано интерпретировать как
+C-runtime argv. Native regression выполняет exact
+`Python → list2cmdline → cmd.exe /c → disposable .cmd → child argv recorder` и
+проверяет raw `%*`, отсутствие `\"`, splitting и truncation для обоих profiles.
+Real-model fixture config переносит ту же identity во вложенный
 `task_runner`; global `~/.codex/config.toml` не читается как qualification authority и
 не изменяется. Top-level и per-case evidence связывают mode, model, effort, Codex
 version, requested/executed cases, fail-fast и release eligibility. Несовпадение
@@ -1279,7 +1286,7 @@ replays, entrypoint boot, три release fixtures, их independent validation �
 Matrix/hidden semantics не изменены. Direct real-model tool допускает explicit focused
 selection, но такой run machine-readably non-release. Deterministic tests фиксируют
 profile commands, CLI overrides, fail-fast, evidence identity и запрет release при
-любом missing/failed mandatory case. `0.8.0a37` не является заявлением
+любом missing/failed mandatory case. `0.8.0a38` не является заявлением
 `RELEASE_QUALIFIED`.
 
 **Пересмотр.** Model или effort меняются только новым Controller decision вместе с
