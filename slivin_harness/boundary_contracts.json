@@ -634,7 +634,7 @@
         "BLOCKED",
         "INVALID_STOP"
       ],
-      "recovery_contract": "Unknown/incompatible origin_ref may receive bounded exact-field correction only when a valid replacement exists. A status-compatible negative disposition with omitted final finding receives one separate claim-preserving closure turn: status, dispositions, origins, matches, reasons, coverage, existing findings and candidate are frozen; only appended material findings and exact finding_ids bindings are allowed. PASS plus a negative disposition, semantic drift, repeated/no-progress closure and integrity/catalog failures hard-stop.",
+      "recovery_contract": "Unknown/incompatible origin_ref may receive bounded exact-field correction only when a valid replacement exists. A negative disposition with omitted final finding receives one separate claim-preserving closure turn: Controller requires FINDINGS for implementation defects and REPLAN_REQUIRED for blind contract MATERIAL_GAP/MODEL_CONFLICT; dispositions, origins, matches, reasons, coverage, existing findings and candidate are frozen; only the prescribed status, appended material findings and exact finding_ids bindings are allowed. Unsupported findings, semantic drift, repeated/no-progress closure and integrity/catalog failures hard-stop.",
       "checkpoint_contract": "Persist A before B; validated B/current origin is stored before expansion; obsolete evaluations cannot mint current handoff.",
       "families": {
         "input": {
@@ -677,7 +677,8 @@
           "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_corrects_unknown_origin_ref_in_one_bounded_turn",
           "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_claim_closure_adds_finding_without_changing_semantics",
           "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_phase_b_claim_closure_rejects_semantic_mutation_and_repetition",
-          "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_pass_with_negative_disposition_is_hard_semantic_failure_without_correction",
+          "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_pass_with_negative_disposition_routes_to_findings_closure",
+          "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_pass_with_contract_conflict_routes_only_to_replan",
             "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_zero_origin_row_is_semantic_not_impossible_local_correction",
             "test_evaluator_impact_challenge.EvaluatorImpactChallengeTests.test_origin_ref_correction_cannot_change_semantic_conclusion"
           ],
