@@ -176,7 +176,7 @@ def main() -> int:
             release_qualification.real_model_cases,
             release_qualification.fail_fast,
             release_qualification.release_qualifying,
-        ) == ("gpt-5.6-sol", "high", REAL_MODEL_CASES, False, True),
+        ) == ("gpt-5.6-terra", "medium", REAL_MODEL_CASES, True, True),
         "Release qualification profile drifted",
     )
     _assert(

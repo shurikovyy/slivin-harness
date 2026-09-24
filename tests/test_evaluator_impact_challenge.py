@@ -830,20 +830,33 @@ class EvaluatorImpactChallengeTests(unittest.TestCase):
                         run_name="claim-closure-reject-" + str(id(corrected)),
                     )
 
-    def test_pass_with_negative_disposition_is_hard_semantic_failure_without_correction(self):
+    def test_pass_with_negative_disposition_routes_to_findings_closure(self):
         self.negative("blind_consumer_dispositions", "MISSING")
+        corrected = copy.deepcopy(self.verdict)
         self.verdict["status"] = "PASS"
         self.verdict["findings"] = []
         self.verdict["impact_challenge"]["blind_consumer_dispositions"][0]["finding_ids"] = []
         turns = []
-        with self.assertRaises(ArtifactContractError) as raised:
-            self.run_phases(
-                responses=[self.audit, self.verdict], run_name="pass-negative-hard-fail",
-                observer=lambda turn, _options: turns.append(turn),
-            )
-        self.assertEqual(raised.exception.code, "PASS_WITH_NEGATIVE_DISPOSITION")
-        self.assertIs(raised.exception.failure_kind, ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT)
-        self.assertEqual(turns, [1, 2])
+        _, _, (_, admitted) = self.run_phases(
+            responses=[self.audit, self.verdict, corrected], run_name="pass-negative-closure",
+            observer=lambda turn, _options: turns.append(turn),
+        )
+        self.assertEqual(admitted["status"], "FINDINGS")
+        self.assertEqual(admitted["impact_challenge"]["blind_consumer_dispositions"][0]["disposition"], "MISSING")
+        self.assertEqual(turns, [1, 2, 3])
+
+    def test_pass_with_contract_conflict_routes_only_to_replan(self):
+        self.negative("blind_contract_dispositions", "MATERIAL_GAP")
+        corrected = copy.deepcopy(self.verdict)
+        self.verdict["status"] = "PASS"
+        self.verdict["findings"] = []
+        self.verdict["impact_challenge"]["blind_contract_dispositions"][0]["finding_ids"] = []
+        _, _, (_, admitted) = self.run_phases(
+            responses=[self.audit, self.verdict, corrected], run_name="pass-contract-closure",
+        )
+        self.assertEqual(admitted["status"], "REPLAN_REQUIRED")
+        self.assertEqual(admitted["impact_challenge"]["blind_contract_dispositions"][0]["disposition"], "MATERIAL_GAP")
+        self.assertEqual(admitted["candidate_id"], self.candidate_id)
 
     def test_implementer_discoveries_require_independent_dispositions(self):
         row = copy.deepcopy(self.impact["post_patch_impact"]["in_scope_consumers"][0])

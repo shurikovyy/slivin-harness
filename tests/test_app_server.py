@@ -10,11 +10,57 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from slivin_harness.app_server import CodexAppServer, TurnTimeoutError
+from slivin_harness.app_server import (
+    CodexAppServer, TurnTimeoutError, _is_useful_turn_event,
+)
 from slivin_harness.execution import ExecutionBroker, ExecutionRole, ScopedExecutionPolicyError
 
 
 class ScopedRoleAppServerTests(unittest.TestCase):
+    def test_transport_noise_does_not_count_as_current_turn_progress(self) -> None:
+        for method, params in (
+            ("item/agentMessage/delta", {"threadId": "thread-1", "turnId": "turn-1", "delta": ""}),
+            ("item/agentMessage/delta", {"threadId": "thread-other", "turnId": "turn-1", "delta": "text"}),
+            ("item/started", {"threadId": "thread-1", "turnId": "turn-other", "item": {"type": "commandExecution"}}),
+            ("error", {"threadId": "thread-1", "turnId": "turn-1", "willRetry": True}),
+            ("notification/unknown", {"threadId": "thread-1", "turnId": "turn-1"}),
+            ("turn/completed", {"threadId": "thread-1", "turnId": "turn-1", "turn": {"id": "turn-1", "status": "interrupted"}}),
+        ):
+            with self.subTest(method=method, params=params):
+                self.assertFalse(_is_useful_turn_event(
+                    method, params, thread_id="thread-1", turn_id="turn-1",
+                ))
+        self.assertTrue(_is_useful_turn_event(
+            "item/agentMessage/delta",
+            {"threadId": "thread-1", "turnId": "turn-1", "delta": "progress"},
+            thread_id="thread-1", turn_id="turn-1",
+        ))
+
+    def test_qualification_wall_limit_interrupts_despite_transport_noise(self) -> None:
+        server = CodexAppServer(Path("codex"), max_turn_duration_seconds=1200)
+        server.request = lambda method, params, **kwargs: {"turn": {"id": "turn-wall"}}
+        server._ensure_alive = lambda **kwargs: None
+        clock = [0.0]
+        interrupts = []
+        server._interrupt_turn = lambda **kwargs: interrupts.append(kwargs)
+        receives = [
+            {"method": "notification/unknown", "params": {"threadId": "other", "turnId": "other"}},
+            None,
+        ]
+        def receive(_timeout):
+            clock[0] += 1210 if len(receives) == 2 else 20
+            return receives.pop(0)
+        server._receive_raw_optional = receive
+        with mock.patch("slivin_harness.app_server.time.monotonic", side_effect=lambda: clock[0]):
+            with self.assertRaises(TurnTimeoutError) as raised:
+                server.run_turn(
+                    thread_id="thread-1", prompt="qualification", timeout=5000,
+                    heartbeat_interval=0,
+                )
+        self.assertEqual(raised.exception.stop_reason, "QUALIFICATION_TURN_WALL_LIMIT")
+        self.assertIsNone(raised.exception.last_useful_event_at)
+        self.assertEqual(len(interrupts), 1)
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="slivin-scoped-wire-")
         self.addCleanup(temporary.cleanup)

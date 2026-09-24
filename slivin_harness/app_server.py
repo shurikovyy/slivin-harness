@@ -13,6 +13,12 @@ from pathlib import Path
 class TurnTimeoutError(RuntimeError):
     """A Codex turn exceeded the Harness deadline and was interrupted."""
 
+    def __init__(self, message: str, *, stop_reason: str = "INACTIVITY_TIMEOUT",
+                 last_useful_event_at: str | None = None) -> None:
+        super().__init__(message)
+        self.stop_reason = stop_reason
+        self.last_useful_event_at = last_useful_event_at
+
 from typing import Callable
 
 from slivin_harness.output_schema import validate_strict_output_schema
@@ -40,6 +46,32 @@ def _phase4_inactivity_expired(
     )
 
 
+def _event_matches_current_turn(params: dict, *, thread_id: str, turn_id: str) -> bool:
+    event_thread = params.get("threadId")
+    event_turn = params.get("turnId")
+    return ((event_thread is None or str(event_thread) == thread_id)
+            and (event_turn is None or str(event_turn) == turn_id))
+
+
+def _is_useful_turn_event(method: object, params: object, *, thread_id: str,
+                          turn_id: str) -> bool:
+    if not isinstance(params, dict) or not _event_matches_current_turn(
+        params, thread_id=thread_id, turn_id=turn_id,
+    ):
+        return False
+    if method in {"item/started", "item/completed"}:
+        item = params.get("item")
+        return (isinstance(item, dict)
+                and (method != "item/started" or item.get("type") != "agentMessage"))
+    if method == "item/agentMessage/delta":
+        return isinstance(params.get("delta"), str) and bool(params["delta"])
+    if method == "turn/completed":
+        turn = params.get("turn")
+        return (isinstance(turn, dict) and str(turn.get("id")) == turn_id
+                and turn.get("status") == "completed")
+    return False
+
+
 class CodexAppServer:
     """Small synchronous JSON-RPC client for Codex App Server.
 
@@ -61,6 +93,7 @@ class CodexAppServer:
         execution_broker: ExecutionBroker | None = None,
         model: str | None = None,
         model_reasoning_effort: str | None = None,
+        max_turn_duration_seconds: float | None = None,
     ) -> None:
         if (model is None) != (model_reasoning_effort is None):
             raise ValueError("Codex model and reasoning effort must be supplied together")
@@ -76,6 +109,11 @@ class CodexAppServer:
         self.execution_broker = execution_broker
         self.model = model
         self.model_reasoning_effort = model_reasoning_effort
+        configured_turn_limit = os.environ.get("SLIVIN_QUALIFICATION_MAX_TURN_SECONDS")
+        self.max_turn_duration_seconds = (
+            float(max_turn_duration_seconds) if max_turn_duration_seconds is not None
+            else float(configured_turn_limit) if configured_turn_limit else None
+        )
         self._role_contexts: dict[str, RoleExecutionContext] = {}
         self._retired_threads: set[str] = set()
 
@@ -480,8 +518,12 @@ class CodexAppServer:
             raise
         started = time.monotonic()
         last_real_activity = started
+        last_useful_event_at: str | None = None
         inactivity_timeout = max(0.0, float(timeout))
         emergency_deadline = started + 7 * 24 * 60 * 60  # phase4 emergency ceiling
+        turn_deadline = (started + self.max_turn_duration_seconds
+                         if self.max_turn_duration_seconds is not None else None)
+        stop_reason: str | None = None
         next_heartbeat = started + heartbeat_interval
         final_messages: list[str] = []
         fallback_messages: list[str] = []
@@ -502,12 +544,20 @@ class CodexAppServer:
                 active_tools=len(active_tool_ids),
             )
             emergency_expired = now >= emergency_deadline
-            if not interrupted and (inactive or emergency_expired):
+            wall_expired = turn_deadline is not None and now >= turn_deadline
+            if not interrupted and (inactive or emergency_expired or wall_expired):
                 interrupted = True
+                stop_reason = ("QUALIFICATION_TURN_WALL_LIMIT" if wall_expired
+                               else "EMERGENCY_TURN_LIMIT" if emergency_expired
+                               else "INACTIVITY_TIMEOUT")
                 self._interrupt_turn(thread_id=thread_id, turn_id=turn_id)
                 interrupt_deadline = now + 15
             elif interrupted and interrupt_deadline is not None and now >= interrupt_deadline:
-                raise TurnTimeoutError(f"Turn timeout after interrupt: {turn_id}")
+                raise TurnTimeoutError(
+                    f"Turn stopped ({stop_reason}) after interrupt: {turn_id}",
+                    stop_reason=stop_reason or "INACTIVITY_TIMEOUT",
+                    last_useful_event_at=last_useful_event_at,
+                )
 
             self._ensure_alive(operation=f"turn {turn_id}")
             if interrupted and interrupt_deadline is not None:
@@ -533,29 +583,41 @@ class CodexAppServer:
             if message is None:
                 continue
 
-            # Any received App Server message is real activity. Controller heartbeat
-            # output is produced above and deliberately does not update this timestamp.
-            last_real_activity = now
+            # Transport receipt is observable, but only useful progress in this
+            # thread/turn advances the inactivity watchdog.
             if "id" in message and "method" in message:
                 self._answer_server_request(message)
                 continue
 
             method = message.get("method")
             params = message.get("params", {})
+            belongs_to_turn = isinstance(params, dict) and _event_matches_current_turn(
+                params, thread_id=thread_id, turn_id=turn_id,
+            )
+            useful = _is_useful_turn_event(
+                method, params, thread_id=thread_id, turn_id=turn_id,
+            )
             if method == "item/started":
                 item = params.get("item", {})
-                if isinstance(item, dict) and item.get("type") != "agentMessage":
+                if useful and isinstance(item, dict):
                     active_tool_ids.add(tool_key(item))
+                if useful:
+                    last_real_activity = now
+                    last_useful_event_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 continue
             if method == "item/agentMessage/delta":
                 delta = str(params.get("delta", ""))
-                if delta and on_delta:
+                if useful and delta and on_delta:
                     on_delta(delta)
+                if useful:
+                    last_real_activity = now
+                    last_useful_event_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 continue
             if method == "item/completed":
                 item = params.get("item", {})
-                if isinstance(item, dict):
-                    active_tool_ids.discard(tool_key(item))
+                if useful and isinstance(item, dict):
+                    if belongs_to_turn:
+                        active_tool_ids.discard(tool_key(item))
                     if item.get("type") == "agentMessage":
                         text = item.get("text")
                         if text:
@@ -563,6 +625,9 @@ class CodexAppServer:
                             target.append(str(text))
                         if on_message_end:
                             on_message_end()
+                if useful:
+                    last_real_activity = now
+                    last_useful_event_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 continue
             if method == "error":
                 error_thread_id = str(params.get("threadId") or "")
@@ -588,9 +653,17 @@ class CodexAppServer:
                 continue
             status = str(turn.get("status"))
             if interrupted or status == "interrupted":
-                raise TurnTimeoutError(f"Turn interrupted after inactivity timeout: {turn_id}")
+                reason = stop_reason or "INACTIVITY_TIMEOUT"
+                print(f"APP_SERVER_STOP_REASON: {reason}")
+                print(f"APP_SERVER_LAST_USEFUL_EVENT_AT: {last_useful_event_at or 'UNKNOWN'}")
+                raise TurnTimeoutError(
+                    f"Turn stopped ({reason}): {turn_id}", stop_reason=reason,
+                    last_useful_event_at=last_useful_event_at,
+                )
             if status != "completed":
                 raise RuntimeError(f"Turn finished with status {status}: {turn}")
+            last_real_activity = now
+            last_useful_event_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             if final_messages:
                 return final_messages[-1]
             if fallback_messages:

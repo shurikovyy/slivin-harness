@@ -124,8 +124,12 @@ sharing/access violations с bounded budget. Ambiguous completed replace све�
 `--qualification dev` выполняет те же deterministic stages и обязательный
 `native_roles`, затем только `expiry-1` с `gpt-5.6-terra`/`medium` и fail-fast.
 Его успешный статус — `DEV_QUALIFICATION_PASS`; он никогда не означает
-`RELEASE_QUALIFIED`. `release` pin-ит `gpt-5.6-sol`/`high`, запускает все три cases
-и только он может выдать `RELEASE_QUALIFIED`.
+`RELEASE_QUALIFIED`. `release` pin-ит `gpt-5.6-terra`/`medium`, запускает
+expiry-1 → suspension-1 → expiry-2 и останавливается после первого неуспеха;
+неисполненные cases фиксируются как `NOT_RUN`. На квалификационном профиле один
+model turn ограничен 20 минутами, synthetic case — 45 минутами. Только прошедший
+весь профиль может выдать `RELEASE_QUALIFIED`. Прежнее `gpt-5.6-sol`/`high` evidence сохраняется
+как история и не квалифицирует поддерживаемую связку.
 Default evidence root и внутренние имена FULL workspaces ограничены по длине; перед
 model turns gate вычисляет фактический Windows path budget для physical `node_modules`
 и завершает этап типизированным FAIL, если безопасного запаса нет.

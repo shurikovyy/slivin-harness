@@ -429,11 +429,12 @@ def detect_evaluator_claim_closure(evaluation: Mapping[str, Any]) -> None:
                 continue
             field = f"impact_challenge.{group}[{index}].finding_ids"
             if evaluation.get("status") == EvaluatorStatus.PASS.value:
-                _model_conflict(
-                    "PASS_WITH_NEGATIVE_DISPOSITION", field=f"impact_challenge.{group}[{index}]",
-                    message="Evaluator PASS forbids negative impact dispositions",
-                    actual=row.get("disposition"),
-                )
+                diagnostics.append(ArtifactContractError(
+                    code="PASS_WITH_NEGATIVE_DISPOSITION", field="status",
+                    message="Evaluator PASS forbids negative impact dispositions; a bounded closure may correct status",
+                    expected=_negative_closure_status(evaluation), actual="PASS",
+                    failure_kind=ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE,
+                ))
             finding_ids = row.get("finding_ids")
             if finding_ids == []:
                 diagnostics.append(ArtifactContractError(
@@ -456,6 +457,15 @@ def detect_evaluator_claim_closure(evaluation: Mapping[str, Any]) -> None:
                 ))
     if diagnostics:
         raise ArtifactDiagnosticBatch(diagnostics)
+
+
+def _negative_closure_status(evaluation: Mapping[str, Any]) -> str:
+    """Controller-selected status implied by immutable negative dispositions."""
+    challenge = evaluation.get("impact_challenge", {})
+    for row in challenge.get("blind_contract_dispositions", []):
+        if row.get("disposition") in {"MATERIAL_GAP", "MODEL_CONFLICT"}:
+            return EvaluatorStatus.REPLAN_REQUIRED.value
+    return EvaluatorStatus.FINDINGS.value
 
 
 def evaluator_failure_record(
@@ -989,9 +999,6 @@ def validate_impact_challenge(
             if negative and not finding_ids:
                 _model_conflict("NEGATIVE_WITHOUT_FINDING", field=f"impact_challenge.{group}.finding_ids",
                                 message="Every negative impact disposition requires a corresponding final finding")
-            if negative and evaluation["status"] == EvaluatorStatus.PASS.value:
-                _model_conflict("PASS_WITH_NEGATIVE_DISPOSITION", field=f"impact_challenge.{group}",
-                                message="Evaluator PASS forbids negative impact dispositions")
             if (
                 group == "blind_contract_dispositions"
                 and row["disposition"] in {"MATERIAL_GAP", "MODEL_CONFLICT"}
@@ -1208,7 +1215,6 @@ def run_evaluator(
                 closure_correctable = (
                     phase == "PHASE_B"
                     and error.failure_kind is ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE
-                    and report.get("status") != EvaluatorStatus.PASS.value
                 )
                 if on_artifact_failure is not None:
                     on_artifact_failure(phase, attempt, evaluator_failure_record(

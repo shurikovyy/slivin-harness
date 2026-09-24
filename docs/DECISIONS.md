@@ -69,6 +69,7 @@
 | [D-032](#d-032) | Boundary identity принадлежит source tree; model executables проходят exact boot | IMPLEMENTED в 0.8.0a35; native/full qualification конкретного SHA ещё требуется |
 | [D-033](#d-033) | Claim closure, checkpoint evidence и qualification authority разделены по ownership | IMPLEMENTED в 0.8.0a36; full qualification конкретного SHA ещё требуется |
 | [D-034](#d-034) | Qualification mode и model identity принадлежат Controller | IMPLEMENTED в 0.8.0a37; Windows `.cmd` transport исправлен в 0.8.0a38; full qualification конкретного SHA ещё требуется |
+| [D-035](#d-035) | Отрицательное решение Evaluator и ограничение release профиля | IMPLEMENTED; проверка конкретного SHA ещё требуется |
 
 <a id="d-001"></a>
 
@@ -1310,6 +1311,58 @@ profile commands, CLI overrides, fail-fast, evidence identity и запрет re
 **Пересмотр.** Model или effort меняются только новым Controller decision вместе с
 evidence identity и regression update. Дополнительный dev case не становится release
 substitute; изменение трёх-case release set требует отдельного material review.
+
+<a id="d-035"></a>
+
+## D-035. Сохранять отрицательное решение и ограничить первый release профиль
+
+**Статус:** ACCEPTED. **Реализация:** реализовано в текущем candidate; offline и
+реальная qualification этого SHA ещё требуются. **Дата регистрации:** 2026-09-24.
+**Заменяет:** профиль `release` из D-034; не меняет исторические Sol/high результаты.
+**Связанные решения:** D-006, D-019, D-020, D-021, D-027, D-033, D-034.
+
+**Проблема и проверенные основания.** Текущий Phase-B admission отвергал
+`PASS_WITH_NEGATIVE_DISPOSITION` как semantic hard failure, хотя уже существует
+bounded claim-closure route. Qualification `release` pin-ил Sol/high и продолжал
+все cases после неуспеха; один App Server turn мог продолжаться бесконечно при
+частом transport activity, а synthetic case использовал 9000-секундный timeout.
+Записи `shr-q-ff7501d0f2` и `shr-q-45c32ee172` дают профильные observations только
+для своих SHA и не доказывают причину expiry-2 timeout.
+
+**Решение и rationale.** Отрицательные disposition, reason, origins/matches,
+blind findings и candidate замораживаются. Если Phase B выдал PASS, Controller
+разрешает ровно один closure turn: только добавление material findings и точное
+связывание `finding_ids`; status может измениться только на `FINDINGS`, либо на
+`REPLAN_REQUIRED` при уже заявленном blind contract `MATERIAL_GAP`/`MODEL_CONFLICT`.
+Без достаточного evidence, при no-progress или semantic mutation admission честно
+останавливается. Это использует существующий closure mechanism и не принимает
+зелёные tests как опровержение finding.
+
+Первый limited release pin-ит Terra/medium, сохраняет expiry-1 → suspension-1 →
+expiry-2 и fail-fast. Один qualification turn ограничен 20 минутами, synthetic
+case — 45 минутами; при case limit Controller останавливает только запущенное им
+дерево процессов, сохраняет log, case/phase, последнюю полезную event time и stop
+reason. Любое транспортное сообщение не считается полезным прогрессом: только
+события текущего thread/turn с фактической работой обновляют inactivity watchdog.
+Обычные production задачи не получают qualification wall limits.
+
+**Отвергнутые варианты.** Считать PASS главнее отрицательных claims теряет defect;
+менять disposition/findings без repository evidence фабрикует исправление; разрешать
+коррекции менять candidate или остальные claims нарушает независимость Phase A.
+Sol/high не подтверждён выбранной terra/medium qualification и потому остаётся
+историческим отдельным FAIL/PASS evidence, не становится поддерживаемым профилем.
+Бесконечное ожидание, отмену как PASS и завершение процессов по имени отвергаем:
+первое лишает bound, второе маскирует failure, третье может затронуть чужую работу.
+
+**Последствия, границы, проверка.** Model-backed code path и квалификационные
+fixtures не меняются. Offline regressions проверяют closures, transport/noise,
+profile identity и fail-fast. Нужны последующая offline suite/docs sync, одна полная
+qualification неизменного SHA на Windows и один штатный `_90` запуск после
+qualification PASS. До этих уровней этот код не объявляется выпуском; новые лимиты
+ограничивают исполнение и не обещают PASS за заданное время.
+
+**Пересмотр.** Менять model/effort/cases/limits или принимать Sol/high можно только
+после отдельного decision review с соответствующим воспроизводимым evidence.
 
 ## Шаблон новой записи
 

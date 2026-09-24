@@ -49,6 +49,6 @@
     },
     "findings": []
   },
-  "expected_outcome": "HARD_FAIL_PASS_WITH_NEGATIVE_DISPOSITION",
+  "expected_outcome": "ONE_BOUNDED_CLAIM_CLOSURE_FROM_PASS",
   "compatible_status_outcome": "ONE_BOUNDED_CLAIM_CLOSURE"
 }

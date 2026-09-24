@@ -37,10 +37,12 @@ Strict recovery собирает независимые evidence errors в од�
 Полная квалификация сборки запускается на чистом commit явно:
 `py.exe -3 tools/release_check.py --profile windows-local --qualification release`.
 Совместимый default без `--qualification` также выбирает `release`. Этот профиль pin-ит
-`gpt-5.6-sol`/`high` и требует всех обязательных уровней, включая настоящие Node/Jest,
-native role sandbox и три фиксированных real-model FULL прогона. Быстрый feedback-профиль
-`--qualification dev` сохраняет те же deterministic/native gates, но выполняет только
-`expiry-1` с `gpt-5.6-terra`/`medium` и fail-fast; его максимум —
+`gpt-5.6-terra`/`medium` и требует всех обязательных уровней, включая настоящие Node/Jest,
+native role sandbox и real-model cases `expiry-1` → `suspension-1` → `expiry-2`
+с fail-fast. Каждый qualification turn ограничен 20 минутами, а synthetic case —
+45 минутами. Быстрый feedback-профиль `--qualification dev` сохраняет те же
+deterministic/native gates, но выполняет только `expiry-1` с
+`gpt-5.6-terra`/`medium` и fail-fast; его максимум —
 `DEV_QUALIFICATION_PASS`, никогда не `RELEASE_QUALIFIED`. Controller передаёт
 model/effort как TOML literal `-c` overrides, которые сохраняют
 exact argv через Windows `cmd.exe` и `.cmd` launcher без `\"` material.
@@ -431,6 +433,16 @@ HARNESS_SELF_CHECK_PASS
 ```
 
 Manifest пока остаётся `version = 2` для совместимости.
+
+После настройки отдельного clean historical `_90` repository в `harness.local.toml`
+обычный полный Matrix trial запускается одной командой:
+
+```bash
+./run cases/matrix-all-matching/task.toml
+```
+
+Настройка source repository и обязательных `node_modules` описана в
+[`cases/matrix-all-matching/README.md`](cases/matrix-all-matching/README.md).
 
 ## Границы Phase 7 alpha
 

@@ -724,7 +724,9 @@ run, expected/actual outcome и SHA-256 сохраняются machine-readably;
 Qualification profile — Controller-owned identity. `dev` сохраняет все deterministic
 stages и `native_roles`, затем выполняет только `expiry-1` с
 `gpt-5.6-terra`/`medium` и fail-fast; он никогда не release-qualifying. `release`
-использует `gpt-5.6-sol`/`high` и все три fixed cases без сокращения evidence.
+использует `gpt-5.6-terra`/`medium`, выполняет все три fixed cases по порядку и
+останавливается после первого неуспеха; оставшиеся cases получают `NOT_RUN`.
+Квалификационный turn ограничен 20 минутами, synthetic case — 45 минутами.
 `CodexAppServer` передаёт оба значения explicit CLI `-c` как TOML literal strings;
 они проходят `list2cmdline → cmd.exe /c → .cmd` без backslash-escaped quote material,
 поэтому ambient user config не может переопределить профиль. Mode/model/effort/Codex version,

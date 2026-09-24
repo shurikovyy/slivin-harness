@@ -44,10 +44,10 @@ QUALIFICATION_PROFILES = {
     ),
     "release": QualificationProfile(
         mode="release",
-        model="gpt-5.6-sol",
-        model_reasoning_effort="high",
+        model="gpt-5.6-terra",
+        model_reasoning_effort="medium",
         real_model_cases=REAL_MODEL_CASES,
-        fail_fast=False,
+        fail_fast=True,
         release_qualifying=True,
     ),
 }

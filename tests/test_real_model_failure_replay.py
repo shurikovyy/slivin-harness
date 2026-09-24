@@ -30,6 +30,13 @@ class RealModelFailureReplayTests(unittest.TestCase):
         )
         self.assertEqual(results[0]['compatible_status_classification'], 'CLAIM_CLOSURE_INCOMPLETE')
         self.assertEqual(results[0]['compatible_status_recovery'], 'CLAIM_CLOSURE_PASS')
+        self.assertEqual(results[0]['actual_outcome'], 'ONE_BOUNDED_CLAIM_CLOSURE_FROM_PASS')
+        self.assertEqual(results[0]['corrected_status'], 'FINDINGS')
+        self.assertEqual(results[0]['correction_transcript_origin'], 'synthetic_reconstruction')
+        self.assertTrue(results[0]['correction_not_candidate_evidence'])
+        self.assertEqual(results[0]['correction_allowed_fields'], [
+            'status', 'impact_challenge.blind_consumer_dispositions[0].finding_ids', 'findings',
+        ])
         self.assertTrue(all(results[2]['authorities'].values()))
         self.assertEqual(results[3]['actual_outcome'], 'MISSING_PATH_PRUNE_PASS')
         self.assertEqual(

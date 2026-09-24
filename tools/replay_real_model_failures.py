@@ -60,58 +60,66 @@ def replay_qe1() -> dict:
     try:
         detect_evaluator_claim_closure(report)
     except ArtifactContractError as error:
-        actual = "HARD_FAIL_PASS_WITH_NEGATIVE_DISPOSITION" if (
+        actual = "ONE_BOUNDED_CLAIM_CLOSURE_FROM_PASS" if (
             error.code == "PASS_WITH_NEGATIVE_DISPOSITION"
-            and error.failure_kind is ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT
+            and error.failure_kind is ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE
         ) else f"{error.failure_kind.value}:{error.code}"
     else:
         actual = "UNEXPECTED_ACCEPT"
-    compatible = dict(report, status="FINDINGS")
     compatible_kind = None
     closure_recovery = "NOT_ATTEMPTED"
     fields: list[str] = []
-    try:
-        detect_evaluator_claim_closure(compatible)
-    except ArtifactContractError as error:
-        compatible_kind = error.failure_kind.value
-        state = EvaluatorClosureCorrectionState()
-        fields = state.begin(compatible, error)
-        corrected = copy.deepcopy(compatible)
-        corrected["findings"] = [{
-            "finding_id": "QE1-CLOSURE-1",
-            "severity": "MEDIUM",
-            "category": "CONSUMER",
-            "title": "Captured negative consumer claim",
-            "evidence": ["The frozen disposition already declares the material gap."],
-            "failure_mode": "The independently identified consumer is not covered.",
-            "required_action": "Address the already-declared consumer gap.",
-            "required_proof": {
-                "claim": "The declared consumer gap is addressed.",
-                "level": "LOCAL_DETERMINISTIC",
-                "capabilities": [],
-            },
-        }]
-        corrected["impact_challenge"][captured["impact_group"]][0]["finding_ids"] = [
-            "QE1-CLOSURE-1",
-        ]
-        state.observe_corrected(corrected)
+    if actual == fixture["expected_outcome"]:
+        error = None
         try:
-            detect_evaluator_claim_closure(corrected)
-        except ArtifactContractError as corrected_error:
-            closure_recovery = f"{corrected_error.failure_kind.value}:{corrected_error.code}"
-        else:
-            closure_recovery = "CLAIM_CLOSURE_PASS"
+            detect_evaluator_claim_closure(report)
+        except ArtifactContractError as caught:
+            error = caught
+        if error is not None:
+            compatible_kind = error.failure_kind.value
+            state = EvaluatorClosureCorrectionState()
+            fields = state.begin(report, error)
+            corrected = copy.deepcopy(report)
+            corrected["status"] = "FINDINGS"
+            corrected["findings"] = [{
+                "finding_id": "QE1-CLOSURE-1",
+                "severity": "MEDIUM",
+                "category": "CONSUMER",
+                "title": "Captured negative consumer claim",
+                "evidence": ["tests/fixtures/real_model_liveness/qe1_negative_closure.json"],
+                "failure_mode": "The captured Phase-B report declares a negative consumer disposition without a material finding.",
+                "required_action": "Preserve the negative disposition and bind a material finding from the current candidate evidence.",
+                "required_proof": {
+                    "claim": "The declared consumer gap is investigated and resolved.",
+                    "level": "LOCAL_DETERMINISTIC",
+                    "capabilities": [],
+                },
+            }]
+            corrected["impact_challenge"][captured["impact_group"]][0]["finding_ids"] = [
+                "QE1-CLOSURE-1",
+            ]
+            state.observe_corrected(corrected)
+            try:
+                detect_evaluator_claim_closure(corrected)
+            except ArtifactContractError as corrected_error:
+                closure_recovery = f"{corrected_error.failure_kind.value}:{corrected_error.code}"
+            else:
+                closure_recovery = "CLAIM_CLOSURE_PASS"
     passed = (
         actual == fixture["expected_outcome"]
         and compatible_kind == ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE.value
         and fields == [
-            f"impact_challenge.{captured['impact_group']}[0].finding_ids", "findings",
+            "status", f"impact_challenge.{captured['impact_group']}[0].finding_ids", "findings",
         ]
         and closure_recovery == "CLAIM_CLOSURE_PASS"
     )
     result = _result(fixture, digest, actual=actual, passed=passed)
     result["compatible_status_classification"] = compatible_kind
     result["compatible_status_recovery"] = closure_recovery
+    result["correction_transcript_origin"] = "synthetic_reconstruction"
+    result["correction_not_candidate_evidence"] = True
+    result["correction_allowed_fields"] = fields
+    result["corrected_status"] = "FINDINGS" if closure_recovery == "CLAIM_CLOSURE_PASS" else None
     return result
 
 

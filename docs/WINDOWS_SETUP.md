@@ -262,8 +262,10 @@ Captured `shr-q-b181436a98` QE2 Phase-A wire также доказывает pru
 proof с `model_execution=NOT_RUN`, а не native или real-model qualification.
 Полный профиль запускается как
 `py.exe -3 tools/release_check.py --profile windows-local --qualification release`:
-он pin-ит `gpt-5.6-sol`/`high` и требует все три real-model cases. Для короткого
-feedback используется `--qualification dev`: deterministic/native stages остаются
+он pin-ит `gpt-5.6-terra`/`medium`, требует cases expiry-1 → suspension-1 → expiry-2
+и останавливается после первого неуспеха; последующие cases остаются NOT_RUN. Один
+turn ограничен 20 минутами, synthetic case — 45 минутами. Для короткого feedback
+используется `--qualification dev`: deterministic/native stages остаются
 обязательными, но real-model driver запускает только `expiry-1` с
 `gpt-5.6-terra`/`medium` и fail-fast. `DEV_QUALIFICATION_PASS` не является
 `RELEASE_QUALIFIED`; global `~/.codex/config.toml` не изменяется.

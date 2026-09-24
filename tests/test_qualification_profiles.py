@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import unittest
+import signal
+from unittest import mock
 
 import task_runner
 from slivin_harness.app_server import CodexAppServer
@@ -17,9 +19,12 @@ from tools.release_check import (
     qualification_terminal_status,
 )
 from tools.release_real_models import (
+    QUALIFICATION_CASE_WALL_LIMIT_SECONDS,
+    QUALIFICATION_TURN_WALL_LIMIT_SECONDS,
     execute_case_sequence,
     real_model_run_passed,
     resolve_run_selection,
+    run_bounded_case_process,
 )
 
 
@@ -56,7 +61,7 @@ class QualificationProfileTests(unittest.TestCase):
             REAL_MODEL_CASES, fail_fast=True, execute=execute,
         )
         self.assertEqual(visited, ["expiry-1"])
-        self.assertEqual(len(records), 1)
+        self.assertEqual([row["status"] for row in records], ["FAIL", "NOT_RUN", "NOT_RUN"])
 
     def test_dev_can_never_emit_release_qualified(self):
         profile = qualification_profile("dev")
@@ -66,15 +71,15 @@ class QualificationProfileTests(unittest.TestCase):
         self.assertNotEqual(qualification_terminal_status(profile, passed=True),
                             "RELEASE_QUALIFIED")
 
-    def test_release_selects_all_cases_and_pins_sol_high_without_fail_fast(self):
+    def test_release_selects_all_cases_and_pins_terra_medium_with_fail_fast(self):
         profile = qualification_profile("release")
         self.assertEqual(profile.real_model_cases, REAL_MODEL_CASES)
         self.assertEqual((profile.model, profile.model_reasoning_effort),
-                         ("gpt-5.6-sol", "high"))
+                         ("gpt-5.6-terra", "medium"))
         command = self.commands("release")["real_models"][0]
         self.assertEqual([command[index + 1] for index, value in enumerate(command)
                           if value == "--case"], list(REAL_MODEL_CASES))
-        self.assertNotIn("--fail-fast", command)
+        self.assertIn("--fail-fast", command)
         self.assertTrue(profile.release_qualifying)
 
     def test_profile_and_stage_evidence_bind_model_effort_cases_and_policy(self):
@@ -124,12 +129,12 @@ class QualificationProfileTests(unittest.TestCase):
 
     def test_direct_selection_contract_rejects_profile_drift(self):
         self.assertTrue(validate_real_model_selection(
-            mode="release", model="gpt-5.6-sol", effort="high",
-            cases=REAL_MODEL_CASES, fail_fast=False,
+            mode="release", model="gpt-5.6-terra", effort="medium",
+            cases=REAL_MODEL_CASES, fail_fast=True,
         ))
         with self.assertRaises(ValueError):
             validate_real_model_selection(
-                mode="release", model="gpt-5.6-terra", effort="medium",
+                mode="release", model="gpt-5.6-sol", effort="high",
                 cases=REAL_MODEL_CASES, fail_fast=False,
             )
         self.assertFalse(validate_real_model_selection(
@@ -139,8 +144,8 @@ class QualificationProfileTests(unittest.TestCase):
 
     def test_direct_tool_default_remains_full_release(self):
         cases, mode, release_qualifying = resolve_run_selection(
-            cases=None, qualification_mode=None, model="gpt-5.6-sol",
-            effort="high", fail_fast=False,
+            cases=None, qualification_mode=None, model="gpt-5.6-terra",
+            effort="medium", fail_fast=True,
         )
         self.assertEqual(cases, REAL_MODEL_CASES)
         self.assertEqual(mode, "release")
@@ -155,6 +160,39 @@ class QualificationProfileTests(unittest.TestCase):
         self.assertFalse(real_model_run_passed(
             REAL_MODEL_CASES, cases, runtime_source_unchanged=True,
         ))
+        visited = []
+        stopped = execute_case_sequence(
+            REAL_MODEL_CASES, fail_fast=qualification_profile("release").fail_fast,
+            execute=lambda name: visited.append(name) or {
+                "label": name, "status": "FAIL" if name == "suspension-1" else "PASS",
+            },
+        )
+        self.assertEqual([row["label"] for row in stopped], list(REAL_MODEL_CASES))
+        self.assertEqual([row["status"] for row in stopped], ["PASS", "FAIL", "NOT_RUN"])
+        self.assertEqual(visited, ["expiry-1", "suspension-1"])
+
+    def test_qualification_limits_and_owned_process_tree_termination(self):
+        self.assertEqual(QUALIFICATION_TURN_WALL_LIMIT_SECONDS, 20 * 60)
+        self.assertEqual(QUALIFICATION_CASE_WALL_LIMIT_SECONDS, 45 * 60)
+        process = mock.Mock(pid=54321, returncode=-1)
+        process.wait.side_effect = [
+            __import__("subprocess").TimeoutExpired("fixture", 2700),
+            __import__("subprocess").TimeoutExpired("fixture", 15),
+            -1,
+        ]
+        with (
+            mock.patch("tools.release_real_models.os.name", "nt"),
+            mock.patch("tools.release_real_models.subprocess.Popen", return_value=process),
+            mock.patch("tools.release_real_models.subprocess.run") as taskkill,
+        ):
+            exit_code, stop_reason = run_bounded_case_process(
+                ["python", "task_runner.py"], cwd=Path("."), env={}, log=mock.Mock(),
+            )
+        self.assertEqual(exit_code, -1)
+        self.assertEqual(stop_reason, "SYNTHETIC_CASE_WALL_LIMIT")
+        process.send_signal.assert_called_once_with(signal.CTRL_BREAK_EVENT)
+        taskkill.assert_called_once()
+        self.assertEqual(taskkill.call_args.args[0][:4], ["taskkill.exe", "/PID", "54321", "/T"])
         self.assertEqual(
             qualification_terminal_status(qualification_profile("release"), passed=False),
             "NOT_QUALIFIED",

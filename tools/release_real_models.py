@@ -42,6 +42,45 @@ CASE_KINDS = {
     "suspension-1": "suspension",
     "expiry-2": "expiry",
 }
+QUALIFICATION_TURN_WALL_LIMIT_SECONDS = 20 * 60
+QUALIFICATION_CASE_WALL_LIMIT_SECONDS = 45 * 60
+
+
+def run_bounded_case_process(command: list[str], *, cwd: Path, env: dict[str, str],
+                             log, timeout_seconds: int = QUALIFICATION_CASE_WALL_LIMIT_SECONDS):
+    """Run one owned case and stop its process tree at the case wall limit."""
+    kwargs = {"cwd": cwd, "env": env, "stdout": log, "stderr": subprocess.STDOUT}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    process = subprocess.Popen(command, **kwargs)
+    try:
+        return process.wait(timeout=timeout_seconds), None
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            import signal
+            try:
+                process.send_signal(signal.CTRL_BREAK_EVENT)
+            except (AttributeError, OSError):
+                process.terminate()
+        else:
+            process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            if os.name != "nt":
+                import signal
+                os.killpg(process.pid, signal.SIGKILL)
+        if os.name == "nt":
+            # The exact run PID scopes taskkill to this case's process tree.
+            subprocess.run(["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+                           capture_output=True, timeout=15, check=False)
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("Qualification process tree did not stop after forced termination") from exc
+        return process.returncode, "SYNTHETIC_CASE_WALL_LIMIT"
 WINDOWS_WORKSPACE_PATH_LIMIT = 240
 README_LEGACY_REGION = (
     "The legacy label is documented as `current`; it is independent of resource eligibility."
@@ -549,15 +588,26 @@ copy_untracked = ["node_modules"]
 allow_sensitive_copy = false
 ''', encoding="utf-8")
     env = dict(os.environ, SLIVIN_HARNESS_CONFIG=str(config), PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1")
+    env["SLIVIN_QUALIFICATION_MAX_TURN_SECONDS"] = str(QUALIFICATION_TURN_WALL_LIMIT_SECONDS)
     with (folder / "pipeline.log").open("w", encoding="utf-8") as log:
-        completed = subprocess.run([sys.executable, str(ROOT / "task_runner.py"), str(manifest)], cwd=ROOT,
-                                   env=env, stdout=log, stderr=subprocess.STDOUT, timeout=9000)
+        exit_code, stop_reason = run_bounded_case_process(
+            [sys.executable, str(ROOT / "task_runner.py"), str(manifest)], cwd=ROOT,
+            env=env, log=log,
+        )
     log_text = (folder / "pipeline.log").read_text(encoding="utf-8")
     matches = re.findall(r"^RUN_DIR:\s*(.+)$", log_text, flags=re.MULTILINE)
-    record = dict(label=label, kind=kind, task_id=task_id, model_turns="REAL", exit_code=completed.returncode,
+    last_useful_match = re.findall(r"^APP_SERVER_LAST_USEFUL_EVENT_AT: (.+)$", log_text, flags=re.MULTILINE)
+    turn_stop_match = re.findall(r"^APP_SERVER_STOP_REASON: (.+)$", log_text, flags=re.MULTILINE)
+    phase_match = re.findall(r"^=== (.+) ===$", log_text, flags=re.MULTILINE)
+    record = dict(label=label, kind=kind, task_id=task_id, model_turns="REAL", exit_code=exit_code,
                   qualification_mode=qualification_mode, selected_model=model,
                   selected_reasoning_effort=effort, codex_version=codex_version,
                   ambient_model_inheritance=False,
+                  case_wall_limit_seconds=QUALIFICATION_CASE_WALL_LIMIT_SECONDS,
+                  turn_wall_limit_seconds=QUALIFICATION_TURN_WALL_LIMIT_SECONDS,
+                  last_useful_event_at=last_useful_match[-1] if last_useful_match else "UNKNOWN",
+                  stop_reason=stop_reason or (turn_stop_match[-1] if turn_stop_match else None),
+                  last_observed_phase=phase_match[-1] if phase_match else "UNKNOWN",
                   workspace_path_budget=path_budget,
                   baseline_sha=baseline, status="FAIL", prompt=prompt, fixture_sha256=hashlib.sha256(json.dumps(files,sort_keys=True).encode()).hexdigest())
     if matches:
@@ -575,10 +625,13 @@ allow_sensitive_copy = false
             record["delivery"] = json.loads(delivery.read_text(encoding="utf-8"))
             record["independent_validation"] = verify_delivery(run=run, folder=folder, workspace_root=workspace_root, repo=repo, baseline=baseline,
                 task_id=task_id, files=files, acceptance=record["acceptance"], handoff=record["handoff"], delivery=record["delivery"], node=node, runtime=runtime)
-            record["status"] = "PASS" if completed.returncode == 0 and record["independent_validation"]["status"] == "PASS" else "FAIL"
+            record["status"] = (
+                "PASS" if stop_reason is None and exit_code == 0
+                and record["independent_validation"]["status"] == "PASS" else "FAIL"
+            )
         if record["status"] != "PASS":
             record["failure_evidence"] = case_failure_evidence(
-                run=run, exit_code=completed.returncode,
+                run=run, exit_code=exit_code,
                 independent_validation=record.get("independent_validation"),
             )
             record["failure_class"] = record["failure_evidence"]["failure_class"]
@@ -602,7 +655,7 @@ allow_sensitive_copy = false
         record["failure_evidence"] = {
             "terminal_failure_type": "HARNESS_INFRASTRUCTURE_FAILURE",
             "failure_class": "HARNESS_INFRASTRUCTURE_FAILURE",
-            "reason_code": "RUN_DIRECTORY_UNAVAILABLE",
+            "reason_code": "QUALIFICATION_CASE_WALL_LIMIT" if stop_reason else "RUN_DIRECTORY_UNAVAILABLE",
             "failure_kind": "INTEGRITY_OR_INFRA_FAILURE",
             "field": None,
             "correction_attempt": None,
@@ -616,10 +669,17 @@ def execute_case_sequence(case_names, *, fail_fast: bool, execute,
                           on_progress=lambda records: None) -> list[dict]:
     """Execute an exact ordered selection and stop only under explicit fail-fast."""
     records: list[dict] = []
-    for name in case_names:
+    selected = tuple(case_names)
+    for index, name in enumerate(selected):
         records.append(execute(name))
         on_progress(list(records))
         if fail_fast and records[-1].get("status") != "PASS":
+            records.extend({
+                "label": remaining, "status": "NOT_RUN",
+                "stop_reason": f"FAIL_FAST_AFTER_{name}",
+            } for remaining in selected[index + 1:])
+            if index + 1 < len(selected):
+                on_progress(list(records))
             break
     return records
 
@@ -711,7 +771,7 @@ def main() -> int:
             "selected_reasoning_effort": args.effort,
             "codex_version": codex_version,
             "real_model_cases_requested": list(requested_cases),
-            "real_model_cases_executed": [case["label"] for case in cases],
+            "real_model_cases_executed": [case["label"] for case in cases if case.get("status") != "NOT_RUN"],
             "fail_fast": args.fail_fast,
             "release_qualifying": release_qualifying,
             "cases": cases,
@@ -739,7 +799,7 @@ def main() -> int:
         qualification_mode=qualification_mode, selected_model=args.model,
         selected_reasoning_effort=args.effort, codex_version=codex_version,
         real_model_cases_requested=list(requested_cases),
-        real_model_cases_executed=[case["label"] for case in cases],
+        real_model_cases_executed=[case["label"] for case in cases if case.get("status") != "NOT_RUN"],
         fail_fast=args.fail_fast, release_qualifying=release_qualifying,
         ambient_model_inheritance=False, cases=cases,
         runtime_source_unchanged=unchanged, runtime_before=before, doubles=False,

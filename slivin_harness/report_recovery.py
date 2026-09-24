@@ -112,6 +112,7 @@ class EvaluatorClosureCorrectionState:
     original: dict | None = None
     allowed_fields: list[str] = field(default_factory=list)
     correction_observed: bool = False
+    expected_status: str | None = None
 
     def begin(self, report: dict, error: ArtifactContractError) -> list[str]:
         diagnostics = error.diagnostics if isinstance(error, ArtifactDiagnosticBatch) else (error,)
@@ -119,14 +120,25 @@ class EvaluatorClosureCorrectionState:
             raise ReportRecoveryStop("EVALUATOR_CLOSURE_NOT_CORRECTABLE")
         fields: list[str] = []
         for diagnostic in diagnostics:
+            if diagnostic.code == "PASS_WITH_NEGATIVE_DISPOSITION" and diagnostic.field == "status":
+                if "status" not in fields:
+                    fields.append("status")
+                continue
             if (diagnostic.code not in {"NEGATIVE_WITHOUT_FINDING", "NEGATIVE_FINDING_MISSING"}
                     or not _EVALUATOR_CLOSURE_FIELD.fullmatch(diagnostic.field)):
                 raise ReportRecoveryStop("EVALUATOR_CLOSURE_NOT_CORRECTABLE")
             if diagnostic.field not in fields:
                 fields.append(diagnostic.field)
-        if not fields or report.get("status") == "PASS":
+        if not fields:
             raise ReportRecoveryStop("EVALUATOR_CLOSURE_STATUS_CONFLICT")
         self.original = copy.deepcopy(report)
+        if report.get("status") == "PASS":
+            self.expected_status = "REPLAN_REQUIRED" if any(
+                row.get("disposition") in {"MATERIAL_GAP", "MODEL_CONFLICT"}
+                for row in report.get("impact_challenge", {}).get("blind_contract_dispositions", [])
+            ) else "FINDINGS"
+            if "status" not in fields:
+                fields.append("status")
         self.allowed_fields = [*fields, "findings"]
         return list(self.allowed_fields)
 
@@ -156,6 +168,12 @@ class EvaluatorClosureCorrectionState:
                 "EVALUATOR_CLOSURE_CHANGED_CLAIMS",
                 failure_kind=ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE,
                 field=closure_field, correction_attempt=1,
+            )
+        if self.expected_status is not None and report.get("status") != self.expected_status:
+            raise ReportRecoveryStop(
+                "EVALUATOR_CLOSURE_CHANGED_CLAIMS",
+                failure_kind=ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE,
+                field="status", correction_attempt=1,
             )
 
 
@@ -287,7 +305,7 @@ def preserves_evaluator_closure(original: dict, corrected: dict, *, fields: list
     if not isinstance(before, list) or not isinstance(after, list) or after[:len(before)] != before:
         return False
     appended = after[len(before):]
-    if not appended:
+    if not appended and "status" not in fields:
         return False
     appended_ids = {
         finding.get("finding_id") for finding in appended
@@ -297,7 +315,7 @@ def preserves_evaluator_closure(original: dict, corrected: dict, *, fields: list
         return False
     referenced: set[str] = set()
     for field_name in fields:
-        if field_name == "findings":
+        if field_name in {"findings", "status"}:
             continue
         try:
             old_ids = _field_value(original, field_name)
@@ -356,16 +374,21 @@ def evaluator_closure_prompt(error: ArtifactContractError, *, fields: list[str])
         "code": error.code,
         "field": error.field,
         "failure_kind": error.failure_kind.value,
+        "required_status": error.expected if error.code == "PASS_WITH_NEGATIVE_DISPOSITION" else None,
         "allowed_fields": fields,
         "correction_budget": MAX_EVALUATOR_CLOSURE_CORRECTIONS,
     }
     return (
         "CLAIM-PRESERVING PHASE-B CLOSURE. Return the complete corrected Evaluator Phase B report "
         "in this same thread. The negative disposition is already a frozen semantic claim. "
-        "Do not change status, dispositions, reasons, origin_ref values, matches, blind finding "
+        "When status is allowed, change PASS only to the Controller-prescribed direction implied by the negative claims: "
+        "REPLAN_REQUIRED for blind contract MATERIAL_GAP/MODEL_CONFLICT, otherwise FINDINGS. "
+        "Do not change dispositions, reasons, origin_ref values, matches, blind finding "
         "dispositions, coverage conclusions, existing findings, candidate or any other field. "
         "Only append the minimum material final finding(s) required by the already-declared negative "
-        "claim and bind the listed finding_ids fields to those new IDs. Do not turn a negative "
-        "disposition positive.\n"
+        "claim and bind the listed finding_ids fields to those new IDs. Each new finding needs "
+        "existing candidate repository evidence, a concrete failure mode, required action and typed proof. "
+        "Do not invent a finding, treat green tests as rebuttal, or turn a negative disposition positive. "
+        "If repository evidence cannot support a material finding, report-only correction cannot close it.\n"
         + json.dumps(diagnostic, ensure_ascii=False, sort_keys=True)
     )
