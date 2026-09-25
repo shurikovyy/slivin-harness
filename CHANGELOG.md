@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Corrective audit: compose bounded Evaluator corrections without inventing findings; preserve diagnostic ownership. See [audit](docs/RECOVERY_ADMISSION_AUDIT.md).
+
 
 - Corrective patch on `2560401`: a Controller-detected
   `POST_PATCH_MODEL_DIVERGENCE` rejects the original COMPLETE and routes its

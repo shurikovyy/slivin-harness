@@ -1189,7 +1189,11 @@ def run_evaluator(
         local_correction = ReportCorrectionState()
         closure_correction = EvaluatorClosureCorrectionState()
         correction_mode: str | None = None
+        closure_used = False
         local_attempt = 0
+        # One shared budget: the initial response plus at most two corrections.
+        # A local repair and a claim closure may compose, but neither may undo
+        # an earlier repair or change its frozen semantic claims.
         for attempt in range(MAX_REPORT_CORRECTIONS + 1):
             raw = codex.run_turn(
                 thread_id=thread_id, prompt=prompt, output_schema=schema,
@@ -1221,29 +1225,39 @@ def run_evaluator(
                         phase=phase, attempt=attempt, error=error, report=report,
                         correctable=locally_correctable or closure_correctable,
                     ))
+                if error.failure_kind not in {
+                    ArtifactFailureKind.LOCAL_WIRE_ERROR,
+                    ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE,
+                }:
+                    raise
+                if attempt >= MAX_REPORT_CORRECTIONS:
+                    raise ReportRecoveryStop(
+                        "REPORT_CORRECTION_EXHAUSTED", failure_kind=error.failure_kind,
+                        field=error.field, correction_attempt=attempt,
+                    ) from error
                 if error.failure_kind is ArtifactFailureKind.LOCAL_WIRE_ERROR:
-                    if correction_mode not in {None, "LOCAL"}:
-                        raise ReportRecoveryStop("EVALUATOR_CORRECTION_ROUTE_CHANGED") from error
-                    if correction_mode is None:
+                    if correction_mode != "LOCAL":
+                        # Freeze the complete result of any preceding closure.
+                        # Only the next diagnosed local fields may change.
+                        local_correction = ReportCorrectionState()
                         local_correction.observe(report)
-                        correction_mode = "LOCAL"
                     fields = local_correction.next_fields(error, attempt=local_attempt)
                     local_attempt += 1
+                    correction_mode = "LOCAL"
                     prompt = correction_prompt(error, fields=fields, role=f"Evaluator {phase}")
                     continue
-                if error.failure_kind is ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE:
-                    if phase != "PHASE_B" or correction_mode is not None:
-                        raise ReportRecoveryStop(
-                            "EVALUATOR_CLOSURE_EXHAUSTED",
-                            failure_kind=ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE,
-                            field=error.field, correction_attempt=attempt,
-                        ) from error
-                    fields = closure_correction.begin(report, error)
-                    correction_mode = "CLOSURE"
-                    prompt = evaluator_closure_prompt(error, fields=fields)
-                    continue
-                else:
-                    raise
+                if phase != "PHASE_B" or closure_used:
+                    raise ReportRecoveryStop(
+                        "EVALUATOR_CLOSURE_EXHAUSTED",
+                        failure_kind=ArtifactFailureKind.CLAIM_CLOSURE_INCOMPLETE,
+                        field=error.field, correction_attempt=attempt,
+                    ) from error
+                # The previous local correction was checked above. Anchor the
+                # closure in that report, not in the earlier malformed copy.
+                fields = closure_correction.begin(report, error)
+                closure_used = True
+                correction_mode = "CLOSURE"
+                prompt = evaluator_closure_prompt(error, fields=fields)
         raise ReportRecoveryStop("REPORT_CORRECTION_EXHAUSTED")
     phase_a_prompt = f"""
 PHASE A — BLIND DISCOVERY.

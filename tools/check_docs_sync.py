@@ -81,6 +81,7 @@ EXPECTED_MAIN_DOCS = {
     "PRACTICAL_GUIDE.md",
     "QUALITY_MODEL.md",
     "README.md",
+    "RECOVERY_ADMISSION_AUDIT.md",
     "WINDOWS_SETUP.md",
     "WORKFLOW.md",
 }

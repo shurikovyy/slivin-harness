@@ -1449,3 +1449,8 @@ trials заново не запускались; исходные историч
 4. Saved trial logs и native smoke являются отдельным evidence, не production configuration. Их доступность за пределами исходной среды не предполагается. Если пакет недоступен, нужно сохранить квалификацию evidence или повторить generic reproduction, а не заявлять собственный PASS.
 5. Journal не хранит hidden assertion text, reference patch, secret values, `.receipt_key` или полный dump environment. Generic решение и его provenance достаточны для проектирования Harness.
 6. D-018 перешёл из PARTIAL в IMPLEMENTED только после code/integration review и сохранённого native acceptance. Это не подтверждение универсального sandbox, всех subprocess APIs или успешного полного product trial.
+
+
+## Clarification: bounded report-correction composition
+
+The original two-correction/one-closure budget is unchanged. A status-only correction or a binding to an existing finding must not manufacture another finding. Local evidence repair and claim closure may compose only after validating each previous change against its own frozen input. Failure ownership survives diagnostic batching. Existing model claims, candidate and independent acceptance are unchanged. [Evidence and rejected alternatives](RECOVERY_ADMISSION_AUDIT.md).

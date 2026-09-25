@@ -140,6 +140,11 @@ class EvaluatorClosureCorrectionState:
             if "status" not in fields:
                 fields.append("status")
         self.allowed_fields = [*fields, "findings"]
+        if (self.expected_status == "REPLAN_REQUIRED"
+                and isinstance(report.get("reason"), str) and not report["reason"].strip()):
+            # The newly derived stop status requires a top-level explanation.
+            # Row reasons and all material claims remain frozen.
+            self.allowed_fields.append("reason")
         return list(self.allowed_fields)
 
     def observe_corrected(self, report: dict) -> None:
@@ -207,7 +212,8 @@ def correction_fields(error: ArtifactContractError, *, report: dict | None = Non
         missing = diagnostic.actual if diagnostic.code == "MISSING_FIELDS" else None
         if isinstance(missing, list) and len(missing) > 1:
             leaves = [ArtifactContractError(code="MISSING_FIELDS", field=diagnostic.field,
-                       message=diagnostic.message, expected=diagnostic.expected, actual=[key]) for key in missing]
+                       message=diagnostic.message, expected=diagnostic.expected, actual=[key],
+                       failure_kind=diagnostic.failure_kind) for key in missing]
         else:
             leaves = [diagnostic]
         for leaf in leaves:
@@ -297,39 +303,48 @@ def preserves_missing_path_prunes(
 
 
 def preserves_evaluator_closure(original: dict, corrected: dict, *, fields: list[str]) -> bool:
-    """Freeze verdict semantics; permit only new findings and their exact bindings."""
+    """Keep claims fixed; materialize missing findings or bind existing ones.
+
+    A complete finding must not be duplicated merely to correct a derived status.
+    Existing findings are immutable; every appended finding must be referenced by
+    an explicitly authorized closure field. Final semantic validation is mandatory.
+    """
+    if "reason" in fields and (not isinstance(corrected.get("reason"), str)
+                               or not corrected["reason"].strip()):
+        return False
     if _without_fields(original, fields) != _without_fields(corrected, fields):
         return False
     before = original.get("findings")
     after = corrected.get("findings")
     if not isinstance(before, list) or not isinstance(after, list) or after[:len(before)] != before:
         return False
-    appended = after[len(before):]
-    if not appended and "status" not in fields:
+
+    def identifiers(rows: list) -> set[str] | None:
+        if any(not isinstance(row, dict) or not isinstance(row.get("finding_id"), str)
+               or not row["finding_id"].strip() for row in rows):
+            return None
+        values = {row["finding_id"] for row in rows}
+        return values if len(values) == len(rows) else None
+
+    existing_ids = identifiers(before)
+    appended_ids = identifiers(after[len(before):])
+    if existing_ids is None or appended_ids is None or existing_ids & appended_ids:
         return False
-    appended_ids = {
-        finding.get("finding_id") for finding in appended
-        if isinstance(finding, dict) and isinstance(finding.get("finding_id"), str)
-    }
-    if len(appended_ids) != len(appended) or not appended_ids:
-        return False
+    final_ids = existing_ids | appended_ids
     referenced: set[str] = set()
     for field_name in fields:
-        if field_name in {"findings", "status"}:
+        if field_name in {"findings", "status", "reason"}:
             continue
         try:
             old_ids = _field_value(original, field_name)
             new_ids = _field_value(corrected, field_name)
         except (KeyError, IndexError, TypeError, ValueError):
             return False
-        if not isinstance(old_ids, list) or not isinstance(new_ids, list) or not new_ids:
+        if (not isinstance(old_ids, list) or not isinstance(new_ids, list)
+                or not new_ids or not all(isinstance(value, str) and value for value in new_ids)
+                or len(new_ids) != len(set(new_ids)) or not set(new_ids) <= final_ids):
             return False
-        if len(new_ids) != len(set(new_ids)):
-            return False
-        if old_ids:
-            if new_ids != old_ids:
-                return False
-        elif not set(new_ids) <= appended_ids:
+        if old_ids and new_ids != old_ids:
             return False
         referenced.update(set(new_ids) & appended_ids)
     return referenced == appended_ids
@@ -383,7 +398,9 @@ def evaluator_closure_prompt(error: ArtifactContractError, *, fields: list[str])
         "in this same thread. The negative disposition is already a frozen semantic claim. "
         "When status is allowed, change PASS only to the Controller-prescribed direction implied by the negative claims: "
         "REPLAN_REQUIRED for blind contract MATERIAL_GAP/MODEL_CONFLICT, otherwise FINDINGS. "
-        "Do not change dispositions, reasons, origin_ref values, matches, blind finding "
+        "Only when top-level reason is explicitly allowlisted, fill its previously empty "
+        "value with an explanation of the frozen negative contract claims. "
+        "Do not change dispositions, row reasons, origin_ref values, matches, blind finding "
         "dispositions, coverage conclusions, existing findings, candidate or any other field. "
         "Only append the minimum material final finding(s) required by the already-declared negative "
         "claim and bind the listed finding_ids fields to those new IDs. Each new finding needs "
