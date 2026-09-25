@@ -53,6 +53,7 @@ from slivin_harness.implementer import (
     parse_implementation_report,
     validate_implementation_contract,
     validate_implementation_report,
+    route_implementation_model_conflict,
     validate_implementation_impact_closure,
     validate_post_patch_impact,
     report_discoveries,
@@ -350,11 +351,35 @@ class CheckResult:
 
 
 class HarnessControlledStop(RuntimeError):
-    """A correctly routed BLOCKED/decision outcome, not an internal Harness crash."""
+    """A controlled outcome with the causal diagnostic, not a historical failure."""
+
+    def __init__(self, reason_code: str, *, diagnostic: BaseException | None = None,
+                 phase: str | None = None, correction_attempt: int | None = None) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.diagnostic = diagnostic
+        self.phase = phase
+        self.correction_attempt = correction_attempt
 
 
 def terminal_failure_record(error: BaseException) -> dict[str, object | None]:
     """Public, bounded failure ownership; full exception detail stays private."""
+    if isinstance(error, HarnessControlledStop):
+        cause = error.diagnostic or error.__cause__
+        if cause is not None and cause is not error:
+            record = terminal_failure_record(cause)
+        else:
+            record = {
+                "schema_version": "harness-terminal-failure.v1", "status": "FAIL",
+                "terminal_failure_type": "CONTROLLED_STOP",
+                "failure_class": "CONTROLLED_STOP",
+                "error_type": type(error).__name__, "reason_code": error.reason_code,
+                "failure_kind": None, "field": None, "correction_attempt": None,
+            }
+        record.update(stop_reason_code=error.reason_code, phase=error.phase)
+        if error.correction_attempt is not None:
+            record["correction_attempt"] = error.correction_attempt
+        return record
     if isinstance(error, ReportRecoveryStop):
         failure_kind = error.failure_kind
         return {
@@ -396,11 +421,26 @@ def terminal_failure_record(error: BaseException) -> dict[str, object | None]:
         "terminal_failure_type": "HARNESS_INFRASTRUCTURE_FAILURE",
         "failure_class": "HARNESS_INFRASTRUCTURE_FAILURE",
         "error_type": type(error).__name__,
-        "reason_code": "HARNESS_EXCEPTION",
+        "reason_code": getattr(error, "reason_code", getattr(error, "code", "HARNESS_EXCEPTION")),
         "failure_kind": ArtifactFailureKind.INTEGRITY_OR_INFRA_FAILURE.value,
-        "field": None,
+        "field": getattr(error, "field", None),
         "correction_attempt": None,
     }
+
+
+def persist_terminal_failure(recorder, error: BaseException) -> None:
+    """Persist this exit's public cause; raw detail stays in the private plane."""
+    if recorder is None:
+        return
+    failure = terminal_failure_record(error)
+    for writer, value in (
+        (recorder.write_json, failure),
+        (recorder.write_private_json, {**failure, "message": str(error)}),
+    ):
+        try:
+            writer("terminal_failure.json", value)
+        except (RuntimeError, OSError):
+            print("TERMINAL_FAILURE_PERSIST_FAILED", file=sys.stderr)
 
 
 class RunRecorder:
@@ -2199,13 +2239,15 @@ def run_implementer_report(codex: CodexAppServer, **kwargs) -> dict:
                     "error": str(error),
                 })
 
-    def stop(reason: str) -> None:
+    def stop(reason: str, *, diagnostic: BaseException | None = None) -> None:
         observe_terminal(reason)
         if run_state is not None:
             run_state.route_stage(StageId.IMPLEMENTER, outcome=WorkflowOutcome.BLOCKED,
                                   result_code=StageResultCode.BLOCKED, reason_code=reason,
                                   artifacts=tuple(artifacts))
-        raise HarnessControlledStop(reason)
+        raise HarnessControlledStop(
+            reason, diagnostic=diagnostic, phase=kwargs["label"], correction_attempt=attempt,
+        ) from diagnostic
 
     for attempt in range(MAX_REPORT_CORRECTIONS + 1):
         raw_value = ""
@@ -2231,7 +2273,7 @@ def run_implementer_report(codex: CodexAppServer, **kwargs) -> dict:
             try:
                 correction.observe(parsed)
             except ReportRecoveryStop as exc:
-                stop("IMPLEMENTER_" + str(exc))
+                stop("IMPLEMENTER_" + str(exc), diagnostic=exc)
 
         try:
             if attempt and candidate_content_fingerprint(workspace) != frozen_candidate:
@@ -2262,7 +2304,7 @@ def run_implementer_report(codex: CodexAppServer, **kwargs) -> dict:
             try:
                 allowed_fields = correction.next_fields(exc, attempt=attempt)
             except ReportRecoveryStop as terminal:
-                stop("IMPLEMENTER_" + str(terminal))
+                stop("IMPLEMENTER_" + str(terminal), diagnostic=exc)
             print(f"IMPLEMENTER_REPORT_CORRECTION: {attempt + 1}/{MAX_REPORT_CORRECTIONS} {exc.code} {exc.field}")
             current["prompt"] = correction_prompt(exc, fields=allowed_fields)
             current["label"] = f"{kwargs['label']} REPORT CORRECTION {attempt + 1}"
@@ -2387,10 +2429,35 @@ def _run_implementer_report_once(
     report = parse_implementation_report(raw)
     changed_paths = collect_changed_paths(workspace)
     # Cheap structure/source validation precedes expensive trusted confirmation.
-    validate_post_patch_impact(
-        report, workspace=workspace, changed_paths=changed_paths, plan=plan,
-        contract=implementation_contract, owner_allowed_paths=owner_allowed_paths or (),
-    )
+    try:
+        validate_post_patch_impact(
+            report, workspace=workspace, changed_paths=changed_paths, plan=plan,
+            contract=implementation_contract, owner_allowed_paths=owner_allowed_paths or (),
+        )
+    except ArtifactContractError as error:
+        routed = route_implementation_model_conflict(
+            report, error, workspace=workspace, changed_paths=changed_paths, plan=plan,
+            contract=implementation_contract, owner_allowed_paths=owner_allowed_paths or (),
+        )
+        if routed is None:
+            raise
+        # Preserve the raw COMPLETE separately. This record describes a Controller
+        # decision to reject it, not a new model claim or verification receipt.
+        if control_plane is not None:
+            artifact = "implementation_model_replan_" + stable_fingerprint(report, length=16) + ".json"
+            evidence = {
+                "schema_version": "implementation-model-replan.v1",
+                "status": "REPLAN_REQUIRED", "authority": "CONTROLLER",
+                "reason_code": error.code, "field": error.field,
+                "candidate_id": candidate_content_fingerprint(workspace),
+                "original_status": report["status"],
+                "original_report_fingerprint": stable_fingerprint(report, length=64),
+                "routed_report_fingerprint": stable_fingerprint(routed, length=64),
+            }
+            control_plane.write_private_json(artifact, {**evidence, "routed_report": routed})
+            control_plane.write_public_json(artifact, evidence)
+        print("IMPLEMENTER_MODEL_CONFLICT_REPLAN:", error.code)
+        return routed
     stamp_matches_candidate = verify_self_verification_stamp(
         workspace=workspace,
         stamp_path=stamp_path,
@@ -5410,6 +5477,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"TOTAL_ELAPSED: {time.monotonic() - started:.2f}s")
         return 0
     except TestRunnerResolutionError as exc:
+        persist_terminal_failure(recorder, exc)
         if recorder is not None:
             recorder.write_private_json("test_runner_resolution_failure.json", exc.feedback())
             recorder.write_json("test_runner_resolution_failure.json", {
@@ -5427,6 +5495,7 @@ def main(argv: list[str] | None = None) -> int:
             print("RUN_DIR:", recorder.root, file=sys.stderr)
         return 2
     except ScopedExecutionPolicyError as exc:
+        persist_terminal_failure(recorder, exc)
         if recorder is not None:
             recorder.write_authoritative_json(
                 "role_execution_policy_failure.json",
@@ -5440,6 +5509,7 @@ def main(argv: list[str] | None = None) -> int:
             print("RUN_DIR:", recorder.root, file=sys.stderr)
         return 2
     except HarnessControlledStop as exc:
+        persist_terminal_failure(recorder, exc)
         print("HARNESS_TASK_STOPPED:", exc, file=sys.stderr)
         if session is not None:
             print("MANAGED_WORKTREE_ON_EXIT:", session.workspace, file=sys.stderr)
@@ -5452,6 +5522,7 @@ def main(argv: list[str] | None = None) -> int:
         GitControlIntegrityError,
         TrustedBatchIntegrityError,
     ) as exc:
+        persist_terminal_failure(recorder, exc)
         reason_code = exc.reason_code
         if (
             reason_code == "CANDIDATE_EXCLUSION_OVERLAPS_TRACKED_PATH"
@@ -5472,19 +5543,7 @@ def main(argv: list[str] | None = None) -> int:
             print("RUN_DIR:", recorder.root, file=sys.stderr)
         return 2
     except (RuntimeError, ArtifactContractError, OSError, ValueError) as exc:
-        if recorder is not None:
-            failure = terminal_failure_record(exc)
-            try:
-                recorder.write_json("terminal_failure.json", failure)
-            except (RuntimeError, OSError):
-                pass
-            try:
-                recorder.write_private_json(
-                    "terminal_failure.json",
-                    {**failure, "message": str(exc)},
-                )
-            except (RuntimeError, OSError):
-                pass
+        persist_terminal_failure(recorder, exc)
         if run_state is not None:
             try:
                 run_state.fail_active_stage(

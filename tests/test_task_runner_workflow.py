@@ -154,6 +154,7 @@ timeout_seconds = 30
         trusted_js_toolchain: dict | None = None,
         malformed_report: bool = False,
         framework_rebind: bool = False,
+        detected_model_conflict: bool = False,
     ) -> tuple[int, Path, str]:
         root = Path(tempfile.mkdtemp(prefix="slivin-main-workflow-"))
         repo = self.make_repo(root)
@@ -176,7 +177,7 @@ timeout_seconds = 30
             repo,
             benchmark=benchmark,
             risk=risk,
-            with_replan=with_replan or implementer_replan,
+            with_replan=with_replan or implementer_replan or detected_model_conflict,
             benchmark_fail=benchmark_fail,
             owner_allowed_paths=owner_allowed_paths,
             with_check_repair=check_repair,
@@ -284,7 +285,7 @@ timeout_seconds = 30
             implementer_calls += 1
             workspace = Path(kwargs["workspace"])
             implementer_threads.append(str(kwargs["thread_id"]))
-            if (with_replan or implementer_replan) and implementer_calls == 2:
+            if (with_replan or implementer_replan or detected_model_conflict) and implementer_calls == 2:
                 self.assertEqual(
                     (workspace / "target.txt").read_text(encoding="utf-8"),
                     "before\n",
@@ -398,6 +399,13 @@ timeout_seconds = 30
                     for row in report["post_patch_impact"]["source_assessments"]:
                         if row["source_ref"]["source_id"] in outside_ids:
                             row.update(disposition="PROMOTE", promotion_id=target)
+            if detected_model_conflict and implementer_calls == 1:
+                report["post_patch_impact"]["changed_contracts"].append({
+                    "observation_id": "new-reader-contract", "name": "Reader contract",
+                    "before": "Reader exposes the prior value", "after": "Reader exposes the corrected value",
+                    "paths": ["reader.py"], "symbols": ["read_target"],
+                    "evidence": ["reader.py uses the current target value."],
+                })
             if implementer_replan and implementer_calls == 1:
                 report.update(status="REPLAN_REQUIRED", terminal_reason_kind="TECHNICAL_MODEL_DIVERGENCE", reason="The actual patch requires a fresh technical model.", evidence=["reader.py assumptions must be rechecked from baseline."])
             if jest_refresh_failure and implementer_calls == 1:
@@ -422,9 +430,15 @@ timeout_seconds = 30
                     correction_count += 1
                     self.assertEqual(turn["thread_id"], kwargs["thread_id"])
                     corrected = copy.deepcopy(invalid_artifact)
-                    corrected["post_patch_impact"]["related_out_of_scope"][-1]["symbols"] = ["README.md#usage"]
+                    if detected_model_conflict:
+                        corrected["post_patch_impact"]["changed_contracts"][-1]["symbols"] = ["read_target"]
+                    else:
+                        corrected["post_patch_impact"]["related_out_of_scope"][-1]["symbols"] = ["README.md#usage"]
                     return json.dumps(corrected)
                 report = fake_implementer_report(codex, **kwargs)
+                if detected_model_conflict and invalid_artifact is None:
+                    report["post_patch_impact"]["changed_contracts"][-1]["symbols"] = ["reader description"]
+                    invalid_artifact = copy.deepcopy(report)
                 if malformed_report and invalid_artifact is None:
                     report["post_patch_impact"]["related_out_of_scope"][-1]["symbols"] = []
                     invalid_artifact = copy.deepcopy(report)
@@ -502,7 +516,7 @@ timeout_seconds = 30
             mock.patch.object(task_runner, "run_planner", side_effect=fake_planner),
             mock.patch.object(task_runner, "validate_planner_artifact", wraps=task_runner.validate_planner_artifact) as planner_validation,
             mock.patch.object(task_runner, "run_evaluator", side_effect=fake_evaluator),
-            mock.patch.object(task_runner, "run_implementer_report", side_effect=actual_report_boundary if trusted_js_toolchain else fake_implementer_report),
+            mock.patch.object(task_runner, "run_implementer_report", side_effect=actual_report_boundary if trusted_js_toolchain or detected_model_conflict else fake_implementer_report),
             mock.patch.object(task_runner, "run_checks", side_effect=controller_checks),
             mock.patch.object(task_runner, "run_authoritative_reconstructed_verification", side_effect=reconstructed_verification),
             mock.patch.object(task_runner, "deliver_candidate_transaction", side_effect=delivery),

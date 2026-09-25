@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Corrective patch on `2560401`: a Controller-detected
+  `POST_PATCH_MODEL_DIVERGENCE` rejects the original COMPLETE and routes its
+  unchanged observations through the existing bounded clean semantic replan.
+  It does not issue a receipt, edit a claim, add a model correction turn, or
+  accept the rejected candidate. Other semantic/integrity failures stay blocked.
+- Controlled exits now persist their causal code, phase and correction attempt.
+  Qualification treats previous Evaluator attempt diagnostics as history, never
+  as the terminal cause merely because a failure file exists. Missing terminal
+  evidence remains explicitly unknown. No release qualification is claimed.
+
 - `0.8.0a39` closes the captured QE2 Evaluator Phase-A
   `IMPACT_PATH_MISSING` recovery gap. Controller now admits missing repository
   paths only as pruning: the corrected array must equal the original array minus

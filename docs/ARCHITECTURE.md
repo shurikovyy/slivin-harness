@@ -772,3 +772,19 @@ Publication Layer commit/push/PR/merge — optional future
 ```
 
 Первый обязательный интеграционный checkpoint после Windows self-check — `_90`.
+
+
+## Corrective routing after QS1 on 2560401
+
+Shared `run_implementer_report` admission is used by initial, continuation and
+check/runtime/Evaluator repair callers. A detected `POST_PATCH_MODEL_DIVERGENCE`
+rejects COMPLETE before trusted receipt issuance and uses
+`route_implementation_model_conflict` to return a validated Controller-owned
+replan request. Raw report and observations remain intact. The existing stabilizer
+performs clean reset and fresh planning; no new workflow state, retry budget or
+release gate is introduced. See the D-035 clarification in [DECISIONS.md](DECISIONS.md).
+
+`terminal_failure_record` / `persist_terminal_failure` preserve the current handled
+exception exit, including `HarnessControlledStop`. Qualification's
+`case_failure_evidence` prefers this record. Earlier Evaluator attempt errors are
+explicitly historical; they cannot supply a missing terminal cause.

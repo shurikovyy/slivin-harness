@@ -1,0 +1,1446 @@
+{
+  "origin": "captured_console_reports",
+  "source_qualification_run_id": "shr-q-2c74a25f2f",
+  "source_sha": "2560401445ada6c69d7f52dcd3fb754d49c75030",
+  "sanitization": [
+    "Known heartbeat lines were removed when extracting these JSON reports from pipeline.log.",
+    "Only self_verification.command is replaced by a synthetic nonexecuted locator."
+  ],
+  "source_files": {
+    ".gitignore": "node_modules/\n.harness_tmp/\n",
+    "jest.config.cjs": "module.exports={testEnvironment:'node',testRegex:'.*\\\\.jest\\\\.cjs$'};\n",
+    "package.json": "{\"name\": \"public-qualification-fixture\", \"version\": \"1.0.0\", \"private\": true, \"scripts\": {\"test\": \"jest --runInBand\"}}\n",
+    "README.md": "# Resource reads\n\nContent, availability and counts use the same eligibility policy.\n\nRun `npm test` to execute the Jest suite. Native assertions also exist.\n\nThe legacy label is documented as `current`; it is independent of resource eligibility.\n\nDocumentation navigation refers to [deployment instructions](docs/deployment.md).\n",
+    "src/access.cjs": "exports.available=entry=>Boolean(entry.enabled);\n",
+    "src/content.cjs": "const {isReadable}=require('./state.cjs');\nexports.read=entry=>isReadable(entry)?entry.value:null;\n",
+    "src/legacy-label.cjs": "exports.label=()=> 'outdated';\n",
+    "src/state.cjs": "module.exports.isReadable = entry => Boolean(entry.enabled);\n",
+    "src/summary.cjs": "const {available}=require('./access.cjs');\nexports.count=entries=>entries.filter(available).length;\n",
+    "tests/access.jest.cjs": "const {available}=require('../src/access.cjs'); const {count}=require('../src/summary.cjs');\nconst entry={enabled:true, suspended:true, value:'payload'}; test('actual availability assertions',()=>{expect(available(entry)).toBe(false); expect(count([entry,{...entry, suspended:false}])).toBe(1); expect(available({...entry, suspended:false})).toBe(true);});\n",
+    "tests/content.native.cjs": "const {test}=require('node:test'); const assert=require('node:assert/strict'); const {read}=require('../src/content.cjs');\nconst entry={enabled:true, suspended:true, value:'payload'}; test('actual content assertion',()=>{assert.equal(read(entry),null); assert.equal(read({...entry, suspended:false}),'payload');});\n",
+    "tests/legacy.jest.cjs": "const {label}=require('../src/legacy-label.cjs'); test('independent legacy label',()=>{expect(label()).toBe('current');});\n"
+  },
+  "candidate_files": {
+    ".gitignore": "node_modules/\n.harness_tmp/\n",
+    "jest.config.cjs": "module.exports={testEnvironment:'node',testRegex:'.*\\\\.jest\\\\.cjs$'};\n",
+    "package.json": "{\"name\": \"public-qualification-fixture\", \"version\": \"1.0.0\", \"private\": true, \"scripts\": {\"test\": \"jest --runInBand\"}}\n",
+    "README.md": "# Resource reads\n\nContent, availability and counts use the same eligibility policy.\nResources are available only to enabled accounts that are not suspended: suspended accounts are unavailable, excluded from counts, and cannot read content.\n\nRun `npm test` to execute the Jest suite. Native assertions also exist.\n\nThe legacy label is documented as `current`; it is independent of resource eligibility.\n\nDocumentation navigation refers to [deployment instructions](docs/deployment.md).\n",
+    "src/access.cjs": "exports.available=entry=>Boolean(entry.enabled&&!entry.suspended);\n",
+    "src/content.cjs": "const {isReadable}=require('./state.cjs');\nexports.read=entry=>isReadable(entry)?entry.value:null;\n",
+    "src/legacy-label.cjs": "exports.label=()=> 'outdated';\n",
+    "src/state.cjs": "module.exports.isReadable = entry => Boolean(entry.enabled && !entry.suspended);\n",
+    "src/summary.cjs": "const {available}=require('./access.cjs');\nexports.count=entries=>entries.filter(available).length;\n",
+    "tests/access.jest.cjs": "const {available}=require('../src/access.cjs'); const {count}=require('../src/summary.cjs');\nconst entry={enabled:true, suspended:true, value:'payload'}; test('actual availability assertions',()=>{expect(available(entry)).toBe(false); expect(count([entry,{...entry, suspended:false}])).toBe(1); expect(available({...entry, suspended:false})).toBe(true);});\n",
+    "tests/content.native.cjs": "const {test}=require('node:test'); const assert=require('node:assert/strict'); const {read}=require('../src/content.cjs');\nconst entry={enabled:true, suspended:true, value:'payload'}; test('actual content assertion',()=>{assert.equal(read(entry),null); assert.equal(read({...entry, suspended:false}),'payload');});\n",
+    "tests/legacy.jest.cjs": "const {label}=require('../src/legacy-label.cjs'); test('independent legacy label',()=>{expect(label()).toBe('current');});\n"
+  },
+  "original": {
+    "protocol_version": "implementer.v6",
+    "status": "COMPLETE",
+    "terminal_reason_kind": "NONE",
+    "summary": "Исправлен retained DOCS gap: README явно документирует eligibility rule для suspended accounts. Функциональный patch и все owner checks повторно прошли.",
+    "reason": "",
+    "evidence": [
+      "`README.md` теперь устанавливает правило: ресурсы доступны только enabled accounts without suspension; suspended accounts unavailable, excluded from counts, and cannot read content.",
+      "Актуальный SELF_VERIFY завершился `SELF_VERIFY_PASS`.",
+      "Diff ограничен `README.md`, `src/access.cjs`, `src/state.cjs`."
+    ],
+    "contract_evidence": [
+      {
+        "item_id": "ACCEPTANCE-1",
+        "status": "VERIFIED",
+        "evidence": [
+          "`tests/access.jest.cjs`: suspended entry denied by `available` and excluded from `count`.",
+          "`tests/content.native.cjs`: suspended entry produces `null` through `read`."
+        ]
+      },
+      {
+        "item_id": "PRESERVE-1",
+        "status": "VERIFIED",
+        "evidence": [
+          "`tests/access.jest.cjs` asserts enabled/non-suspended availability and count retention.",
+          "`tests/content.native.cjs` asserts enabled/non-suspended `read` returns `value`."
+        ]
+      },
+      {
+        "item_id": "STATE-1",
+        "status": "VERIFIED",
+        "evidence": [
+          "`src/access.cjs` `available` and `src/state.cjs` `isReadable` both require enabled/non-suspended state.",
+          "`src/summary.cjs` delegates to `available`; `src/content.cjs` delegates to `isReadable`; `src/legacy-label.cjs` is unchanged."
+        ]
+      },
+      {
+        "item_id": "CONSUMER-1",
+        "status": "VERIFIED",
+        "evidence": [
+          "Owner Jest availability assertion: PASS (`tests/access.jest.cjs`)."
+        ]
+      },
+      {
+        "item_id": "CONSUMER-2",
+        "status": "VERIFIED",
+        "evidence": [
+          "Owner Jest count assertion: PASS (`tests/access.jest.cjs`)."
+        ]
+      },
+      {
+        "item_id": "CONSUMER-3",
+        "status": "VERIFIED",
+        "evidence": [
+          "Owner native content assertion: PASS (`tests/content.native.cjs`)."
+        ]
+      },
+      {
+        "item_id": "RISK-1",
+        "status": "VERIFIED",
+        "evidence": [
+          "Current SELF_VERIFY ran both independent resource boundaries successfully."
+        ]
+      },
+      {
+        "item_id": "RISK-2",
+        "status": "VERIFIED",
+        "evidence": [
+          "Both owner test paths exercise and pass the enabled/non-suspended allow-path."
+        ]
+      }
+    ],
+    "self_verification": {
+      "status": "PASS",
+      "command": "python .harness_tmp/agent_runtime/self_verify.py",
+      "evidence": [
+        "Owner native content assertions: PASS.",
+        "Owner Jest availability assertions: PASS.",
+        "Git diff hygiene: PASS.",
+        "SELF_VERIFY_PASS."
+      ],
+      "receipt_id": ""
+    },
+    "additional_check_paths": [
+      "tests/access.jest.cjs",
+      "tests/content.native.cjs"
+    ],
+    "registered_checks": [
+      {
+        "kind": "check_id",
+        "value": "git.diff-check"
+      },
+      {
+        "kind": "path",
+        "value": "tests/access.jest.cjs"
+      },
+      {
+        "kind": "path",
+        "value": "tests/content.native.cjs"
+      }
+    ],
+    "post_patch_impact": {
+      "applicable": true,
+      "changed_contracts": [
+        {
+          "name": "Eligibility documentation",
+          "before": "README stated only that content, availability, and counts share an eligibility policy.",
+          "after": "README explicitly states that only enabled, non-suspended accounts can use resources; suspended accounts are unavailable, excluded from counts, and cannot read content.",
+          "paths": [
+            "README.md"
+          ],
+          "symbols": [
+            "Resource reads"
+          ],
+          "evidence": [
+            "`README.md` line 4 documents the changed resource eligibility rule."
+          ],
+          "observation_id": "OBS-ELIGIBILITY-DOCS-1"
+        }
+      ],
+      "in_scope_consumers": [],
+      "not_affected_consumers": [],
+      "related_out_of_scope": [],
+      "new_risks": [],
+      "changed_path_review": [
+        {
+          "path": "README.md",
+          "reason": "Canonical documentation now describes the observable suspended-account eligibility contract across availability, count, and content read.",
+          "evidence": [
+            "Diff adds explicit enabled/non-suspended allow rule and suspended deny behavior."
+          ],
+          "role": "DOCUMENTATION"
+        },
+        {
+          "path": "src/access.cjs",
+          "reason": "Availability authority denies suspended entries.",
+          "evidence": [
+            "`available` is `Boolean(entry.enabled&&!entry.suspended)`; owner Jest PASS."
+          ],
+          "role": "IMPLEMENTATION"
+        },
+        {
+          "path": "src/state.cjs",
+          "reason": "Readability authority denies suspended entries.",
+          "evidence": [
+            "`isReadable` is `Boolean(entry.enabled && !entry.suspended)`; owner native test PASS."
+          ],
+          "role": "IMPLEMENTATION"
+        }
+      ],
+      "search_evidence": [
+        {
+          "target": "Actual patch, eligibility decision points, direct consumers, and documentation",
+          "method": "Post-repair `git diff`, `git diff --check`, `git diff --name-only`, and repository-wide `rg` for eligibility state, consumer symbols, and README rule.",
+          "conclusion": "The final patch changes exactly README plus the two authorities. `count` and `read` remain the only direct downstream consumers; the README now aligns with both predicates. No new runtime consumers or risks found.",
+          "evidence_paths": [
+            "README.md",
+            "src/access.cjs",
+            "src/state.cjs",
+            "src/summary.cjs",
+            "src/content.cjs",
+            "tests/access.jest.cjs",
+            "tests/content.native.cjs"
+          ]
+        },
+        {
+          "target": "Independent legacy label",
+          "method": "Dependency/state search and final diff review.",
+          "conclusion": "`legacy-label` neither consumes eligibility state nor appears in the patch; its known mismatch remains out of scope.",
+          "evidence_paths": [
+            "src/legacy-label.cjs",
+            "tests/legacy.jest.cjs",
+            "README.md"
+          ]
+        }
+      ],
+      "closure_summary": "После documentation repair final sweep подтвердил три changed paths: оба eligibility authority predicate и canonical README. Все reachable resource consumers остаются availability, count, and read, покрыты owner checks; additional material consumers/risks отсутствуют.",
+      "source_assessments": [
+        {
+          "observation": "Availability eligibility подтверждён final implementation and targeted Jest proof.",
+          "promotion_id": "",
+          "paths": [
+            "src/access.cjs",
+            "src/summary.cjs",
+            "tests/access.jest.cjs"
+          ],
+          "symbols": [
+            "available",
+            "count"
+          ],
+          "evidence": [
+            "`available` requires enabled/non-suspended; targeted Jest PASS."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-changed_contracts-1",
+            "source_revision": "3fb3ff008bc4cafa5a35f2ef041c9c869bc4cfa2c90147dd6b5ea81b8cdf26a1"
+          }
+        },
+        {
+          "observation": "Content-read eligibility подтверждён final implementation and targeted native proof.",
+          "promotion_id": "",
+          "paths": [
+            "src/state.cjs",
+            "src/content.cjs",
+            "tests/content.native.cjs"
+          ],
+          "symbols": [
+            "isReadable",
+            "read"
+          ],
+          "evidence": [
+            "`isReadable` requires enabled/non-suspended; owner native test PASS."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-changed_contracts-2",
+            "source_revision": "e55ad35a0cf6ea839a941bb28f38603e2b7093e66aba98b66c659ea526d280fb"
+          }
+        },
+        {
+          "observation": "Availability API deny/allow behavior is directly proven by the owner Jest test.",
+          "promotion_id": "",
+          "paths": [
+            "src/access.cjs",
+            "tests/access.jest.cjs"
+          ],
+          "symbols": [
+            "available"
+          ],
+          "evidence": [
+            "Suspended deny and enabled/non-suspended allow assertion: PASS."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-in_scope_consumers-1",
+            "source_revision": "bda8920940e2e44319ba70d04e11ebeb2dee1d08463794282debcd8b79f39511"
+          }
+        },
+        {
+          "observation": "Summary count continues to inherit the updated policy from `available`.",
+          "promotion_id": "",
+          "paths": [
+            "src/summary.cjs",
+            "src/access.cjs",
+            "tests/access.jest.cjs"
+          ],
+          "symbols": [
+            "count",
+            "available"
+          ],
+          "evidence": [
+            "`count` filters through `available`; owner assertion PASS."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-in_scope_consumers-2",
+            "source_revision": "b79cfc0a08907d9594bc5c7f79042b7edff3bc262d773bb1e15b034917762d23"
+          }
+        },
+        {
+          "observation": "Content read continues to inherit the updated policy from `isReadable`.",
+          "promotion_id": "",
+          "paths": [
+            "src/content.cjs",
+            "src/state.cjs",
+            "tests/content.native.cjs"
+          ],
+          "symbols": [
+            "read",
+            "isReadable"
+          ],
+          "evidence": [
+            "Owner native deny/allow assertion: PASS."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-in_scope_consumers-3",
+            "source_revision": "e6ff9dc6696e64e4fb6c9387e10de58f6af3b127029d3b073cf3faad4e332d04"
+          }
+        },
+        {
+          "observation": "Legacy label baseline defect remains outside the eligibility lifecycle and final patch.",
+          "promotion_id": "",
+          "paths": [
+            "src/legacy-label.cjs",
+            "tests/legacy.jest.cjs",
+            "README.md"
+          ],
+          "symbols": [
+            "label"
+          ],
+          "evidence": [
+            "Eligibility dependency search found no legacy-label coupling; source file is unchanged."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-related_out_of_scope-1",
+            "source_revision": "37f2311721eba4f4eee27b0755f2a64448546d7bf205de0969d5ddae3cff0b4e"
+          }
+        },
+        {
+          "observation": "Broken README deployment link remains unrelated to eligibility behavior, although README was updated only for the required eligibility documentation.",
+          "promotion_id": "",
+          "paths": [
+            "README.md"
+          ],
+          "symbols": [
+            "docs/deployment.md"
+          ],
+          "evidence": [
+            "The documentation edit adds only eligibility text; deployment link remains unmodified and has no eligibility coupling."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-related_out_of_scope-2",
+            "source_revision": "7d031671c5ad87720ab118c8b842111a3e229bb2f61c91542bf5bb6d46a4fc81"
+          }
+        }
+      ]
+    },
+    "blockers": []
+  },
+  "log_derived_input_sha256": {
+    "original": "90380dc543e0902f9a366909c137cfc4f786059aa5bcf8876c6b3c64c725caee",
+    "corrected": "73d51fe87a0bdba4b41f38c4a8fe85728a1c23e15145642e2af3b00b4ce30e7d",
+    "plan": "7b378d0d1e12a937fc1dd8635340da48c38afa3cad4831c32cb12e961ff058fd",
+    "contract": "71af8ed9ea0f9e05bade2ca80918de19c42e457d79146d0dcd660a337a68f248"
+  },
+  "corrected": {
+    "protocol_version": "implementer.v6",
+    "status": "COMPLETE",
+    "terminal_reason_kind": "NONE",
+    "summary": "Исправлен retained DOCS gap: README явно документирует eligibility rule для suspended accounts. Функциональный patch и все owner checks повторно прошли.",
+    "reason": "",
+    "evidence": [
+      "`README.md` теперь устанавливает правило: ресурсы доступны только enabled accounts without suspension; suspended accounts unavailable, excluded from counts, and cannot read content.",
+      "Актуальный SELF_VERIFY завершился `SELF_VERIFY_PASS`.",
+      "Diff ограничен `README.md`, `src/access.cjs`, `src/state.cjs`."
+    ],
+    "contract_evidence": [
+      {
+        "item_id": "ACCEPTANCE-1",
+        "status": "VERIFIED",
+        "evidence": [
+          "`tests/access.jest.cjs`: suspended entry denied by `available` and excluded from `count`.",
+          "`tests/content.native.cjs`: suspended entry produces `null` through `read`."
+        ]
+      },
+      {
+        "item_id": "PRESERVE-1",
+        "status": "VERIFIED",
+        "evidence": [
+          "`tests/access.jest.cjs` asserts enabled/non-suspended availability and count retention.",
+          "`tests/content.native.cjs` asserts enabled/non-suspended `read` returns `value`."
+        ]
+      },
+      {
+        "item_id": "STATE-1",
+        "status": "VERIFIED",
+        "evidence": [
+          "`src/access.cjs` `available` and `src/state.cjs` `isReadable` both require enabled/non-suspended state.",
+          "`src/summary.cjs` delegates to `available`; `src/content.cjs` delegates to `isReadable`; `src/legacy-label.cjs` is unchanged."
+        ]
+      },
+      {
+        "item_id": "CONSUMER-1",
+        "status": "VERIFIED",
+        "evidence": [
+          "Owner Jest availability assertion: PASS (`tests/access.jest.cjs`)."
+        ]
+      },
+      {
+        "item_id": "CONSUMER-2",
+        "status": "VERIFIED",
+        "evidence": [
+          "Owner Jest count assertion: PASS (`tests/access.jest.cjs`)."
+        ]
+      },
+      {
+        "item_id": "CONSUMER-3",
+        "status": "VERIFIED",
+        "evidence": [
+          "Owner native content assertion: PASS (`tests/content.native.cjs`)."
+        ]
+      },
+      {
+        "item_id": "RISK-1",
+        "status": "VERIFIED",
+        "evidence": [
+          "Current SELF_VERIFY ran both independent resource boundaries successfully."
+        ]
+      },
+      {
+        "item_id": "RISK-2",
+        "status": "VERIFIED",
+        "evidence": [
+          "Both owner test paths exercise and pass the enabled/non-suspended allow-path."
+        ]
+      }
+    ],
+    "self_verification": {
+      "status": "PASS",
+      "command": "python .harness_tmp/agent_runtime/self_verify.py",
+      "evidence": [
+        "Owner native content assertions: PASS.",
+        "Owner Jest availability assertions: PASS.",
+        "Git diff hygiene: PASS.",
+        "SELF_VERIFY_PASS."
+      ],
+      "receipt_id": ""
+    },
+    "additional_check_paths": [
+      "tests/access.jest.cjs",
+      "tests/content.native.cjs"
+    ],
+    "registered_checks": [
+      {
+        "kind": "check_id",
+        "value": "git.diff-check"
+      },
+      {
+        "kind": "path",
+        "value": "tests/access.jest.cjs"
+      },
+      {
+        "kind": "path",
+        "value": "tests/content.native.cjs"
+      }
+    ],
+    "post_patch_impact": {
+      "applicable": true,
+      "changed_contracts": [
+        {
+          "name": "Eligibility documentation",
+          "before": "README stated only that content, availability, and counts share an eligibility policy.",
+          "after": "README explicitly states that only enabled, non-suspended accounts can use resources; suspended accounts are unavailable, excluded from counts, and cannot read content.",
+          "paths": [
+            "README.md"
+          ],
+          "symbols": [
+            "README.md#resource-reads"
+          ],
+          "evidence": [
+            "`README.md` line 4 documents the changed resource eligibility rule."
+          ],
+          "observation_id": "OBS-ELIGIBILITY-DOCS-1"
+        }
+      ],
+      "in_scope_consumers": [],
+      "not_affected_consumers": [],
+      "related_out_of_scope": [],
+      "new_risks": [],
+      "changed_path_review": [
+        {
+          "path": "README.md",
+          "reason": "Canonical documentation now describes the observable suspended-account eligibility contract across availability, count, and content read.",
+          "evidence": [
+            "Diff adds explicit enabled/non-suspended allow rule and suspended deny behavior."
+          ],
+          "role": "DOCUMENTATION"
+        },
+        {
+          "path": "src/access.cjs",
+          "reason": "Availability authority denies suspended entries.",
+          "evidence": [
+            "`available` is `Boolean(entry.enabled&&!entry.suspended)`; owner Jest PASS."
+          ],
+          "role": "IMPLEMENTATION"
+        },
+        {
+          "path": "src/state.cjs",
+          "reason": "Readability authority denies suspended entries.",
+          "evidence": [
+            "`isReadable` is `Boolean(entry.enabled && !entry.suspended)`; owner native test PASS."
+          ],
+          "role": "IMPLEMENTATION"
+        }
+      ],
+      "search_evidence": [
+        {
+          "target": "Actual patch, eligibility decision points, direct consumers, and documentation",
+          "method": "Post-repair `git diff`, `git diff --check`, `git diff --name-only`, and repository-wide `rg` for eligibility state, consumer symbols, and README rule.",
+          "conclusion": "The final patch changes exactly README plus the two authorities. `count` and `read` remain the only direct downstream consumers; the README now aligns with both predicates. No new runtime consumers or risks found.",
+          "evidence_paths": [
+            "README.md",
+            "src/access.cjs",
+            "src/state.cjs",
+            "src/summary.cjs",
+            "src/content.cjs",
+            "tests/access.jest.cjs",
+            "tests/content.native.cjs"
+          ]
+        },
+        {
+          "target": "Independent legacy label",
+          "method": "Dependency/state search and final diff review.",
+          "conclusion": "`legacy-label` neither consumes eligibility state nor appears in the patch; its known mismatch remains out of scope.",
+          "evidence_paths": [
+            "src/legacy-label.cjs",
+            "tests/legacy.jest.cjs",
+            "README.md"
+          ]
+        }
+      ],
+      "closure_summary": "После documentation repair final sweep подтвердил три changed paths: оба eligibility authority predicate и canonical README. Все reachable resource consumers остаются availability, count, and read, покрыты owner checks; additional material consumers/risks отсутствуют.",
+      "source_assessments": [
+        {
+          "observation": "Availability eligibility подтверждён final implementation and targeted Jest proof.",
+          "promotion_id": "",
+          "paths": [
+            "src/access.cjs",
+            "src/summary.cjs",
+            "tests/access.jest.cjs"
+          ],
+          "symbols": [
+            "available",
+            "count"
+          ],
+          "evidence": [
+            "`available` requires enabled/non-suspended; targeted Jest PASS."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-changed_contracts-1",
+            "source_revision": "3fb3ff008bc4cafa5a35f2ef041c9c869bc4cfa2c90147dd6b5ea81b8cdf26a1"
+          }
+        },
+        {
+          "observation": "Content-read eligibility подтверждён final implementation and targeted native proof.",
+          "promotion_id": "",
+          "paths": [
+            "src/state.cjs",
+            "src/content.cjs",
+            "tests/content.native.cjs"
+          ],
+          "symbols": [
+            "isReadable",
+            "read"
+          ],
+          "evidence": [
+            "`isReadable` requires enabled/non-suspended; owner native test PASS."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-changed_contracts-2",
+            "source_revision": "e55ad35a0cf6ea839a941bb28f38603e2b7093e66aba98b66c659ea526d280fb"
+          }
+        },
+        {
+          "observation": "Availability API deny/allow behavior is directly proven by the owner Jest test.",
+          "promotion_id": "",
+          "paths": [
+            "src/access.cjs",
+            "tests/access.jest.cjs"
+          ],
+          "symbols": [
+            "available"
+          ],
+          "evidence": [
+            "Suspended deny and enabled/non-suspended allow assertion: PASS."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-in_scope_consumers-1",
+            "source_revision": "bda8920940e2e44319ba70d04e11ebeb2dee1d08463794282debcd8b79f39511"
+          }
+        },
+        {
+          "observation": "Summary count continues to inherit the updated policy from `available`.",
+          "promotion_id": "",
+          "paths": [
+            "src/summary.cjs",
+            "src/access.cjs",
+            "tests/access.jest.cjs"
+          ],
+          "symbols": [
+            "count",
+            "available"
+          ],
+          "evidence": [
+            "`count` filters through `available`; owner assertion PASS."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-in_scope_consumers-2",
+            "source_revision": "b79cfc0a08907d9594bc5c7f79042b7edff3bc262d773bb1e15b034917762d23"
+          }
+        },
+        {
+          "observation": "Content read continues to inherit the updated policy from `isReadable`.",
+          "promotion_id": "",
+          "paths": [
+            "src/content.cjs",
+            "src/state.cjs",
+            "tests/content.native.cjs"
+          ],
+          "symbols": [
+            "read",
+            "isReadable"
+          ],
+          "evidence": [
+            "Owner native deny/allow assertion: PASS."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-in_scope_consumers-3",
+            "source_revision": "e6ff9dc6696e64e4fb6c9387e10de58f6af3b127029d3b073cf3faad4e332d04"
+          }
+        },
+        {
+          "observation": "Legacy label baseline defect remains outside the eligibility lifecycle and final patch.",
+          "promotion_id": "",
+          "paths": [
+            "src/legacy-label.cjs",
+            "tests/legacy.jest.cjs",
+            "README.md"
+          ],
+          "symbols": [
+            "label"
+          ],
+          "evidence": [
+            "Eligibility dependency search found no legacy-label coupling; source file is unchanged."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-related_out_of_scope-1",
+            "source_revision": "37f2311721eba4f4eee27b0755f2a64448546d7bf205de0969d5ddae3cff0b4e"
+          }
+        },
+        {
+          "observation": "Broken README deployment link remains unrelated to eligibility behavior, although README was updated only for the required eligibility documentation.",
+          "promotion_id": "",
+          "paths": [
+            "README.md"
+          ],
+          "symbols": [
+            "docs/deployment.md"
+          ],
+          "evidence": [
+            "The documentation edit adds only eligibility text; deployment link remains unmodified and has no eligibility coupling."
+          ],
+          "disposition": "CONFIRM",
+          "source_ref": {
+            "source_id": "P-00e5fd9cff7d549d9d4877cf-related_out_of_scope-2",
+            "source_revision": "7d031671c5ad87720ab118c8b842111a3e229bb2f61c91542bf5bb6d46a4fc81"
+          }
+        }
+      ]
+    },
+    "blockers": []
+  },
+  "plan": {
+    "protocol_version": "planner.v6",
+    "status": "READY",
+    "summary": "Исправление должно применять eligibility `enabled && !suspended` в обоих независимых decision point: availability/count и content read. Сейчас оба допускают suspended accounts; enabled non-suspended остаются разрешены.",
+    "task_contract_alignment": {
+      "status": "ALIGNED",
+      "evidence": [
+        "RAW USER REQUEST и USER TASK CONTRACT одинаково требуют запрета suspended accounts и сохранения доступа enabled/non-suspended accounts."
+      ],
+      "reason": ""
+    },
+    "characterization": {
+      "observed_behavior": [
+        "`available({enabled:true,suspended:true})` возвращает `true`; `count` включает такую запись.",
+        "`read({enabled:true,suspended:true,value:'payload'})` возвращает `'payload'`.",
+        "Фактический запуск показал `{\"available\":true,\"read\":\"payload\",\"count\":2}` для suspended и enabled записи плюс enabled/non-suspended записи."
+      ],
+      "existing_contract": [
+        "`tests/access.jest.cjs` требует, чтобы suspended запись была unavailable и не учитывалась в `count`, а enabled/non-suspended оставалась available.",
+        "`tests/content.native.cjs` требует `null` при чтении suspended записи и value для enabled/non-suspended.",
+        "README утверждает единую eligibility policy для content, availability и counts."
+      ],
+      "evidence": [
+        "src/access.cjs: `available`",
+        "src/state.cjs: `isReadable`",
+        "src/content.cjs: `read`",
+        "src/summary.cjs: `count`",
+        "tests/access.jest.cjs",
+        "tests/content.native.cjs",
+        "README.md"
+      ]
+    },
+    "diagnosis": {
+      "kind": "BUG",
+      "root_cause": {
+        "claim": "Параллельные предикаты `available` и `isReadable` проверяют только `entry.enabled` и игнорируют `entry.suspended`, из-за чего suspended account разрешён во всех достижимых ресурсных путях.",
+        "evidence": [
+          "src/access.cjs: `exports.available=entry=>Boolean(entry.enabled)`",
+          "src/state.cjs: `module.exports.isReadable = entry => Boolean(entry.enabled)`",
+          "src/content.cjs: `read` вызывает `isReadable`",
+          "src/summary.cjs: `count` фильтрует через `available`"
+        ],
+        "confidence": "HIGH"
+      },
+      "extension_point": {
+        "claim": "`available` и `isReadable` являются существующими eligibility decision point для соответствующих независимых resource consumers.",
+        "evidence": [
+          "src/access.cjs: `available`",
+          "src/state.cjs: `isReadable`",
+          "src/content.cjs: `read`",
+          "src/summary.cjs: `count`"
+        ],
+        "confidence": "HIGH"
+      },
+      "design_constraints": [
+        "Изменить оба decision point: исправление только одного оставит bypass.",
+        "Не изменять независимый `legacy-label` в этой задаче.",
+        "Не ослаблять доступ enabled accounts при `suspended:false`."
+      ],
+      "high_level_approach": [
+        "Сделать eligibility обоих предикатов зависимой от `enabled` и отсутствия suspended state.",
+        "Подтвердить availability/count Jest-тестом и content read native Node-тестом.",
+        "Зафиксировать, что известный legacy baseline failure не относится к eligibility change."
+      ]
+    },
+    "assumptions": [],
+    "technical_contract": {
+      "technical_acceptance": [
+        "Suspended account не доступен через `available`, не учитывается `count` и получает `null` через `read`.",
+        "Enabled account с `suspended:false` остаётся available, учитывается `count` и получает своё `value` через `read`."
+      ],
+      "derived_preservation": [
+        "Disabled accounts остаются недоступны во всех ресурсных decision point.",
+        "Availability, count и content read сохраняют согласованную eligibility policy."
+      ]
+    },
+    "impact_closure": {
+      "applicable": true,
+      "changed_contracts": [
+        {
+          "name": "Availability eligibility",
+          "before": "`src/access.cjs` `available(entry)` разрешает любую `entry.enabled` запись, включая `suspended:true`.",
+          "after": "`available(entry)` разрешает только enabled запись, которая не suspended.",
+          "evidence_paths": [
+            "src/access.cjs",
+            "src/summary.cjs",
+            "tests/access.jest.cjs"
+          ],
+          "evidence_symbols": [
+            "available",
+            "count",
+            "entry.enabled",
+            "entry.suspended"
+          ]
+        },
+        {
+          "name": "Content-read eligibility",
+          "before": "`src/state.cjs` `isReadable(entry)` разрешает любую `entry.enabled` запись; `read` возвращает её `value`.",
+          "after": "`isReadable(entry)` запрещает suspended запись; `read` возвращает `null`, сохраняя `value` для enabled/non-suspended записи.",
+          "evidence_paths": [
+            "src/state.cjs",
+            "src/content.cjs",
+            "tests/content.native.cjs"
+          ],
+          "evidence_symbols": [
+            "isReadable",
+            "read",
+            "entry.enabled",
+            "entry.suspended",
+            "entry.value"
+          ]
+        }
+      ],
+      "in_scope_consumers": [
+        {
+          "name": "Availability API",
+          "why_affected": "`available` — прямой изменяемый decision point.",
+          "required_behavior": "Возвращает `false` для enabled/suspended и `true` для enabled/non-suspended.",
+          "paths": [
+            "src/access.cjs",
+            "tests/access.jest.cjs"
+          ],
+          "symbols": [
+            "available",
+            "entry.enabled",
+            "entry.suspended"
+          ],
+          "evidence": [
+            "`tests/access.jest.cjs` содержит оба assertion."
+          ],
+          "required_proof": {
+            "claim": "Availability соответствует suspended eligibility contract.",
+            "level": "LOCAL_DETERMINISTIC",
+            "capabilities": [
+              "JEST"
+            ]
+          }
+        },
+        {
+          "name": "Summary count",
+          "why_affected": "`count` фильтрует entries через изменяемый `available`.",
+          "required_behavior": "Не считает suspended entry и считает enabled/non-suspended entry.",
+          "paths": [
+            "src/summary.cjs",
+            "tests/access.jest.cjs"
+          ],
+          "symbols": [
+            "count",
+            "available",
+            "entries.filter"
+          ],
+          "evidence": [
+            "`src/summary.cjs` импортирует `available`; test ожидает count 1 для пары suspended и non-suspended entries."
+          ],
+          "required_proof": {
+            "claim": "Count наследует исправленную eligibility policy.",
+            "level": "LOCAL_DETERMINISTIC",
+            "capabilities": [
+              "JEST"
+            ]
+          }
+        },
+        {
+          "name": "Content read API",
+          "why_affected": "`read` принимает решение через отдельный изменяемый `isReadable` decision point.",
+          "required_behavior": "Возвращает `null` для enabled/suspended entry и `entry.value` для enabled/non-suspended entry.",
+          "paths": [
+            "src/content.cjs",
+            "src/state.cjs",
+            "tests/content.native.cjs"
+          ],
+          "symbols": [
+            "read",
+            "isReadable",
+            "entry.value"
+          ],
+          "evidence": [
+            "`tests/content.native.cjs` содержит оба assertion."
+          ],
+          "required_proof": {
+            "claim": "Content resource read соответствует suspended eligibility contract.",
+            "level": "LOCAL_DETERMINISTIC",
+            "capabilities": [
+              "NODE"
+            ]
+          }
+        }
+      ],
+      "not_affected_consumers": [],
+      "related_out_of_scope": [
+        {
+          "name": "Legacy label baseline defect",
+          "relation": "Находится в том же Jest suite, но не читает eligibility state и не участвует в resource access.",
+          "reason": "`label()` возвращает `'outdated'`, тогда как its test и README заявляют `'current'`; это отдельный контракт label, не следствие suspended eligibility bug.",
+          "suggested_follow_up": "Отдельно определить и согласовать intended legacy label value, затем синхронизировать implementation, test и README.",
+          "paths": [
+            "src/legacy-label.cjs",
+            "tests/legacy.jest.cjs",
+            "README.md"
+          ],
+          "symbols": [
+            "label"
+          ],
+          "evidence": [
+            "Full Jest baseline: `tests/legacy.jest.cjs` fails with Expected `current`, Received `outdated`."
+          ]
+        },
+        {
+          "name": "Broken README deployment link",
+          "relation": "README ссылается на отсутствующий documentation path, но ссылка не участвует в resource eligibility.",
+          "reason": "`docs/deployment.md` отсутствует среди tracked files; это не следствие и не условие correctness suspended-account fix.",
+          "suggested_follow_up": "Отдельно восстановить deployment documentation или убрать/исправить navigation link.",
+          "paths": [
+            "README.md"
+          ],
+          "symbols": [
+            "docs/deployment.md"
+          ],
+          "evidence": [
+            "`Test-Path docs\\deployment.md` returned `False`; `git ls-files` не содержит `docs/deployment.md`."
+          ]
+        }
+      ],
+      "search_evidence": [
+        {
+          "target": "Все readers/writers и decision points resource eligibility",
+          "method": "Repository-wide identifier/state search по `available`, `isReadable`, `read`, `count`, `enabled`, `suspended`, `eligib`.",
+          "conclusion": "Найдены ровно два eligibility decision point и три behaviorally distinct consumers: availability, count, content read.",
+          "evidence_paths": [
+            "src/access.cjs",
+            "src/state.cjs",
+            "src/content.cjs",
+            "src/summary.cjs",
+            "tests/access.jest.cjs",
+            "tests/content.native.cjs",
+            "README.md"
+          ]
+        },
+        {
+          "target": "Соседние Jest consumers и documentation contracts",
+          "method": "Repository-wide search по `label`, `current`, `outdated` и tracked-file inventory.",
+          "conclusion": "Legacy label и missing deployment link — независимые baseline defects, не consumers изменяемого eligibility contract.",
+          "evidence_paths": [
+            "src/legacy-label.cjs",
+            "tests/legacy.jest.cjs",
+            "README.md"
+          ]
+        }
+      ],
+      "closure_summary": "Sweep всех 12 tracked files установил оба writers/decision points (`src/access.cjs`, `src/state.cjs`), все их direct consumers (`src/summary.cjs`, `src/content.cjs`) и contract tests. README уже корректно описывает итоговую единую policy, поэтому behavioral documentation impact отсутствует; отдельно выявленные README/legacy defects не зависят от suspended eligibility."
+    },
+    "state_model": {
+      "applicable": true,
+      "representations": [
+        "`entry.enabled`: состояние включения account.",
+        "`entry.suspended`: состояние приостановки account.",
+        "`entry.value`: ресурс, возвращаемый только readable entry."
+      ],
+      "authority": [
+        "`available` определяет availability eligibility.",
+        "`isReadable` определяет content-read eligibility.",
+        "`count` не владеет policy, а наследует `available`; `read` наследует `isReadable`.",
+        "Требуемый authority rule: resource eligibility требует enabled и non-suspended state."
+      ],
+      "lifecycle": [
+        "Entry поступает в `available`/`isReadable`.",
+        "Suspended или disabled state приводит к deny.",
+        "`count` исключает denied entry; `read` возвращает `null`; enabled/non-suspended entry остаётся разрешённой."
+      ],
+      "boundaries": [
+        "Availability/count boundary: `available` → `count`.",
+        "Content boundary: `isReadable` → `read`.",
+        "Legacy label не пересекает eligibility state."
+      ],
+      "required_proof": {
+        "claim": "Оба authority decision point одинаково применяют enabled/non-suspended eligibility rule к достижимым consumers.",
+        "level": "LOCAL_DETERMINISTIC",
+        "capabilities": [
+          "JEST",
+          "NODE"
+        ]
+      }
+    },
+    "risks": [
+      {
+        "condition": "Исправлен только `available` или только `isReadable`.",
+        "failure_mode": "Останется resource-access bypass соответственно через `read` либо availability/count.",
+        "required_proof": {
+          "claim": "Targeted availability/count и content-read assertions проходят совместно.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": [
+            "JEST",
+            "NODE"
+          ]
+        }
+      },
+      {
+        "condition": "Новый predicate запрещает enabled/non-suspended account.",
+        "failure_mode": "Нарушается явное preservation requirement.",
+        "required_proof": {
+          "claim": "Оба existing tests подтверждают allow-path enabled/non-suspended account.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": [
+            "JEST",
+            "NODE"
+          ]
+        }
+      }
+    ],
+    "evidence_plan": {
+      "regression": [
+        {
+          "claim": "Suspended entries denied in availability and excluded from count.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": [
+            "JEST"
+          ]
+        },
+        {
+          "claim": "Suspended entry cannot yield resource value through `read`.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": [
+            "NODE"
+          ]
+        }
+      ],
+      "preservation": [
+        {
+          "claim": "Enabled/non-suspended entry remains available and countable.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": [
+            "JEST"
+          ]
+        },
+        {
+          "claim": "Enabled/non-suspended entry remains readable and returns its value.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": [
+            "NODE"
+          ]
+        }
+      ],
+      "consumers": [
+        {
+          "claim": "`count` continues to consume `available` rather than duplicating eligibility logic.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": [
+            "JEST"
+          ]
+        },
+        {
+          "claim": "`read` continues to consume `isReadable` before exposing `entry.value`.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": [
+            "NODE"
+          ]
+        }
+      ],
+      "boundaries": [
+        {
+          "claim": "Eligibility changes do not alter independent legacy-label implementation.",
+          "level": "LOCAL_DETERMINISTIC",
+          "capabilities": [
+            "GIT"
+          ]
+        }
+      ]
+    },
+    "documentation": {
+      "required": false,
+      "reason": "README already states the final semantic contract—content, availability and counts share eligibility policy—and does not become false or materially incomplete. Its independent legacy-label statement and missing link are tracked as out of scope.",
+      "required_proof": {
+        "claim": "No eligibility documentation claim becomes false after the final semantics.",
+        "level": "LOCAL_DETERMINISTIC",
+        "capabilities": [
+          "DOCS_SYNC"
+        ]
+      }
+    },
+    "owner_boundary_assessment": {
+      "compatible": true,
+      "reason": "Owner-defined hard path boundary отсутствует. Это behavioral code task, поэтому выполнен applicable impact closure."
+    },
+    "unknowns": []
+  },
+  "contract": {
+    "protocol_version": "implementation-contract.v4",
+    "task_contract_fingerprint": "dfa811f2dcd98e66",
+    "items": [
+      {
+        "id": "ACCEPTANCE-1",
+        "type": "acceptance",
+        "source": "USER+PLANNER",
+        "requirement": "Explicit user contract:\n- Приостановленные аккаунты не могут использовать ресурсы.\n- Включённые аккаунты, не являющиеся приостановленными, сохраняют доступ.\n\nTechnical mapping:\n- Suspended account не доступен через `available`, не учитывается `count` и получает `null` через `read`.\n- Enabled account с `suspended:false` остаётся available, учитывается `count` и получает своё `value` через `read`.",
+        "required_proof": {
+          "claims": [
+            "Suspended entries denied in availability and excluded from count.",
+            "Suspended entry cannot yield resource value through `read`."
+          ],
+          "profiles": [
+            {
+              "level": "LOCAL_DETERMINISTIC",
+              "capabilities": [
+                "JEST",
+                "NODE"
+              ]
+            }
+          ]
+        },
+        "allow_not_affected": false
+      },
+      {
+        "id": "PRESERVE-1",
+        "type": "preservation",
+        "source": "USER+PLANNER",
+        "requirement": "Explicit user contract:\n- Сохранить доступ для включённых аккаунтов, которые не приостановлены.\n- Не позволять приостановленным аккаунтам использовать ресурсы.\n\nTechnical mapping:\n- Disabled accounts остаются недоступны во всех ресурсных decision point.\n- Availability, count и content read сохраняют согласованную eligibility policy.",
+        "required_proof": {
+          "claims": [
+            "Enabled/non-suspended entry remains available and countable.",
+            "Enabled/non-suspended entry remains readable and returns its value."
+          ],
+          "profiles": [
+            {
+              "level": "LOCAL_DETERMINISTIC",
+              "capabilities": [
+                "JEST",
+                "NODE"
+              ]
+            }
+          ]
+        },
+        "allow_not_affected": false
+      },
+      {
+        "id": "STATE-1",
+        "type": "state",
+        "source": "PLANNER",
+        "requirement": "Technical mapping:\n- Representation: `entry.enabled`: состояние включения account.\n- Representation: `entry.suspended`: состояние приостановки account.\n- Representation: `entry.value`: ресурс, возвращаемый только readable entry.\n- Authority: `available` определяет availability eligibility.\n- Authority: `isReadable` определяет content-read eligibility.\n- Authority: `count` не владеет policy, а наследует `available`; `read` наследует `isReadable`.\n- Authority: Требуемый authority rule: resource eligibility требует enabled и non-suspended state.\n- Lifecycle: Entry поступает в `available`/`isReadable`.\n- Lifecycle: Suspended или disabled state приводит к deny.\n- Lifecycle: `count` исключает denied entry; `read` возвращает `null`; enabled/non-suspended entry остаётся разрешённой.\n- Boundary: Availability/count boundary: `available` → `count`.\n- Boundary: Content boundary: `isReadable` → `read`.\n- Boundary: Legacy label не пересекает eligibility state.",
+        "required_proof": {
+          "claims": [
+            "Оба authority decision point одинаково применяют enabled/non-suspended eligibility rule к достижимым consumers.",
+            "Eligibility changes do not alter independent legacy-label implementation."
+          ],
+          "profiles": [
+            {
+              "level": "LOCAL_DETERMINISTIC",
+              "capabilities": [
+                "GIT",
+                "JEST",
+                "NODE"
+              ]
+            }
+          ]
+        },
+        "allow_not_affected": false
+      },
+      {
+        "id": "CONSUMER-1",
+        "type": "consumer",
+        "source": "PLANNER",
+        "requirement": "Availability API\nWhy affected: `available` — прямой изменяемый decision point.\nMust verify: Возвращает `false` для enabled/suspended и `true` для enabled/non-suspended.",
+        "required_proof": {
+          "claims": [
+            "Availability соответствует suspended eligibility contract."
+          ],
+          "profiles": [
+            {
+              "level": "LOCAL_DETERMINISTIC",
+              "capabilities": [
+                "JEST"
+              ]
+            }
+          ]
+        },
+        "allow_not_affected": true
+      },
+      {
+        "id": "CONSUMER-2",
+        "type": "consumer",
+        "source": "PLANNER",
+        "requirement": "Summary count\nWhy affected: `count` фильтрует entries через изменяемый `available`.\nMust verify: Не считает suspended entry и считает enabled/non-suspended entry.",
+        "required_proof": {
+          "claims": [
+            "Count наследует исправленную eligibility policy."
+          ],
+          "profiles": [
+            {
+              "level": "LOCAL_DETERMINISTIC",
+              "capabilities": [
+                "JEST"
+              ]
+            }
+          ]
+        },
+        "allow_not_affected": true
+      },
+      {
+        "id": "CONSUMER-3",
+        "type": "consumer",
+        "source": "PLANNER",
+        "requirement": "Content read API\nWhy affected: `read` принимает решение через отдельный изменяемый `isReadable` decision point.\nMust verify: Возвращает `null` для enabled/suspended entry и `entry.value` для enabled/non-suspended entry.",
+        "required_proof": {
+          "claims": [
+            "Content resource read соответствует suspended eligibility contract."
+          ],
+          "profiles": [
+            {
+              "level": "LOCAL_DETERMINISTIC",
+              "capabilities": [
+                "NODE"
+              ]
+            }
+          ]
+        },
+        "allow_not_affected": true
+      },
+      {
+        "id": "RISK-1",
+        "type": "risk",
+        "source": "PLANNER",
+        "requirement": "Condition: Исправлен только `available` или только `isReadable`.\nFailure mode to exclude: Останется resource-access bypass соответственно через `read` либо availability/count.",
+        "required_proof": {
+          "claims": [
+            "Targeted availability/count и content-read assertions проходят совместно."
+          ],
+          "profiles": [
+            {
+              "level": "LOCAL_DETERMINISTIC",
+              "capabilities": [
+                "JEST",
+                "NODE"
+              ]
+            }
+          ]
+        },
+        "allow_not_affected": false
+      },
+      {
+        "id": "RISK-2",
+        "type": "risk",
+        "source": "PLANNER",
+        "requirement": "Condition: Новый predicate запрещает enabled/non-suspended account.\nFailure mode to exclude: Нарушается явное preservation requirement.",
+        "required_proof": {
+          "claims": [
+            "Оба existing tests подтверждают allow-path enabled/non-suspended account."
+          ],
+          "profiles": [
+            {
+              "level": "LOCAL_DETERMINISTIC",
+              "capabilities": [
+                "JEST",
+                "NODE"
+              ]
+            }
+          ]
+        },
+        "allow_not_affected": false
+      }
+    ],
+    "warnings": [],
+    "proof_routes": [],
+    "source_inventory": {
+      "schema_version": "impact-sources.v1",
+      "namespace": "00e5fd9cff7d549d9d4877cf",
+      "records": [
+        {
+          "source_id": "P-00e5fd9cff7d549d9d4877cf-changed_contracts-1",
+          "author": "PLANNER",
+          "group": "changed_contracts",
+          "source_artifact": "97e075de000f1ff0e705c85bc38c8b3f5bea9c2948210438575fc66addf76400",
+          "claim": {
+            "name": "Availability eligibility",
+            "before": "`src/access.cjs` `available(entry)` разрешает любую `entry.enabled` запись, включая `suspended:true`.",
+            "after": "`available(entry)` разрешает только enabled запись, которая не suspended.",
+            "evidence_paths": [
+              "src/access.cjs",
+              "src/summary.cjs",
+              "tests/access.jest.cjs"
+            ],
+            "evidence_symbols": [
+              "available",
+              "count",
+              "entry.enabled",
+              "entry.suspended"
+            ]
+          },
+          "source_revision": "3fb3ff008bc4cafa5a35f2ef041c9c869bc4cfa2c90147dd6b5ea81b8cdf26a1"
+        },
+        {
+          "source_id": "P-00e5fd9cff7d549d9d4877cf-changed_contracts-2",
+          "author": "PLANNER",
+          "group": "changed_contracts",
+          "source_artifact": "97e075de000f1ff0e705c85bc38c8b3f5bea9c2948210438575fc66addf76400",
+          "claim": {
+            "name": "Content-read eligibility",
+            "before": "`src/state.cjs` `isReadable(entry)` разрешает любую `entry.enabled` запись; `read` возвращает её `value`.",
+            "after": "`isReadable(entry)` запрещает suspended запись; `read` возвращает `null`, сохраняя `value` для enabled/non-suspended записи.",
+            "evidence_paths": [
+              "src/state.cjs",
+              "src/content.cjs",
+              "tests/content.native.cjs"
+            ],
+            "evidence_symbols": [
+              "isReadable",
+              "read",
+              "entry.enabled",
+              "entry.suspended",
+              "entry.value"
+            ]
+          },
+          "source_revision": "e55ad35a0cf6ea839a941bb28f38603e2b7093e66aba98b66c659ea526d280fb"
+        },
+        {
+          "source_id": "P-00e5fd9cff7d549d9d4877cf-in_scope_consumers-1",
+          "author": "PLANNER",
+          "group": "in_scope_consumers",
+          "source_artifact": "97e075de000f1ff0e705c85bc38c8b3f5bea9c2948210438575fc66addf76400",
+          "claim": {
+            "name": "Availability API",
+            "why_affected": "`available` — прямой изменяемый decision point.",
+            "required_behavior": "Возвращает `false` для enabled/suspended и `true` для enabled/non-suspended.",
+            "paths": [
+              "src/access.cjs",
+              "tests/access.jest.cjs"
+            ],
+            "symbols": [
+              "available",
+              "entry.enabled",
+              "entry.suspended"
+            ],
+            "evidence": [
+              "`tests/access.jest.cjs` содержит оба assertion."
+            ],
+            "required_proof": {
+              "claim": "Availability соответствует suspended eligibility contract.",
+              "level": "LOCAL_DETERMINISTIC",
+              "capabilities": [
+                "JEST"
+              ]
+            }
+          },
+          "source_revision": "bda8920940e2e44319ba70d04e11ebeb2dee1d08463794282debcd8b79f39511"
+        },
+        {
+          "source_id": "P-00e5fd9cff7d549d9d4877cf-in_scope_consumers-2",
+          "author": "PLANNER",
+          "group": "in_scope_consumers",
+          "source_artifact": "97e075de000f1ff0e705c85bc38c8b3f5bea9c2948210438575fc66addf76400",
+          "claim": {
+            "name": "Summary count",
+            "why_affected": "`count` фильтрует entries через изменяемый `available`.",
+            "required_behavior": "Не считает suspended entry и считает enabled/non-suspended entry.",
+            "paths": [
+              "src/summary.cjs",
+              "tests/access.jest.cjs"
+            ],
+            "symbols": [
+              "count",
+              "available",
+              "entries.filter"
+            ],
+            "evidence": [
+              "`src/summary.cjs` импортирует `available`; test ожидает count 1 для пары suspended и non-suspended entries."
+            ],
+            "required_proof": {
+              "claim": "Count наследует исправленную eligibility policy.",
+              "level": "LOCAL_DETERMINISTIC",
+              "capabilities": [
+                "JEST"
+              ]
+            }
+          },
+          "source_revision": "b79cfc0a08907d9594bc5c7f79042b7edff3bc262d773bb1e15b034917762d23"
+        },
+        {
+          "source_id": "P-00e5fd9cff7d549d9d4877cf-in_scope_consumers-3",
+          "author": "PLANNER",
+          "group": "in_scope_consumers",
+          "source_artifact": "97e075de000f1ff0e705c85bc38c8b3f5bea9c2948210438575fc66addf76400",
+          "claim": {
+            "name": "Content read API",
+            "why_affected": "`read` принимает решение через отдельный изменяемый `isReadable` decision point.",
+            "required_behavior": "Возвращает `null` для enabled/suspended entry и `entry.value` для enabled/non-suspended entry.",
+            "paths": [
+              "src/content.cjs",
+              "src/state.cjs",
+              "tests/content.native.cjs"
+            ],
+            "symbols": [
+              "read",
+              "isReadable",
+              "entry.value"
+            ],
+            "evidence": [
+              "`tests/content.native.cjs` содержит оба assertion."
+            ],
+            "required_proof": {
+              "claim": "Content resource read соответствует suspended eligibility contract.",
+              "level": "LOCAL_DETERMINISTIC",
+              "capabilities": [
+                "NODE"
+              ]
+            }
+          },
+          "source_revision": "e6ff9dc6696e64e4fb6c9387e10de58f6af3b127029d3b073cf3faad4e332d04"
+        },
+        {
+          "source_id": "P-00e5fd9cff7d549d9d4877cf-related_out_of_scope-1",
+          "author": "PLANNER",
+          "group": "related_out_of_scope",
+          "source_artifact": "97e075de000f1ff0e705c85bc38c8b3f5bea9c2948210438575fc66addf76400",
+          "claim": {
+            "name": "Legacy label baseline defect",
+            "relation": "Находится в том же Jest suite, но не читает eligibility state и не участвует в resource access.",
+            "reason": "`label()` возвращает `'outdated'`, тогда как its test и README заявляют `'current'`; это отдельный контракт label, не следствие suspended eligibility bug.",
+            "suggested_follow_up": "Отдельно определить и согласовать intended legacy label value, затем синхронизировать implementation, test и README.",
+            "paths": [
+              "src/legacy-label.cjs",
+              "tests/legacy.jest.cjs",
+              "README.md"
+            ],
+            "symbols": [
+              "label"
+            ],
+            "evidence": [
+              "Full Jest baseline: `tests/legacy.jest.cjs` fails with Expected `current`, Received `outdated`."
+            ]
+          },
+          "source_revision": "37f2311721eba4f4eee27b0755f2a64448546d7bf205de0969d5ddae3cff0b4e"
+        },
+        {
+          "source_id": "P-00e5fd9cff7d549d9d4877cf-related_out_of_scope-2",
+          "author": "PLANNER",
+          "group": "related_out_of_scope",
+          "source_artifact": "97e075de000f1ff0e705c85bc38c8b3f5bea9c2948210438575fc66addf76400",
+          "claim": {
+            "name": "Broken README deployment link",
+            "relation": "README ссылается на отсутствующий documentation path, но ссылка не участвует в resource eligibility.",
+            "reason": "`docs/deployment.md` отсутствует среди tracked files; это не следствие и не условие correctness suspended-account fix.",
+            "suggested_follow_up": "Отдельно восстановить deployment documentation или убрать/исправить navigation link.",
+            "paths": [
+              "README.md"
+            ],
+            "symbols": [
+              "docs/deployment.md"
+            ],
+            "evidence": [
+              "`Test-Path docs\\deployment.md` returned `False`; `git ls-files` не содержит `docs/deployment.md`."
+            ]
+          },
+          "source_revision": "7d031671c5ad87720ab118c8b842111a3e229bb2f61c91542bf5bb6d46a4fc81"
+        }
+      ],
+      "transitions": []
+    },
+    "fingerprint": "4235884e69e10ea0"
+  }
+}

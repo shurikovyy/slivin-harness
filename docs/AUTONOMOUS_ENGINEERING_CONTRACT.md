@@ -431,3 +431,20 @@ repositories и не кодируют hidden scenarios конкретного be
 - Потеря blind impact model или его повторное использование после candidate change.
 - Новая feature от Planner, ослабление verbatim user claims или owner boundary.
 - Подгонка prompt/tests под hidden benchmark вместо исправления автономного исследования.
+
+
+## Controller routing of a detected Implementer model conflict
+
+`COMPLETE` не принимается при обнаруженном `POST_PATCH_MODEL_DIVERGENCE`.
+Controller не обязан ждать, пока модель правильно перепишет status: при текущем
+Planner он сохраняет original report и неизменные impact observations, создаёт
+явно Controller-owned `REPLAN_REQUIRED/TECHNICAL_MODEL_DIVERGENCE` и повторно
+проверяет его как запрос пересмотра. Далее действует прежний clean semantic reset
+с fresh Planner/Implementer и прежними лимитами. Receipt или acceptance для
+отвергнутого candidate не создаётся. Это не report-only correction и не право
+ослабить original user intent. Остальные semantic errors и invalid source refs
+не становятся основанием для автоматического пересмотра по этому правилу.
+
+Историческая исправленная ошибка роли не является терминальной причиной.
+Controlled stop сохраняет текущий reason, phase и attempt; отсутствие такого
+record означает неизвестную причину, а не возможность выбрать старую diagnostic.

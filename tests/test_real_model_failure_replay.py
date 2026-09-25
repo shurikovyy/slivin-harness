@@ -102,8 +102,8 @@ class RealModelFailureReplayTests(unittest.TestCase):
                 json.dumps(evaluator_failure), encoding='utf-8',
             )
             enriched = case_failure_evidence(run=run, exit_code=1, independent_validation=None)
-            self.assertEqual(enriched['artifact_failure']['correction_attempt'], 1)
-            self.assertNotIn('private_message', enriched['artifact_failure'])
+            self.assertEqual(enriched['historical_artifact_failure']['correction_attempt'], 1)
+            self.assertNotIn('private_message', enriched['historical_artifact_failure'])
             outer = case_failure_evidence(
                 run=run, exit_code=0,
                 independent_validation={'status': 'FAIL', 'checks': {'mixed_document': False, 'replay': True}},

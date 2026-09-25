@@ -1364,6 +1364,45 @@ qualification PASS. До этих уровней этот код не объяв
 **Пересмотр.** Менять model/effort/cases/limits или принимать Sol/high можно только
 после отдельного decision review с соответствующим воспроизводимым evidence.
 
+### Уточнение D-035: обнаруженный Controller конфликт Implementer (2026-09-25)
+
+**Основание.** В `shr-q-2c74a25f2f`, QS1 на `2560401`, Evaluator исправил
+`IMPACT_EVIDENCE_EMPTY` и завершил review. Позднее Implementer при repair изменил
+README, но обозначил документацию как новую `changed_contracts` observation при
+`COMPLETE`. Исправление `symbols` прошло; следующим отказом стал
+`POST_PATCH_MODEL_DIVERGENCE`, ошибочно направленный в report-only correction.
+Отсутствие terminal record позволило qualification снова показать старую ошибку
+Evaluator. Это не исчерпание попыток исправить пустой `symbols`.
+
+**Решение.** Существующий Implementer admission детерминированно направляет именно
+`POST_PATCH_MODEL_DIVERGENCE` из `COMPLETE` при текущем Planner в существующий
+`REPLAN_REQUIRED/TECHNICAL_MODEL_DIVERGENCE`. Оригинал остаётся private raw artifact;
+отдельный Controller routing record связывает original/routed fingerprints и
+candidate. Observations, source refs, proof и Contract evidence не меняются.
+Изменяются только status/reason kind и Controller explanation/evidence. Результат
+повторно валидируется как запрос пересмотра, не получает receipt и проходит обычный
+clean reset, fresh Planner/Implementer и прежний replan budget. Связанные дефекты
+по-прежнему должны исследоваться самостоятельно.
+
+**Отклонено.** Принимать COMPLETE с новой моделью, удалять неудобную observation,
+освобождать все `.md` от проверки, увеличивать correction budget или отправлять
+в replan любую ошибку source inventory: эти варианты ослабляют authority либо
+не устраняют ошибочный переход. Дополнительная подсистема и новый release gate
+не требуются; регрессия исполняется в существующем offline self-check.
+
+**Диагностика.** Каждый обработанный exception exit пишет текущий
+`terminal_failure.json`, включая controlled stops. При report stop сохраняются
+causal reason code, stop reason, phase и correction attempt; model prose не
+публикуется. Старые Evaluator attempts доступны только как
+`historical_artifact_failure`. Без terminal record итоговая причина UNKNOWN,
+а не выведенная из последнего найденного файла.
+
+**Проверка и предел.** Log-derived исходный и исправленный отчёты из QS1 сохранены
+как fixture; production admission тестируется без модели. Сквозная synthetic
+проверка исполняет clean replan, fresh agents, checks и final acceptance. Это
+не новый Windows/Codex model-backed qualification и не доказательство прохождения
+всего `_90`. Версии role protocols, профиль, лимиты и качество приёмки не меняются.
+
 ## Шаблон новой записи
 
 ```markdown

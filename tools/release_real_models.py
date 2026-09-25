@@ -470,6 +470,7 @@ _PUBLIC_FAILURE_KEYS = {
     "schema_version", "status", "phase", "terminal_failure_type", "failure_class",
     "error_type", "reason_code", "failure_kind", "field", "correction_attempt",
     "correctable", "artifact_fingerprint", "sanitized_artifact", "raw_artifact",
+    "stop_reason_code",
 }
 
 
@@ -509,28 +510,23 @@ def case_failure_evidence(*, run: Path, exit_code: int, independent_validation: 
     evaluator_failures = sorted(run.glob("evaluator_*_PHASE_*.failure.json"))
     evaluator_failure = _read_public_failure(evaluator_failures[-1]) if evaluator_failures else None
     terminal = _read_public_failure(run / "terminal_failure.json")
-    if terminal is not None:
+    if terminal is not None and terminal.get("reason_code") and terminal.get("terminal_failure_type"):
         if evaluator_failure is not None:
-            terminal["artifact_failure"] = evaluator_failure
+            # This attempt may have recovered. It is context, never authority
+            # for a later stop in another stage or correction attempt.
+            terminal["historical_artifact_failure"] = evaluator_failure
         return terminal
-    if evaluator_failure is not None:
-        return {
-            **evaluator_failure,
-            "terminal_failure_type": "AGENT_ARTIFACT_FAILURE",
-            "failure_class": (
-                "RECOVERABLE_REPORT_ARTIFACT_FAILURE"
-                if evaluator_failure.get("correctable") is True
-                else "PRODUCT_OR_MODEL_TASK_FAILURE"
-            ),
-        }
-    return {
-        "terminal_failure_type": "PRODUCT_OR_MODEL_TASK_FAILURE",
-        "failure_class": "PRODUCT_OR_MODEL_TASK_FAILURE",
+    unknown = {
+        "terminal_failure_type": "UNKNOWN_TERMINAL_FAILURE",
+        "failure_class": "UNKNOWN_TERMINAL_FAILURE",
         "reason_code": "TASK_RUNNER_FAILED_WITHOUT_TYPED_PUBLIC_DETAIL",
         "failure_kind": None,
         "field": None,
         "correction_attempt": None,
     }
+    if evaluator_failure is not None:
+        unknown["historical_artifact_failure"] = evaluator_failure
+    return unknown
 
 
 def execute_case(*, output: Path, label: str, kind: str, node: Path, codex: Path,

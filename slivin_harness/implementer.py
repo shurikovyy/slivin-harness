@@ -480,7 +480,10 @@ def materialize_post_patch_impact(report: Mapping[str, Any], *, contract: Mappin
     if require_expanded and (added or expanded != inventory):
         source_error("POST_PATCH_DISCOVERY_CONTRACT", "Observations must be admitted before final COMPLETE", added)
     if complete and plan is not None and wire["changed_contracts"]:
-        source_error("POST_PATCH_MODEL_DIVERGENCE", "A new technical model requires explicit semantic replan")
+        _implementer_semantic_failure(
+            "POST_PATCH_MODEL_DIVERGENCE", "post_patch_impact.changed_contracts",
+            "A new technical model requires explicit semantic replan",
+        )
     canonical = {key: copy.deepcopy(wire[key]) for key in CANONICAL_IMPACT_SCHEMA["properties"]}
     for group in SOURCE_GROUPS:
         canonical[group] = []
@@ -811,6 +814,52 @@ def validate_implementation_report(
         owner_allowed_paths=owner_allowed_paths, require_expanded=require_expanded,
     )
 
+
+
+def route_implementation_model_conflict(
+    report: dict[str, Any], error: ArtifactContractError, *,
+    workspace: Path, contract: dict[str, Any], plan: dict[str, Any] | None,
+    changed_paths: list[str], owner_allowed_paths: Sequence[str] = (),
+) -> dict[str, Any] | None:
+    """Route a rejected COMPLETE to the existing clean-replan path, never PASS.
+
+    This is a Controller routing decision, not a repaired model response. The
+    original wire report remains private evidence. Every impact observation,
+    source assessment and Contract claim is retained unchanged. Other semantic
+    errors (including missing/stale origins) do not authorize this route.
+    """
+    if (
+        error.code != "POST_PATCH_MODEL_DIVERGENCE"
+        or error.failure_kind is not ArtifactFailureKind.SEMANTIC_MODEL_CONFLICT
+        or report.get("status") != ImplementerStatus.COMPLETE.value
+        or report.get("terminal_reason_kind") != "NONE"
+        or plan is None
+    ):
+        return None
+    ensure_exact_keys(report, allowed=IMPLEMENTER_REPORT_SCHEMA["properties"],
+                      required=IMPLEMENTER_REPORT_SCHEMA["required"], field="report")
+    require_type(report["reason"], str, field="reason")
+    require_string_list(report["evidence"], field="evidence")
+    routed = copy.deepcopy(report)
+    routed.update(
+        status=ImplementerStatus.REPLAN_REQUIRED.value,
+        terminal_reason_kind="TECHNICAL_MODEL_DIVERGENCE",
+        reason=(
+            "Controller rejected COMPLETE: " + error.message
+            + ". Reassess the technical model from the clean baseline; "
+            "the candidate and its reported claims have not been accepted."
+        ),
+        evidence=[*report.get("evidence", []),
+                  f"Controller validation: {error.code} at {error.field}."],
+    )
+    # Non-COMPLETE validation still checks schema, safe paths, immutable origins
+    # and observation consistency. Replan is not permission to bypass them.
+    validate_implementation_report(
+        routed, contract=contract, changed_paths=changed_paths,
+        self_verification_ok=False, workspace=workspace, plan=plan,
+        owner_allowed_paths=owner_allowed_paths,
+    )
+    return routed
 
 
 def parse_implementation_report(raw: str) -> dict[str, Any]:
